@@ -20,11 +20,10 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
     # Assumes MEPL.xlsx, MLPL.xlsx, MMW.xlsx, MMPL.xlsx
-    # are in the same directory as this script
-    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("MMW.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
+mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
+mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
+mmw_df  = pd.read_excel("MMW.xlsx",  skiprows=1)
+mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
 
     mepl_df["Entity"] = "MEPL"
     mlpl_df["Entity"] = "MLPL"
