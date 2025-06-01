@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 st.set_page_config(
     page_title="Procure-to-Pay Dashboard",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # ------------------------------------
@@ -19,23 +19,19 @@ st.set_page_config(
 # ------------------------------------
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
-    # Update these file paths if your Excel files are in a different location
-   mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
-mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
-mmw_df  = pd.read_excel("MMW.xlsx",  skiprows=1)
-mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
+    # Assumes MEPL.xlsx, MLPL.xlsx, MMW.xlsx, MMPL.xlsx
+    # are in the same directory as this script
+    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
+    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
+    mmw_df  = pd.read_excel("MMW.xlsx",  skiprows=1)
+    mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
 
-
-    # Tag each sheet with an "Entity" column
     mepl_df["Entity"] = "MEPL"
     mlpl_df["Entity"] = "MLPL"
     mmw_df["Entity"]  = "MMW"
     mmpl_df["Entity"] = "MMPL"
 
-    # Concatenate into a single DataFrame
     combined = pd.concat([mepl_df, mlpl_df, mmw_df, mmpl_df], ignore_index=True)
-
-    # Clean up column names: strip whitespace, replace non-breaking spaces, collapse multiple spaces
     combined.columns = (
         combined.columns
         .str.strip()
@@ -43,7 +39,6 @@ mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
         .str.replace(" +", " ", regex=True)
     )
     combined.rename(columns=lambda c: c.strip(), inplace=True)
-
     return combined
 
 df = load_and_combine_data()
@@ -69,11 +64,11 @@ if "Buyer Group" in df.columns:
     )
 
     def classify_buyer_group(row):
-        bg = row["Buyer Group"]
+        bg   = row["Buyer Group"]
         code = row["Buyer Group Code"]
         if bg in ["ME_BG17", "MLBG16"]:
             return "Direct"
-        elif bg in ["Not Available"] or pd.isna(bg):
+        elif (bg in ["Not Available"]) or pd.isna(bg):
             return "Indirect"
         elif (code >= 1) & (code <= 9):
             return "Direct"
@@ -100,7 +95,7 @@ o_created_by_map = {
     "MMW_EXT_002": "Deepakex",
     "MMW2425024": "Kamlesh",
     "MMW2021184": "Suresh",
-    "N/A": "Dilip"
+    "N/A": "Dilip",
 }
 df["PO Orderer"] = df["PO Orderer"].fillna("N/A").astype(str).str.strip()
 df["PO.Creator"] = df["PO Orderer"].map(o_created_by_map).fillna(df["PO Orderer"])
@@ -108,7 +103,7 @@ df["PO.Creator"] = df["PO.Creator"].replace({"N/A": "Dilip"})
 
 indirect_buyers = [
     "Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip",
-    "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh"
+    "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh",
 ]
 df["PO.BuyerType"] = df["PO.Creator"].apply(
     lambda x: "Indirect" if x in indirect_buyers else "Direct"
@@ -119,7 +114,6 @@ df["PO.BuyerType"] = df["PO.Creator"].apply(
 # ------------------------------------
 st.sidebar.header("🔍 Filters")
 
-# Convert the existing date columns to pandas Timestamp to get min/max easily
 pr_min = pd.to_datetime(df["PR Date Submitted"]).min()
 pr_max = pd.to_datetime(df["PR Date Submitted"]).max()
 po_min = pd.to_datetime(df["Po create Date"]).min()
@@ -128,41 +122,41 @@ po_max = pd.to_datetime(df["Po create Date"]).max()
 pr_range = st.sidebar.date_input(
     "PR Date Range",
     value=[pr_min, pr_max],
-    key="pr_range"
+    key="pr_range",
 )
 
 po_range = st.sidebar.date_input(
     "PO Date Range",
     value=[po_min, po_max],
-    key="po_range"
+    key="po_range",
 )
 
 buyer_filter = st.sidebar.multiselect(
     "Buyer Type",
     options=df["Buyer.Type"].unique(),
     default=list(df["Buyer.Type"].unique()),
-    key="buyer_filter"
+    key="buyer_filter",
 )
 
 entity_filter = st.sidebar.multiselect(
     "Entity",
     options=df["Entity"].unique(),
     default=list(df["Entity"].unique()),
-    key="entity_filter"
+    key="entity_filter",
 )
 
 orderer_filter = st.sidebar.multiselect(
     "PO Ordered By",
     options=df["PO.Creator"].unique(),
     default=list(df["PO.Creator"].unique()),
-    key="orderer_filter"
+    key="orderer_filter",
 )
 
 po_buyer_type_filter = st.sidebar.multiselect(
     "PO Buyer Type",
     options=df["PO.BuyerType"].unique(),
     default=list(df["PO.BuyerType"].unique()),
-    key="po_buyer_type_filter"
+    key="po_buyer_type_filter",
 )
 
 st.sidebar.header("🔎 Keyword Search")
@@ -178,7 +172,7 @@ filtered_df = filtered_df[
     filtered_df["PR Date Submitted"].between(pr_range[0], pr_range[1])
 ]
 
-# 6b) Filter by PO create Date (allow NA to pass through)
+# 6b) Filter by PO create Date (allow NA to pass)
 po_mask = (
     filtered_df["Po create Date"].notna() 
     & filtered_df["Po create Date"].between(po_range[0], po_range[1])
@@ -231,7 +225,6 @@ lead_df["Lead Time (Days)"] = (
 SLA_DAYS = 7
 avg_lead = lead_df["Lead Time (Days)"].mean().round(1)
 
-# Use a Plotly gauge chart for visual
 gauge_fig = go.Figure(
     go.Indicator(
         mode="gauge+number",
@@ -273,8 +266,8 @@ lead_avg_by_buyer = (
     .reset_index()
 )
 col1, col2 = st.columns(2)
-col1.dataframe(lead_avg_by_type)
-col2.dataframe(lead_avg_by_buyer)
+col1.dataframe(lead_avg_by_type, use_container_width=True)
+col2.dataframe(lead_avg_by_buyer, use_container_width=True)
 
 # ------------------------------------
 # 10) Monthly PR & PO Trends
@@ -396,7 +389,6 @@ if "PR Status" in filtered_df.columns:
 
         st.metric("🔢 Open PRs", open_summary["PR Number"].nunique())
 
-        # — FIX: Wrap with pd.to_datetime(...) before .dt.to_period("M") —
         open_monthly_counts = (
             pd.to_datetime(open_summary["PR Date Submitted"])
             .dt.to_period("M")
@@ -512,7 +504,7 @@ if "PO Status" in filtered_df.columns:
 
     col1, col2 = st.columns([2, 3])
     with col1:
-        st.dataframe(po_status_summary)
+        st.dataframe(po_status_summary, use_container_width=True)
     with col2:
         fig_status = px.pie(
             po_status_summary,
@@ -625,37 +617,40 @@ st.dataframe(
 
 # ------------------------------------
 # 21) Top 3 Products per PR Budget Code (by PO Value)
-#     (WITHOUT the sidebar filter)
 # ------------------------------------
 if "PR Budget Code" in df.columns:
     st.subheader("📦 Top 3 Products per PR Budget Code (by PO Value)")
+    all_budget_codes = (
+        df["PR Budget Code"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+        .tolist()
+    )
 
-    # Filter out rows without a PR Budget Code
-    tmp_df = filtered_df.dropna(subset=["PR Budget Code"]).copy()
+    # Note: Remove the multiselect widget for filtering here (as requested)
+    # We simply display top 3 across all codes present in filtered_df
+    prod_by_code = (
+        filtered_df.groupby(
+            ["PR Budget Code", "Product Name"]
+        )["Net Amount"]
+        .sum()
+        .reset_index()
+    )
+    prod_by_code["PO Value (Cr ₹)"] = (prod_by_code["Net Amount"] / 1e7).round(2)
 
-    if not tmp_df.empty:
-        prod_by_code = (
-            tmp_df.groupby(
-                ["PR Budget Code", "Product Name"]
-            )["Net Amount"]
-            .sum()
-            .reset_index()
+    top3_per_code = (
+        prod_by_code.sort_values(
+            ["PR Budget Code", "Net Amount"],
+            ascending=[True, False]
         )
-        prod_by_code["PO Value (Cr ₹)"] = (prod_by_code["Net Amount"] / 1e7).round(2)
-
-        top3_per_code = (
-            prod_by_code.sort_values(
-                ["PR Budget Code", "Net Amount"],
-                ascending=[True, False]
-            )
-            .groupby("PR Budget Code")
-            .head(3)
-            .loc[:, ["PR Budget Code", "Product Name", "PO Value (Cr ₹)"]]
-            .reset_index(drop=True)
-        )
-        st.dataframe(top3_per_code, use_container_width=True)
-    else:
-        st.info("ℹ️ No data available for Top 3 Products per PR Budget Code.")
+        .groupby("PR Budget Code")
+        .head(3)
+        .loc[:, ["PR Budget Code", "Product Name", "PO Value (Cr ₹)"]]
+        .reset_index(drop=True)
+    )
+    st.dataframe(top3_per_code, use_container_width=True)
 else:
     st.info("ℹ️ 'PR Budget Code' column not found – skipping Top 3 Products section.")
 
@@ -723,7 +718,6 @@ if all(c in filtered_df.columns for c in ["PO Vendor", "Purchase Doc", "PO Deliv
         (vendor_perf["Late_PO_Count"] / vendor_perf["Total_PO_Count"] * 100).round(1)
     )
 
-    # Merge in “Total_Spend_Cr” from vendor_spend if available
     if "vendor_spend" in locals():
         vendor_perf = vendor_perf.merge(
             vendor_spend[["PO Vendor", "Total_Spend_Cr"]],
@@ -750,7 +744,6 @@ if all(c in filtered_df.columns for c in ["PO Vendor", "Purchase Doc", "PO Deliv
         use_container_width=True
     )
 
-    # Bar chart: % Fully Delivered vs % Late
     melted_perf = top10_vendor_perf.melt(
         id_vars=["PO Vendor"],
         value_vars=["Pct_Fully_Delivered", "Pct_Late"],
@@ -797,68 +790,33 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 
 # ------------------------------------
 # 25) Monthly Spend Trend by Entity
-#     (Ensure MEPL appears—even if zero for some months)
 # ------------------------------------
 st.subheader("💹 Monthly Spend Trend by Entity")
-
-# 25a) Compute spend by Entity + PO Month
 spend_df = filtered_df.copy()
-spend_df["PO_Month_Period"] = pd.to_datetime(spend_df["Po create Date"], errors="coerce").dt.to_period("M")
-
-# 25b) Build a complete index of all months in the range, and all Entities
-all_months = (
-    pd.period_range(
-        start=spend_df["PO_Month_Period"].min(),
-        end=spend_df["PO_Month_Period"].max(),
-        freq="M"
-    )
-    .astype(str)
-    .tolist()
+spend_df["PO Month"] = (
+    pd.to_datetime(spend_df["Po create Date"], errors="coerce")
+    .dt.to_period("M")
+    .dt.to_timestamp()
 )
-all_entities = filtered_df["Entity"].unique().tolist()
 
-# Create a DataFrame with every combination of Month + Entity
-cross_index = pd.MultiIndex.from_product(
-    [all_months, all_entities],
-    names=["PO_Month_Str", "Entity"]
-)
-full_index_df = pd.DataFrame(index=cross_index).reset_index()
-
-# 25c) Aggregate actual spend (Cr ₹) per month + entity
-actual_spend = (
-    spend_df.dropna(subset=["PO_Month_Period"])
-    .groupby(["PO_Month_Period", "Entity"], as_index=False)["Net Amount"]
+monthly_spend = (
+    spend_df.dropna(subset=["PO Month"])
+    .groupby(["PO Month", "Entity"], as_index=False)["Net Amount"]
     .sum()
 )
-actual_spend["PO_Month_Str"] = actual_spend["PO_Month_Period"].astype(str)
-actual_spend["Spend (Cr ₹)"] = actual_spend["Net Amount"] / 1e7
-actual_spend = actual_spend[["PO_Month_Str", "Entity", "Spend (Cr ₹)"]]
+monthly_spend["Spend (Cr ₹)"] = monthly_spend["Net Amount"] / 1e7
+monthly_spend["Month_Str"] = monthly_spend["PO Month"].dt.strftime("%b-%Y")
 
-# 25d) Merge full_index_df with actual_spend, fill missing with 0
-monthly_spend_full = full_index_df.merge(
-    actual_spend,
-    on=["PO_Month_Str", "Entity"],
-    how="left"
-).fillna({"Spend (Cr ₹)": 0})
-
-# 25e) Sort by Month (chronological)
-monthly_spend_full["Month_dt"] = pd.to_datetime(monthly_spend_full["PO_Month_Str"], format="%Y-%m")
-monthly_spend_full = monthly_spend_full.sort_values("Month_dt")
-
-# 25f) Plot with Plotly
 fig_spend = px.line(
-    monthly_spend_full,
-    x="PO_Month_Str",
+    monthly_spend,
+    x="Month_Str",
     y="Spend (Cr ₹)",
     color="Entity",
     markers=True,
     title="Monthly Spend Trend by Entity",
-    labels={"PO_Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"}
+    labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"}
 )
-fig_spend.update_layout(
-    xaxis_tickangle=-45,
-    xaxis=dict(categoryorder="array", categoryarray=all_months)
-)
+fig_spend.update_layout(xaxis_tickangle=-45)
 st.plotly_chart(fig_spend, use_container_width=True)
 
 # ------------------------------------
@@ -877,7 +835,6 @@ today_pos = filtered_df[
 pr_today_count = today_prs["PR Number"].nunique()
 po_today_count = today_pos["Purchase Doc"].nunique()
 
-# New Open PRs submitted today
 if "open_df" in locals() and not open_df.empty:
     open_prs_today = open_df[
         pd.to_datetime(open_df["PR Date Submitted"]).dt.date == today
@@ -885,7 +842,6 @@ if "open_df" in locals() and not open_df.empty:
 else:
     open_prs_today = 0
 
-# POs pending approval today
 if "po_approval_df" in locals():
     pending_approval_today = po_approval_df[
         (pd.to_datetime(po_approval_df["Po create Date"]).dt.date == today)
@@ -922,7 +878,6 @@ st.dataframe(prs_per_buyer.head(5).reset_index(drop=True), use_container_width=T
 # ------------------------------------
 st.subheader("📈 Daily PR → PO Conversion Trend (%)")
 
-# 28a) Build DataFrame of daily PR counts
 tmp_pr = filtered_df.copy()
 tmp_pr["PR_Date"] = pd.to_datetime(tmp_pr["PR Date Submitted"])
 daily_prs = (
@@ -932,7 +887,6 @@ daily_prs = (
     .rename(columns={"PR_Date": "Date"})
 )
 
-# 28b) Build DataFrame of daily PO counts
 tmp_po = filtered_df.copy()
 tmp_po["PO_Date"] = pd.to_datetime(tmp_po["Po create Date"])
 daily_pos = (
@@ -942,7 +896,6 @@ daily_pos = (
     .rename(columns={"PO_Date": "Date"})
 )
 
-# 28c) Merge & compute Conversion %
 daily_merge = pd.merge(daily_prs, daily_pos, on="Date", how="outer").fillna(0)
 daily_merge["Conversion %"] = (
     (daily_merge["POs"] / daily_merge["PRs"] * 100).round(1).fillna(0)
@@ -976,3 +929,4 @@ else:
 # ------------------------------------
 # End of Dashboard
 # ------------------------------------
+
