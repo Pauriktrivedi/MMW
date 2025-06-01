@@ -20,10 +20,11 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
     # Update these file paths if your Excel files are in a different location
-    mepl_df = pd.read_excel("/Users/paurik/Downloads/MEPL.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("/Users/paurik/Downloads/MLPL.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("/Users/paurik/Downloads/MMW.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("/Users/paurik/Downloads/MMPL.xlsx", skiprows=1)
+   mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
+mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
+mmw_df  = pd.read_excel("MMW.xlsx",  skiprows=1)
+mmpl_df = pd.read_excel("MMPL.xlsx", skiprows=1)
+
 
     # Tag each sheet with an "Entity" column
     mepl_df["Entity"] = "MEPL"
