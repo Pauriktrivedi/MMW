@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 import io
 
 # === Load and Combine Data ===
@@ -300,3 +301,16 @@ col4.metric("Avg. Receipt %", f"{avg_receipt_pct}%")
 
 # 📂 Download Button
 st.download_button("📥 Download Delivery Status", po_delivery_summary.to_csv(index=False), file_name="PO_Delivery_Status.csv", mime="text/csv")
+
+# % on-time deliveries (only where delivery date is available)
+on_time = delivery_df[delivery_df['PO Delay (Days)'] <= 0]
+vendor_perf = delivery_df.groupby('PO Vendor').agg({
+    'PO Qty': 'sum',
+    'Pending Qty': 'sum',
+    'PO Delay (Days)': 'mean'
+}).reset_index()
+
+vendor_perf['% On Time'] = 100 * (vendor_perf['Pending Qty'] == 0)
+vendor_perf['Avg Delay (Days)'] = delivery_df.groupby('PO Vendor')['PO Delay (Days)'].mean().round(1).values
+st.subheader("🏢 Vendor Delivery Performance")
+st.dataframe(vendor_perf.sort_values(by='Avg Delay (Days)', ascending=False))
