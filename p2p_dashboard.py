@@ -205,7 +205,7 @@ filtered_df = df.copy()
 if "PR Date Submitted" in filtered_df.columns:
     filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
     pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_range[0], pr_range[1]))]
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
