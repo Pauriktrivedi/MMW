@@ -6,3 +6,4 @@ pandas
 streamlit
 rapidfuzz
 streamlit-antd-components
+XlsxWriter
