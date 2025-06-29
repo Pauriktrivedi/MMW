@@ -186,6 +186,7 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
+
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -199,9 +200,11 @@ else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) AI-Enhanced Keyword Search (No External Library)
+#  8b) AI-Enhanced Keyword Search (Cleaned)
 # ------------------------------------
 from rapidfuzz import process, fuzz
+import re
+from datetime import datetime
 
 st.markdown("## 🔍 Keyword Search")
 
@@ -209,20 +212,20 @@ st.markdown("## 🔍 Keyword Search")
 valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in df.columns]
 search_data = []
 row_lookup = []
+
 if valid_columns:
     for idx, row in df[valid_columns].fillna("").astype(str).iterrows():
         combined = " | ".join(row[col].strip() for col in valid_columns)
         search_data.append(combined)
         row_lookup.append(idx)
 
-# Text input field
+# Autocomplete-like suggestion and search logic
 user_query = st.text_input("Type to search PR Number, Purchase Doc, Product Name, or PO Vendor:")
 
-# Fuzzy match
 if user_query:
-    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.token_sort_ratio, limit=50, score_cutoff=70)
+    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.token_sort_ratio, limit=25, score_cutoff=60)
     if matches:
-        matched_indices = [row_lookup[search_data.index(match[0])] for match in matches]
+        matched_indices = [row_lookup[search_data.index(match[0])] for match in matches if match[1] >= 60]
         matching_rows = df.loc[matched_indices]
         st.markdown(f"### 🔎 Found {len(matching_rows)} matching results:")
         st.dataframe(matching_rows, use_container_width=True)
@@ -234,9 +237,6 @@ else:
 # ------------------------------------
 #  8c) Experimental: AI Chat-style Natural Language Search
 # ------------------------------------
-import re
-from datetime import datetime
-
 nl_query = st.text_input("🤖 Try asking in natural language (e.g., 'Find POs from Mohta in Jan 2024')")
 
 if nl_query:
