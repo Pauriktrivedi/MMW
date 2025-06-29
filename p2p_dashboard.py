@@ -208,24 +208,28 @@ if "PR Date Submitted" in filtered_df.columns:
     filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
+# ------------------------------------
+#  8b) Keyword Search with Suggestions
+# ------------------------------------
 
+st.markdown("## 🔍 Keyword Search")
+keyword = st.text_input("Type to search PR Number, Purchase Doc, or Product Name:")
 
-# 8c) Filter by Buyer.Type, Entity, PO.Creator, PO.BuyerType
-filtered_df = filtered_df[
-    (filtered_df["Buyer.Type"].isin(buyer_filter))
-    & (filtered_df["Entity"].isin(entity_filter))
-    & (filtered_df["PO.Creator"].isin(orderer_filter))
-    & (filtered_df["PO.BuyerType"].isin(po_buyer_type_filter))
-]
+# Show matching results dynamically as user types
+if keyword:
+    keyword_lower = keyword.lower()
+    
+    matching_rows = filtered_df[
+        filtered_df["PR.Number"].astype(str).str.lower().str.contains(keyword_lower, na=False) |
+        filtered_df["Purchase.Doc"].astype(str).str.lower().str.contains(keyword_lower, na=False) |
+        filtered_df["Short.Text"].astype(str).str.lower().str.contains(keyword_lower, na=False)
+    ]
 
-# 8d) Filter by the keyword typed in the main search box
-if search_term:
-    mask_search = (
-        filtered_df["PR Number"].astype(str).str.contains(search_term, case=False, na=False)
-        | filtered_df["Purchase Doc"].astype(str).str.contains(search_term, case=False, na=False)
-        | filtered_df["Product Name"].astype(str).str.contains(search_term, case=False, na=False)
-    )
-    filtered_df = filtered_df[mask_search]
+    st.markdown(f"### Found {len(matching_rows)} matching results:")
+    st.dataframe(matching_rows, use_container_width=True)
+else:
+    st.info("Start typing above to search PR Number, PO Number, or Product Name.")
+
 
 # ------------------------------------
 #  9) Top KPI Row (Total PRs, POs, Line Items, Entities, Spend)
