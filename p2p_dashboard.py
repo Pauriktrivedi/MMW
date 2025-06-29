@@ -196,7 +196,6 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
-
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -210,7 +209,7 @@ else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) Keyword Search with Auto-Suggestions
+#  8b) Keyword Search with Auto-Suggestions (Top Search Bar Only)
 # ------------------------------------
 st.markdown("## 🔍 Keyword Search")
 
@@ -229,11 +228,12 @@ suggestions = sorted(set(suggestions))
 
 selected_suggestion = st.selectbox(
     "Type or select to search PR Number, Purchase Doc, Product Name, or Vendor Name:",
-    options=[""] + suggestions,
-    index=0
+    options=["Select or type..."] + suggestions,
+    index=0,
+    key="top_search_box"
 )
 
-if selected_suggestion:
+if selected_suggestion and selected_suggestion != "Select or type...":
     keyword_lower = selected_suggestion.lower()
     search_cols = []
     if "PR No." in filtered_df.columns:
