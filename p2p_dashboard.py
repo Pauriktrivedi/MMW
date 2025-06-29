@@ -208,18 +208,27 @@ if "PR Date Submitted" in filtered_df.columns:
     filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
-# ------------------------------------
-#  8b) Keyword Search with Suggestions
-# ------------------------------------
 
-# 🔍 Keyword Search Section
+# ------------------------------------
+#  8b) Keyword Search with Auto-Suggestions
+# ------------------------------------
 st.markdown("## 🔍 Keyword Search")
-keyword = st.text_input("Type to search PR Number, Purchase Doc, or Product Name:")
 
-if keyword:
-    keyword_lower = keyword.lower()
+# Combine values from columns if they exist
+suggestions = []
+if "PR No." in filtered_df.columns:
+    suggestions += filtered_df["PR No."].dropna().astype(str).unique().tolist()
+if "Purchase.Doc" in filtered_df.columns:
+    suggestions += filtered_df["Purchase.Doc"].dropna().astype(str).unique().tolist()
+if "Short.Text" in filtered_df.columns:
+    suggestions += filtered_df["Short.Text"].dropna().astype(str).unique().tolist()
 
-    # SAFE SEARCH: Only check columns that actually exist
+suggestions = sorted(set(suggestions))
+
+selected_suggestion = st.selectbox("Type or select to search PR Number, Purchase Doc, or Product Name:", options=[""] + suggestions, index=0)
+
+if selected_suggestion:
+    keyword_lower = selected_suggestion.lower()
     search_cols = []
     if "PR No." in filtered_df.columns:
         search_cols.append(filtered_df["PR No."].astype(str).str.lower().str.contains(keyword_lower, na=False))
@@ -238,8 +247,7 @@ if keyword:
     else:
         st.warning("No searchable columns found.")
 else:
-    st.info("Start typing above to search PR Number, PO Number, or Product Name.")
-
+    st.info("Start typing or select a suggestion above to search.")
 
 
 # ------------------------------------
