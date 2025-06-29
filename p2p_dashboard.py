@@ -200,30 +200,36 @@ else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) AI-Enhanced Free Keyword Search (Live Suggestions)
+#  8b) AI-Enhanced Keyword Search with Auto-Suggestions
 # ------------------------------------
-from rapidfuzz import process
-import difflib
+from rapidfuzz import process, fuzz
+from streamlit_antd_components import AutoComplete
 
 st.markdown("## 🔍 Keyword Search")
 
-# Combine values from columns if they exist
-search_data = []
-row_lookup = []  # Track rows for index alignment
+# Combine search data
 valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in filtered_df.columns]
-
+search_data = []
+row_lookup = []
 if valid_columns:
     for idx, row in filtered_df[valid_columns].fillna("").astype(str).iterrows():
         combined = " | ".join(row[col].strip() for col in valid_columns)
         search_data.append(combined)
         row_lookup.append(idx)
 
-# Text input for free typing
-user_query = st.text_input("Type to search PR Number, Purchase Doc, Product Name, or PO Vendor:",
-                           placeholder="e.g., Mohta Electric, Teflon tape, PR00007")
+# Autocomplete suggestions
+suggestions = list(sorted(set(search_data)))
+user_query = AutoComplete(
+    label="Type or select to search PR Number, Purchase Doc, Product Name, or PO Vendor:",
+    options=suggestions,
+    placeholder="e.g., Mohta Electric, Teflon tape, PR00007",
+    filter_option=True,
+    allow_clear=True,
+)
 
+# Run fuzzy match on selection
 if user_query:
-    matches = process.extract(user_query.lower(), search_data, limit=50, score_cutoff=70)
+    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.token_sort_ratio, limit=50, score_cutoff=70)
     if matches:
         matched_indices = [row_lookup[search_data.index(match[0])] for match in matches]
         matching_rows = filtered_df.loc[matched_indices]
@@ -235,7 +241,7 @@ else:
     st.info("Start typing to search PRs, Products, Vendors, or POs.")
 
 # ------------------------------------
-#  8c) Experimental: AI Chat-like Natural Language Search (Optional Enhancement)
+#  8c) Experimental: AI Chat-style Natural Language Search
 # ------------------------------------
 import re
 from datetime import datetime
@@ -243,7 +249,6 @@ from datetime import datetime
 nl_query = st.text_input("🤖 Try asking in natural language (e.g., 'Find POs from Mohta in Jan 2024')")
 
 if nl_query:
-    # Very simple parser for basic patterns (custom NLP can be added)
     vendor_match = re.search(r'from\s+(.*?)\s+(in|for)', nl_query, re.IGNORECASE)
     month_match = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{4})?', nl_query, re.IGNORECASE)
 
@@ -263,6 +268,7 @@ if nl_query:
 
     st.markdown(f"### 🤖 AI Search Results ({len(filtered_nl)} matches):")
     st.dataframe(filtered_nl, use_container_width=True)
+
 
 
 # ------------------------------------
