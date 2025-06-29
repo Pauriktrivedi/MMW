@@ -207,6 +207,17 @@ if "PR Date Submitted" in filtered_df.columns:
     filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
+# ------------------------------------
+#  8a) Filter by PR Date Submitted
+# ------------------------------------
+filtered_df = df.copy()
+
+if "PR Date Submitted" in filtered_df.columns:
+    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
+else:
+    st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
 #  8b) Keyword Search with Auto-Suggestions (Top Search Bar Only)
@@ -215,14 +226,9 @@ st.markdown("## 🔍 Keyword Search")
 
 # Combine values from columns if they exist
 suggestions = []
-if "PR No." in filtered_df.columns:
-    suggestions += filtered_df["PR No."].dropna().astype(str).unique().tolist()
-if "Purchase.Doc" in filtered_df.columns:
-    suggestions += filtered_df["Purchase.Doc"].dropna().astype(str).unique().tolist()
-if "Short.Text" in filtered_df.columns:
-    suggestions += filtered_df["Short.Text"].dropna().astype(str).unique().tolist()
-if "Vendor Name" in filtered_df.columns:
-    suggestions += filtered_df["Vendor Name"].dropna().astype(str).unique().tolist()
+for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"]:
+    if col in filtered_df.columns:
+        suggestions += filtered_df[col].dropna().astype(str).unique().tolist()
 
 suggestions = sorted(set(suggestions))
 
@@ -236,14 +242,9 @@ selected_suggestion = st.selectbox(
 if selected_suggestion and selected_suggestion != "Select or type...":
     keyword_lower = selected_suggestion.lower()
     search_cols = []
-    if "PR No." in filtered_df.columns:
-        search_cols.append(filtered_df["PR No."].astype(str).str.lower().str.contains(keyword_lower, na=False))
-    if "Purchase.Doc" in filtered_df.columns:
-        search_cols.append(filtered_df["Purchase.Doc"].astype(str).str.lower().str.contains(keyword_lower, na=False))
-    if "Short.Text" in filtered_df.columns:
-        search_cols.append(filtered_df["Short.Text"].astype(str).str.lower().str.contains(keyword_lower, na=False))
-    if "Vendor Name" in filtered_df.columns:
-        search_cols.append(filtered_df["Vendor Name"].astype(str).str.lower().str.contains(keyword_lower, na=False))
+    for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"]:
+        if col in filtered_df.columns:
+            search_cols.append(filtered_df[col].astype(str).str.lower().str.contains(keyword_lower, na=False))
 
     if search_cols:
         mask = search_cols[0]
@@ -256,6 +257,7 @@ if selected_suggestion and selected_suggestion != "Select or type...":
         st.warning("No searchable columns found.")
 else:
     st.info("Start typing or select a suggestion above to search.")
+
 
 
 
