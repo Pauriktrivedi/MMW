@@ -209,22 +209,6 @@ if "PR Date Submitted" in filtered_df.columns:
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
-# ------------------------------------
-#  8) Apply Filters → filtered_df
-# ------------------------------------
-filtered_df = df.copy()
-
-# 8a) Filter by PR Date Submitted
-filtered_df = filtered_df[
-    filtered_df["PR Date Submitted"].between(pr_range[0], pr_range[1])
-]
-
-# 8b) Filter by PO create Date (allow NA to pass through)
-po_mask = (
-    filtered_df["Po create Date"].notna()
-    & filtered_df["Po create Date"].between(po_range[0], po_range[1])
-)
-filtered_df = filtered_df[po_mask | filtered_df["Po create Date"].isna()]
 
 # 8c) Filter by Buyer.Type, Entity, PO.Creator, PO.BuyerType
 filtered_df = filtered_df[
