@@ -186,7 +186,6 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
-
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -209,14 +208,16 @@ st.markdown("## 🔍 Keyword Search")
 # Combine values from columns if they exist
 suggestions = []
 combined_values = []
+row_lookup = []  # Track rows for index alignment
 valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in filtered_df.columns]
 
 if valid_columns:
-    for row in filtered_df[valid_columns].fillna("").astype(str).itertuples(index=False):
-        row_combined = " | ".join(row)
+    for idx, row in filtered_df[valid_columns].fillna("").astype(str).iterrows():
+        row_combined = " | ".join(row[col].strip() for col in valid_columns)
         combined_values.append(row_combined)
-        for item in row:
-            suggestions.append(item.strip())
+        row_lookup.append(idx)
+        for val in row:
+            suggestions.append(val.strip())
 
 suggestions = sorted(set(suggestions))
 
@@ -230,37 +231,14 @@ selected_suggestion = st.selectbox(
 if selected_suggestion and selected_suggestion != "Select or type...":
     keyword_lower = selected_suggestion.lower()
     matches = process.extract(keyword_lower, combined_values, limit=50, score_cutoff=70)
-    matched_indices = [i for i, _ in matches]
-    matching_rows = filtered_df.iloc[matched_indices]
+    matched_indices = [row_lookup[i] for i, _ in matches]
+    matching_rows = filtered_df.loc[matched_indices]
 
     st.markdown(f"### Found {len(matching_rows)} matching results:")
     st.dataframe(matching_rows, use_container_width=True)
 else:
     st.info("Start typing or select a suggestion above to search.")
 
-# ------------------------------------
-#  Category Spend Chart Sorted Descending
-# ------------------------------------
-if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
-    cat_spend = (
-        filtered_df.groupby("Procurement Category")["Net Amount"]
-        .sum()
-        .sort_values(ascending=False)
-        .reset_index()
-    )
-    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
-
-    fig_cat = px.bar(
-        cat_spend,
-        x="Procurement Category",
-        y="Spend (Cr ₹)",
-        title="Spend by Category (Descending)",
-        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
-    )
-    fig_cat.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig_cat, use_container_width=True)
-else:
-    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
 
 # ------------------------------------
 #  9) Top KPI Row (Total PRs, POs, Line Items, Entities, Spend)
@@ -520,6 +498,31 @@ fig_buyer = px.bar(
 )
 fig_buyer.update_traces(texttemplate="%{text:.2f}", textposition="outside")
 st.plotly_chart(fig_buyer, use_container_width=True)
+
+
+# ------------------------------------
+#  Category Spend Chart Sorted Descending
+# ------------------------------------
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    cat_spend = (
+        filtered_df.groupby("Procurement Category")["Net Amount"]
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
+
+    fig_cat = px.bar(
+        cat_spend,
+        x="Procurement Category",
+        y="Spend (Cr ₹)",
+        title="Spend by Category (Descending)",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+    )
+    fig_cat.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_cat, use_container_width=True)
+else:
+    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
 
 # ------------------------------------
 # 19) PO Approval Summary & Details
