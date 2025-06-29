@@ -212,23 +212,34 @@ else:
 #  8b) Keyword Search with Suggestions
 # ------------------------------------
 
+# 🔍 Keyword Search Section
 st.markdown("## 🔍 Keyword Search")
 keyword = st.text_input("Type to search PR Number, Purchase Doc, or Product Name:")
 
-# Show matching results dynamically as user types
 if keyword:
     keyword_lower = keyword.lower()
-    
-    matching_rows = filtered_df[
-        filtered_df["PR.Number"].astype(str).str.lower().str.contains(keyword_lower, na=False) |
-        filtered_df["Purchase.Doc"].astype(str).str.lower().str.contains(keyword_lower, na=False) |
-        filtered_df["Short.Text"].astype(str).str.lower().str.contains(keyword_lower, na=False)
-    ]
 
-    st.markdown(f"### Found {len(matching_rows)} matching results:")
-    st.dataframe(matching_rows, use_container_width=True)
+    # SAFE SEARCH: Only check columns that actually exist
+    search_cols = []
+    if "PR No." in filtered_df.columns:
+        search_cols.append(filtered_df["PR No."].astype(str).str.lower().str.contains(keyword_lower, na=False))
+    if "Purchase.Doc" in filtered_df.columns:
+        search_cols.append(filtered_df["Purchase.Doc"].astype(str).str.lower().str.contains(keyword_lower, na=False))
+    if "Short.Text" in filtered_df.columns:
+        search_cols.append(filtered_df["Short.Text"].astype(str).str.lower().str.contains(keyword_lower, na=False))
+
+    if search_cols:
+        mask = search_cols[0]
+        for additional in search_cols[1:]:
+            mask = mask | additional
+        matching_rows = filtered_df[mask]
+        st.markdown(f"### Found {len(matching_rows)} matching results:")
+        st.dataframe(matching_rows, use_container_width=True)
+    else:
+        st.warning("No searchable columns found.")
 else:
     st.info("Start typing above to search PR Number, PO Number, or Product Name.")
+
 
 
 # ------------------------------------
