@@ -197,28 +197,24 @@ if "PR Date Submitted" in filtered_df.columns:
     filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
-# ------------------------------------
-#  8a) Filter by PR Date Submitted
-# ------------------------------------
-filtered_df = df.copy()
-
-if "PR Date Submitted" in filtered_df.columns:
-    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
-    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
-else:
-    st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) Keyword Search with Auto-Suggestions (Top Search Bar Only)
+#  8b) AI-Enhanced Fuzzy Keyword Search with Auto-Suggestions (Top Search Bar Only)
 # ------------------------------------
+from rapidfuzz import process
+
 st.markdown("## 🔍 Keyword Search")
 
 # Combine values from columns if they exist
 suggestions = []
-for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"]:
-    if col in filtered_df.columns:
-        suggestions += filtered_df[col].dropna().astype(str).unique().tolist()
+combined_values = []
+valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"] if col in filtered_df.columns]
+
+if valid_columns:
+    for row in filtered_df[valid_columns].fillna("").astype(str).itertuples(index=False):
+        row_combined = " | ".join(row)
+        combined_values.append(row_combined)
+        suggestions.extend(row)
 
 suggestions = sorted(set(suggestions))
 
@@ -231,23 +227,14 @@ selected_suggestion = st.selectbox(
 
 if selected_suggestion and selected_suggestion != "Select or type...":
     keyword_lower = selected_suggestion.lower()
-    search_cols = []
-    for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"]:
-        if col in filtered_df.columns:
-            search_cols.append(filtered_df[col].astype(str).str.lower().str.contains(keyword_lower, na=False))
+    matches = process.extract(keyword_lower, combined_values, limit=50, score_cutoff=70)
+    matched_indices = [i for i, _ in matches]
+    matching_rows = filtered_df.iloc[matched_indices]
 
-    if search_cols:
-        mask = search_cols[0]
-        for additional in search_cols[1:]:
-            mask |= additional
-        matching_rows = filtered_df[mask]
-        st.markdown(f"### Found {len(matching_rows)} matching results:")
-        st.dataframe(matching_rows, use_container_width=True)
-    else:
-        st.warning("No searchable columns found.")
+    st.markdown(f"### Found {len(matching_rows)} matching results:")
+    st.dataframe(matching_rows, use_container_width=True)
 else:
     st.info("Start typing or select a suggestion above to search.")
-
 
 
 
