@@ -240,21 +240,18 @@ if st.session_state.search_history:
 # Filter Chips
 with st.expander("🏷️ Filter by Tags"):
     selected_categories = st.multiselect("Procurement Category", sorted(df["Procurement Category"].dropna().unique())) if "Procurement Category" in df.columns else []
-    selected_groups = st.multiselect("Buyer Group", sorted(df["Buyer Group"].dropna().unique())) if "Buyer Group" in df.columns else []
-    selected_years = st.multiselect("Year", sorted(df["PR Date Submitted"].dt.year.dropna().unique())) if "PR Date Submitted" in df.columns else []
+    selected_vendors = st.multiselect("PO Vendor", sorted(df["PO Vendor"].dropna().unique())) if "PO Vendor" in df.columns else []
 
 # Matching Logic
 if user_query:
-    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.partial_ratio, limit=50)
+    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.partial_ratio)
     matched_indices = [row_lookup[search_data.index(match[0])] for match in matches if match[1] >= 60]
     result_df = df.loc[matched_indices]
 
     if selected_categories:
         result_df = result_df[result_df["Procurement Category"].isin(selected_categories)]
-    if selected_groups:
-        result_df = result_df[result_df["Buyer Group"].isin(selected_groups)]
-    if selected_years:
-        result_df = result_df[result_df["PR Date Submitted"].dt.year.isin(selected_years)]
+    if selected_vendors:
+        result_df = result_df[result_df["PO Vendor"].isin(selected_vendors)]
 
     if not result_df.empty:
         st.markdown(f"### 🔎 Found {len(result_df)} matching results:")
@@ -271,7 +268,6 @@ if user_query:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Search_Results')
-                writer.save()
             return output.getvalue()
 
         st.download_button("⬇️ Download CSV", convert_df_to_csv(result_df), file_name="search_results.csv", mime='text/csv')
@@ -317,7 +313,6 @@ if nl_query:
         st.dataframe(filtered_nl, use_container_width=True)
     else:
         st.warning("No results matched your query.")
-
 
 
 
