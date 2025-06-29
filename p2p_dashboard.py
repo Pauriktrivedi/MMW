@@ -142,16 +142,6 @@ if "Product Name" in df.columns:
 all_suggestions = list(dict.fromkeys(all_suggestions))
 
 # ------------------------------------
-#  6) Keyword Search (Main Page Top)
-# ------------------------------------
-# Place the search box at the very top of the main page.
-st.header("🔎 Keyword Search")
-search_term = st.text_input(
-    "Type to search PR Number, Purchase Doc, or Product Name:",
-    value="",
-    key="main_search"
-)
-# ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
 st.sidebar.header("🔍 Filters")
