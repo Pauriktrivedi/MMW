@@ -222,10 +222,12 @@ if "Purchase.Doc" in filtered_df.columns:
     suggestions += filtered_df["Purchase.Doc"].dropna().astype(str).unique().tolist()
 if "Short.Text" in filtered_df.columns:
     suggestions += filtered_df["Short.Text"].dropna().astype(str).unique().tolist()
+if "Vendor Name" in filtered_df.columns:
+    suggestions += filtered_df["Vendor Name"].dropna().astype(str).unique().tolist()
 
 suggestions = sorted(set(suggestions))
 
-selected_suggestion = st.selectbox("Type or select to search PR Number, Purchase Doc, or Product Name:", options=[""] + suggestions, index=0)
+selected_suggestion = st.selectbox("Type or select to search PR Number, Purchase Doc, Product Name, or Vendor Name:", options=[""] + suggestions, index=0)
 
 if selected_suggestion:
     keyword_lower = selected_suggestion.lower()
@@ -236,6 +238,8 @@ if selected_suggestion:
         search_cols.append(filtered_df["Purchase.Doc"].astype(str).str.lower().str.contains(keyword_lower, na=False))
     if "Short.Text" in filtered_df.columns:
         search_cols.append(filtered_df["Short.Text"].astype(str).str.lower().str.contains(keyword_lower, na=False))
+    if "Vendor Name" in filtered_df.columns:
+        search_cols.append(filtered_df["Vendor Name"].astype(str).str.lower().str.contains(keyword_lower, na=False))
 
     if search_cols:
         mask = search_cols[0]
@@ -248,6 +252,7 @@ if selected_suggestion:
         st.warning("No searchable columns found.")
 else:
     st.info("Start typing or select a suggestion above to search.")
+
 
 
 # ------------------------------------
