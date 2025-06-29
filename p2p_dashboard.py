@@ -270,7 +270,6 @@ if nl_query:
     st.dataframe(filtered_nl, use_container_width=True)
 
 
-
 # ------------------------------------
 #  9) Top KPI Row (Total PRs, POs, Line Items, Entities, Spend)
 # ------------------------------------
