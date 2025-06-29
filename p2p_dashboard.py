@@ -219,7 +219,7 @@ if valid_columns:
 suggestions = sorted(set(suggestions))
 
 selected_suggestion = st.selectbox(
-    "Type or select to search PR Number, Purchase Doc, Product Name, or Vendor Name:",
+    "Type or select to search PR Number, Purchase Doc, Product Name, Item Description, or PO Vendor:",
     options=["Select or type..."] + suggestions,
     index=0,
     key="top_search_box"
