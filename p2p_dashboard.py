@@ -219,8 +219,7 @@ row_lookup = []
 if valid_columns:
     for idx, row in df[valid_columns].fillna("").astype(str).iterrows():
         combined = " | ".join(row[col] for col in valid_columns)
-        search_data.append(combined.lower())
-        row_lookup.append(idx)
+        search_data.append((combined.lower(), idx))
 
 # Memory persistence
 if "search_history" not in st.session_state:
@@ -243,9 +242,8 @@ with st.expander("🏷️ Filter by Tags"):
 
 # Matching Logic
 if user_query:
-    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.partial_ratio)
-    matched_indices = [row_lookup[search_data.index(match[0])] for match in matches if match[1] >= 60]
-    result_df = df.loc[matched_indices]
+    matches = [idx for text, idx in search_data if user_query.lower() in text]
+    result_df = df.loc[matches]
 
     if selected_categories:
         result_df = result_df[result_df["Procurement Category"].isin(selected_categories)]
