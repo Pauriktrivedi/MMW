@@ -186,6 +186,7 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
+
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -194,16 +195,21 @@ filtered_df = df.copy()
 if "PR Date Submitted" in df.columns:
     df["PR Date Submitted"] = pd.to_datetime(df["PR Date Submitted"], errors="coerce")
     pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = df[(df["PR Date Submitted"] >= pr_range[0]) & (df["PR Date Submitted"] <= pr_range[1])]
+    filtered_df = df[
+        (df["PR Date Submitted"] >= pr_range[0]) & (df["PR Date Submitted"] <= pr_range[1])
+    ]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) Keyword Search with Autocomplete, Tags, and Date Filters
+#  8b) Keyword Search with Chips and Autocomplete + Memory
 # ------------------------------------
 from rapidfuzz import process, fuzz
 import re
 from datetime import datetime
+import streamlit as st
+import pandas as pd
+import base64
 
 st.markdown("## 🔍 Keyword Search")
 
@@ -213,22 +219,34 @@ row_lookup = []
 
 if valid_columns:
     for idx, row in df[valid_columns].fillna("").astype(str).iterrows():
-        combined = " | ".join(row[col].strip() for col in valid_columns)
-        search_data.append(combined)
+        combined = " | ".join(row[col] for col in valid_columns)
+        search_data.append(combined.lower())
         row_lookup.append(idx)
 
-user_query = st.text_input("Start typing your search term (product, vendor, PO, etc.):")
+# Memory persistence
+if "search_history" not in st.session_state:
+    st.session_state.search_history = []
 
-# Optional filter chips
+# UI Input
+user_query = st.text_input("Start typing a keyword (e.g., vendor, product, PO, PR...)", "")
+
+if user_query and user_query not in st.session_state.search_history:
+    st.session_state.search_history.append(user_query)
+
+if st.session_state.search_history:
+    with st.expander("🕘 Search History"):
+        st.write(st.session_state.search_history[-10:])
+
+# Filter Chips
 with st.expander("🏷️ Filter by Tags"):
     selected_categories = st.multiselect("Procurement Category", sorted(df["Procurement Category"].dropna().unique())) if "Procurement Category" in df.columns else []
     selected_groups = st.multiselect("Buyer Group", sorted(df["Buyer Group"].dropna().unique())) if "Buyer Group" in df.columns else []
     selected_years = st.multiselect("Year", sorted(df["PR Date Submitted"].dt.year.dropna().unique())) if "PR Date Submitted" in df.columns else []
 
-# Run fuzzy search
+# Matching Logic
 if user_query:
     matches = process.extract(user_query.lower(), search_data, scorer=fuzz.partial_ratio, limit=50)
-    matched_indices = [row_lookup[search_data.index(m[0])] for m in matches if m[1] >= 60]
+    matched_indices = [row_lookup[search_data.index(match[0])] for match in matches if match[1] >= 60]
     result_df = df.loc[matched_indices]
 
     if selected_categories:
@@ -241,15 +259,32 @@ if user_query:
     if not result_df.empty:
         st.markdown(f"### 🔎 Found {len(result_df)} matching results:")
         st.dataframe(result_df, use_container_width=True)
+
+        # ----------------------
+        # Download Buttons
+        # ----------------------
+        def convert_df_to_csv(df):
+            return df.to_csv(index=False).encode('utf-8')
+
+        def convert_df_to_excel(df):
+            from io import BytesIO
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Search_Results')
+                writer.save()
+            return output.getvalue()
+
+        st.download_button("⬇️ Download CSV", convert_df_to_csv(result_df), file_name="search_results.csv", mime='text/csv')
+        st.download_button("⬇️ Download Excel", convert_df_to_excel(result_df), file_name="search_results.xlsx")
     else:
         st.warning("No matching results found.")
 else:
-    st.info("Start typing to search. Use filters for precision.")
+    st.info("Start typing a keyword to search...")
 
 # ------------------------------------
 #  8c) AI Chat-style Natural Language Search
 # ------------------------------------
-nl_query = st.text_input("🤖 Try asking in natural language (e.g., 'Find POs from Mohta in Jan 2024')")
+nl_query = st.text_input("🤖 Ask a question (e.g., 'Find POs from Mohta in Jan 2024')")
 
 if nl_query:
     vendor_match = re.search(r'from\s+(.*?)\s+(in|for)', nl_query, re.IGNORECASE)
@@ -264,13 +299,17 @@ if nl_query:
     if month_match:
         month_str = month_match.group(1).capitalize()
         year_str = month_match.group(2) or str(datetime.now().year)
-        date_start = pd.to_datetime(f"01-{month_str}-{year_str}", dayfirst=True, errors='coerce')
+        date_start = pd.to_datetime(f"01-{month_str}-{year_str}", dayfirst=True)
         date_end = date_start + pd.offsets.MonthEnd(1)
         if "PR Date Submitted" in filtered_nl.columns:
-            filtered_nl = filtered_nl[(filtered_nl["PR Date Submitted"] >= date_start) & (filtered_nl["PR Date Submitted"] <= date_end)]
+            filtered_nl = filtered_nl[
+                (filtered_nl["PR Date Submitted"] >= date_start)
+                & (filtered_nl["PR Date Submitted"] <= date_end)
+            ]
 
     st.markdown(f"### 🤖 AI Search Results ({len(filtered_nl)} matches):")
     st.dataframe(filtered_nl, use_container_width=True)
+
 
 
 # ------------------------------------
