@@ -186,6 +186,7 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
+
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -199,45 +200,69 @@ else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-#  8b) AI-Enhanced Fuzzy Keyword Search with Auto-Suggestions (Top Search Bar Only)
+#  8b) AI-Enhanced Free Keyword Search (Live Suggestions)
 # ------------------------------------
 from rapidfuzz import process
+import difflib
 
 st.markdown("## 🔍 Keyword Search")
 
 # Combine values from columns if they exist
-suggestions = []
-combined_values = []
+search_data = []
 row_lookup = []  # Track rows for index alignment
 valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in filtered_df.columns]
 
 if valid_columns:
     for idx, row in filtered_df[valid_columns].fillna("").astype(str).iterrows():
-        row_combined = " | ".join(row[col].strip() for col in valid_columns)
-        combined_values.append(row_combined)
+        combined = " | ".join(row[col].strip() for col in valid_columns)
+        search_data.append(combined)
         row_lookup.append(idx)
-        suggestions.append(row_combined)  # Add full row string to suggestions
 
-suggestions = sorted(set(suggestions))
+# Text input for free typing
+user_query = st.text_input("Type to search PR Number, Purchase Doc, Product Name, or PO Vendor:",
+                           placeholder="e.g., Mohta Electric, Teflon tape, PR00007")
 
-selected_suggestion = st.selectbox(
-    "Type or select to search PR Number, Purchase Doc, Product Name, or PO Vendor:",
-    options=["Select or type..."] + suggestions,
-    index=0,
-    key="top_search_box"
-)
-
-if selected_suggestion and selected_suggestion != "Select or type...":
-    keyword_lower = selected_suggestion.lower()
-    matches = process.extract(keyword_lower, combined_values, limit=50, score_cutoff=70)
-    matched_indices = [row_lookup[combined_values.index(match[0])] for match in matches if match[0] in combined_values]
-    matching_rows = filtered_df.loc[matched_indices]
-
-    st.markdown(f"### Found {len(matching_rows)} matching results:")
-    st.dataframe(matching_rows, use_container_width=True)
+if user_query:
+    matches = process.extract(user_query.lower(), search_data, limit=50, score_cutoff=70)
+    if matches:
+        matched_indices = [row_lookup[search_data.index(match[0])] for match in matches]
+        matching_rows = filtered_df.loc[matched_indices]
+        st.markdown(f"### 🔎 Found {len(matching_rows)} matching results:")
+        st.dataframe(matching_rows, use_container_width=True)
+    else:
+        st.warning("No matching results found.")
 else:
-    st.info("Start typing or select a suggestion above to search.")
+    st.info("Start typing to search PRs, Products, Vendors, or POs.")
 
+# ------------------------------------
+#  8c) Experimental: AI Chat-like Natural Language Search (Optional Enhancement)
+# ------------------------------------
+import re
+from datetime import datetime
+
+nl_query = st.text_input("🤖 Try asking in natural language (e.g., 'Find POs from Mohta in Jan 2024')")
+
+if nl_query:
+    # Very simple parser for basic patterns (custom NLP can be added)
+    vendor_match = re.search(r'from\s+(.*?)\s+(in|for)', nl_query, re.IGNORECASE)
+    month_match = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{4})?', nl_query, re.IGNORECASE)
+
+    filtered_nl = filtered_df.copy()
+
+    if vendor_match:
+        vendor_name = vendor_match.group(1).strip().lower()
+        filtered_nl = filtered_nl[filtered_nl["PO Vendor"].astype(str).str.lower().str.contains(vendor_name, na=False)]
+
+    if month_match:
+        month_str = month_match.group(1).capitalize()
+        year_str = month_match.group(2) or str(datetime.now().year)
+        date_start = pd.to_datetime(f"01-{month_str}-{year_str}", dayfirst=True, errors='coerce')
+        date_end = date_start + pd.offsets.MonthEnd(1)
+        if "PR Date Submitted" in filtered_nl.columns:
+            filtered_nl = filtered_nl[(filtered_nl["PR Date Submitted"] >= date_start) & (filtered_nl["PR Date Submitted"] <= date_end)]
+
+    st.markdown(f"### 🤖 AI Search Results ({len(filtered_nl)} matches):")
+    st.dataframe(filtered_nl, use_container_width=True)
 
 
 # ------------------------------------
