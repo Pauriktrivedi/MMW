@@ -152,35 +152,37 @@ search_term = st.text_input(
     key="main_search"
 )
 # ------------------------------------
-#  7) Sidebar Filters
+#  7) Sidebar Filters (FY-Based)
 # ------------------------------------
 st.sidebar.header("🔍 Filters")
 
-# Automatically use today's date as the end for filters
+# Define financial years and their corresponding PR date ranges
+fy_options = {
+    "2023": (pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
+    "2024": (pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
+    "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
+    "2026": (pd.to_datetime("2026-04-01"), pd.to_datetime("2027-03-31")),
+}
+
+selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=1)
+pr_start, pr_end = fy_options[selected_fy]
+
+# Automatically use today's date for PO upper limit
 today = pd.Timestamp.today().date()
 
-# Handle empty data safely
-pr_dates = pd.to_datetime(df["PR Date Submitted"], errors="coerce").dropna()
+# Handle PO date bounds safely
 po_dates = pd.to_datetime(df["Po create Date"], errors="coerce").dropna()
-
-# Set default min/max ranges safely
-pr_min = pr_dates.min().date() if not pr_dates.empty else today
 po_min = po_dates.min().date() if not po_dates.empty else today
+po_max = po_dates.max().date() if not po_dates.empty else today
 
-# Sidebar Date Filters
-pr_range = st.sidebar.date_input(
-    "PR Date Range",
-    value=[pr_min, today],
-    key="pr_range"
-)
-
+# Use PO min and today for range; still allow override if needed
 po_range = st.sidebar.date_input(
-    "PO Date Range",
+    "PO Date Range (Optional)",
     value=[po_min, today],
     key="po_range"
 )
 
-# Other Sidebar Filters
+# Other Filters
 buyer_filter = st.sidebar.multiselect(
     "Buyer Type",
     options=df["Buyer.Type"].unique(),
@@ -208,6 +210,14 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].unique()),
     key="po_buyer_type_filter"
 )
+
+# ------------------------------------
+#  8a) Filter by PR Date Submitted
+# ------------------------------------
+filtered_df = df.copy()
+filtered_df = filtered_df[
+    (pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce").between(pr_start, pr_end))
+]
 
 # ------------------------------------
 #  8) Apply Filters → filtered_df
