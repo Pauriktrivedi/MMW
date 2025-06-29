@@ -152,7 +152,6 @@ search_term = st.text_input(
     key="main_search"
 )
 
-
 # ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
@@ -160,13 +159,14 @@ st.sidebar.header("🔍 Filters")
 
 # Define financial years and their corresponding PR date ranges
 fy_options = {
+    "All Years": (pd.to_datetime("2023-04-01"), pd.to_datetime("2026-03-31")),
     "2023": (pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
     "2024": (pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
     "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
     "2026": (pd.to_datetime("2026-04-01"), pd.to_datetime("2027-03-31")),
 }
 
-selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=1)
+selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=0)
 pr_start, pr_end = fy_options[selected_fy]
 
 # Other Filters
@@ -202,8 +202,13 @@ po_buyer_type_filter = st.sidebar.multiselect(
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
 filtered_df = df.copy()
-filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
-filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_start, pr_end))]
+
+if "PR Date Submitted" in filtered_df.columns:
+    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_start, pr_end))]
+else:
+    st.error("❌ 'PR Date Submitted' column not found in dataset.")
+
 
 # ------------------------------------
 #  8) Apply Filters → filtered_df
