@@ -151,7 +151,6 @@ search_term = st.text_input(
     value="",
     key="main_search"
 )
-
 # ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
@@ -172,29 +171,29 @@ pr_start, pr_end = fy_options[selected_fy]
 # Other Filters
 buyer_filter = st.sidebar.multiselect(
     "Buyer Type",
-    options=df["Buyer.Type"].unique(),
-    default=list(df["Buyer.Type"].unique()),
+    options=df["Buyer.Type"].dropna().unique(),
+    default=list(df["Buyer.Type"].dropna().unique()),
     key="buyer_filter"
 )
 
 entity_filter = st.sidebar.multiselect(
     "Entity",
-    options=df["Entity"].unique(),
-    default=list(df["Entity"].unique()),
+    options=df["Entity"].dropna().unique(),
+    default=list(df["Entity"].dropna().unique()),
     key="entity_filter"
 )
 
 orderer_filter = st.sidebar.multiselect(
     "PO Ordered By",
-    options=df["PO.Creator"].unique(),
-    default=list(df["PO.Creator"].unique()),
+    options=df["PO.Creator"].dropna().unique(),
+    default=list(df["PO.Creator"].dropna().unique()),
     key="orderer_filter"
 )
 
 po_buyer_type_filter = st.sidebar.multiselect(
     "PO Buyer Type",
-    options=df["PO.BuyerType"].unique(),
-    default=list(df["PO.BuyerType"].unique()),
+    options=df["PO.BuyerType"].dropna().unique(),
+    default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
 
@@ -205,10 +204,10 @@ filtered_df = df.copy()
 
 if "PR Date Submitted" in filtered_df.columns:
     filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
-    filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_start, pr_end))]
+    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_range[0], pr_range[1]))]
 else:
     st.error("❌ 'PR Date Submitted' column not found in dataset.")
-
 
 # ------------------------------------
 #  8) Apply Filters → filtered_df
