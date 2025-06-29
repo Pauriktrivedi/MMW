@@ -186,7 +186,6 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
-
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -276,43 +275,6 @@ if user_query:
         st.warning("No matching results found.")
 else:
     st.info("Start typing a keyword to search...")
-
-# ------------------------------------
-#  8c) AI Chat-style Natural Language Search (Fixed)
-# ------------------------------------
-nl_query = st.text_input("🤖 Ask a question (e.g., 'Find POs from Mohta in Jan 2024')")
-
-if nl_query:
-    filtered_nl = df.copy()
-
-    # Extract vendor
-    vendor_match = re.search(r'(?:from|by)\s+([a-zA-Z0-9\s&]+)', nl_query, re.IGNORECASE)
-    if vendor_match:
-        vendor_name = vendor_match.group(1).strip().lower()
-        if "PO Vendor" in filtered_nl.columns:
-            filtered_nl = filtered_nl[filtered_nl["PO Vendor"].astype(str).str.lower().str.contains(vendor_name)]
-
-    # Extract month and year
-    month_match = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,]*(\d{4})?', nl_query, re.IGNORECASE)
-    if month_match:
-        month_str = month_match.group(1).capitalize()
-        year_str = month_match.group(2) or str(datetime.now().year)
-        try:
-            date_start = pd.to_datetime(f"01-{month_str}-{year_str}", format="%d-%b-%Y")
-            date_end = date_start + pd.offsets.MonthEnd(1)
-            if "PR Date Submitted" in filtered_nl.columns:
-                filtered_nl = filtered_nl[
-                    (filtered_nl["PR Date Submitted"] >= date_start) &
-                    (filtered_nl["PR Date Submitted"] <= date_end)
-                ]
-        except Exception as e:
-            st.error(f"Invalid date format extracted from query: {e}")
-
-    if not filtered_nl.empty:
-        st.markdown(f"### 🤖 AI Search Results ({len(filtered_nl)} matches):")
-        st.dataframe(filtered_nl, use_container_width=True)
-    else:
-        st.warning("No results matched your query.")
 
 
 
