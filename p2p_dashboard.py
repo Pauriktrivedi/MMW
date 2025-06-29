@@ -151,47 +151,57 @@ search_term = st.text_input(
     value="",
     key="main_search"
 )
-
 # ------------------------------------
 #  7) Sidebar Filters
 # ------------------------------------
 st.sidebar.header("🔍 Filters")
 
-# Convert to pd.Timestamp to get min/max for date_input
-pr_min = pd.to_datetime(df["PR Date Submitted"]).min()
-pr_max = pd.to_datetime(df["PR Date Submitted"]).max()
-po_min = pd.to_datetime(df["Po create Date"]).min()
-po_max = pd.to_datetime(df["Po create Date"]).max()
+# Automatically use today's date as the end for filters
+today = pd.Timestamp.today().date()
 
+# Handle empty data safely
+pr_dates = pd.to_datetime(df["PR Date Submitted"], errors="coerce").dropna()
+po_dates = pd.to_datetime(df["Po create Date"], errors="coerce").dropna()
+
+# Set default min/max ranges safely
+pr_min = pr_dates.min().date() if not pr_dates.empty else today
+po_min = po_dates.min().date() if not po_dates.empty else today
+
+# Sidebar Date Filters
 pr_range = st.sidebar.date_input(
     "PR Date Range",
-    value=[pr_min, pr_max],
+    value=[pr_min, today],
     key="pr_range"
 )
+
 po_range = st.sidebar.date_input(
     "PO Date Range",
-    value=[po_min, po_max],
+    value=[po_min, today],
     key="po_range"
 )
 
+# Other Sidebar Filters
 buyer_filter = st.sidebar.multiselect(
     "Buyer Type",
     options=df["Buyer.Type"].unique(),
     default=list(df["Buyer.Type"].unique()),
     key="buyer_filter"
 )
+
 entity_filter = st.sidebar.multiselect(
     "Entity",
     options=df["Entity"].unique(),
     default=list(df["Entity"].unique()),
     key="entity_filter"
 )
+
 orderer_filter = st.sidebar.multiselect(
     "PO Ordered By",
     options=df["PO.Creator"].unique(),
     default=list(df["PO.Creator"].unique()),
     key="orderer_filter"
 )
+
 po_buyer_type_filter = st.sidebar.multiselect(
     "PO Buyer Type",
     options=df["PO.BuyerType"].unique(),
