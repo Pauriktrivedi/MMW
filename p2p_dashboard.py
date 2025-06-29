@@ -215,7 +215,8 @@ if valid_columns:
     for row in filtered_df[valid_columns].fillna("").astype(str).itertuples(index=False):
         row_combined = " | ".join(row)
         combined_values.append(row_combined)
-        suggestions.extend(row)
+        for item in row:
+            suggestions.append(item.strip())
 
 suggestions = sorted(set(suggestions))
 
@@ -260,9 +261,6 @@ if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df
     st.plotly_chart(fig_cat, use_container_width=True)
 else:
     st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
-
-
-
 
 # ------------------------------------
 #  9) Top KPI Row (Total PRs, POs, Line Items, Entities, Spend)
