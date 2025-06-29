@@ -151,6 +151,8 @@ search_term = st.text_input(
     value="",
     key="main_search"
 )
+
+
 # ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
@@ -166,21 +168,6 @@ fy_options = {
 
 selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=1)
 pr_start, pr_end = fy_options[selected_fy]
-
-# Automatically use today's date for PO upper limit
-today = pd.Timestamp.today().date()
-
-# Handle PO date bounds safely
-po_dates = pd.to_datetime(df["Po create Date"], errors="coerce").dropna()
-po_min = po_dates.min().date() if not po_dates.empty else today
-po_max = po_dates.max().date() if not po_dates.empty else today
-
-# Use PO min and today for range; still allow override if needed
-po_range = st.sidebar.date_input(
-    "PO Date Range (Optional)",
-    value=[po_min, today],
-    key="po_range"
-)
 
 # Other Filters
 buyer_filter = st.sidebar.multiselect(
@@ -215,9 +202,8 @@ po_buyer_type_filter = st.sidebar.multiselect(
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
 filtered_df = df.copy()
-filtered_df = filtered_df[
-    (pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce").between(pr_start, pr_end))
-]
+filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+filtered_df = filtered_df[(filtered_df["PR Date Submitted"].between(pr_start, pr_end))]
 
 # ------------------------------------
 #  8) Apply Filters → filtered_df
