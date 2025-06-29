@@ -157,22 +157,6 @@ search_term = st.text_input(
 # ------------------------------------
 st.sidebar.header("🔍 Filters")
 
-# Convert to pd.Timestamp to get min/max for date_input
-pr_min = pd.to_datetime(df["PR Date Submitted"]).min()
-pr_max = pd.to_datetime(df["PR Date Submitted"]).max()
-po_min = pd.to_datetime(df["Po create Date"]).min()
-po_max = pd.to_datetime(df["Po create Date"]).max()
-
-pr_range = st.sidebar.date_input(
-    "PR Date Range",
-    value=[pr_min, pr_max],
-    key="pr_range"
-)
-po_range = st.sidebar.date_input(
-    "PO Date Range",
-    value=[po_min, po_max],
-    key="po_range"
-)
 
 buyer_filter = st.sidebar.multiselect(
     "Buyer Type",
