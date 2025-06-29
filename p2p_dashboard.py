@@ -197,6 +197,17 @@ po_buyer_type_filter = st.sidebar.multiselect(
     key="po_buyer_type_filter"
 )
 
+# ------------------------------------
+#  8a) Filter by PR Date Submitted
+# ------------------------------------
+filtered_df = df.copy()
+
+if "PR Date Submitted" in filtered_df.columns:
+    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_range[0]) & (filtered_df["PR Date Submitted"] <= pr_range[1])]
+else:
+    st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
 #  8b) Keyword Search with Auto-Suggestions
@@ -216,7 +227,11 @@ if "Vendor Name" in filtered_df.columns:
 
 suggestions = sorted(set(suggestions))
 
-selected_suggestion = st.selectbox("Type or select to search PR Number, Purchase Doc, Product Name, or Vendor Name:", options=[""] + suggestions, index=0)
+selected_suggestion = st.selectbox(
+    "Type or select to search PR Number, Purchase Doc, Product Name, or Vendor Name:",
+    options=[""] + suggestions,
+    index=0
+)
 
 if selected_suggestion:
     keyword_lower = selected_suggestion.lower()
@@ -233,7 +248,7 @@ if selected_suggestion:
     if search_cols:
         mask = search_cols[0]
         for additional in search_cols[1:]:
-            mask = mask | additional
+            mask |= additional
         matching_rows = filtered_df[mask]
         st.markdown(f"### Found {len(matching_rows)} matching results:")
         st.dataframe(matching_rows, use_container_width=True)
