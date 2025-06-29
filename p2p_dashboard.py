@@ -186,6 +186,7 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
+
 # ------------------------------------
 #  8a) Filter by PR Date Submitted
 # ------------------------------------
@@ -208,7 +209,7 @@ st.markdown("## 🔍 Keyword Search")
 # Combine values from columns if they exist
 suggestions = []
 combined_values = []
-valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "Vendor Name"] if col in filtered_df.columns]
+valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in filtered_df.columns]
 
 if valid_columns:
     for row in filtered_df[valid_columns].fillna("").astype(str).itertuples(index=False):
@@ -219,7 +220,7 @@ if valid_columns:
 suggestions = sorted(set(suggestions))
 
 selected_suggestion = st.selectbox(
-    "Type or select to search PR Number, Purchase Doc, Product Name, Item Description, or PO Vendor:",
+    "Type or select to search PR Number, Purchase Doc, Product Name, or PO Vendor:",
     options=["Select or type..."] + suggestions,
     index=0,
     key="top_search_box"
@@ -235,6 +236,31 @@ if selected_suggestion and selected_suggestion != "Select or type...":
     st.dataframe(matching_rows, use_container_width=True)
 else:
     st.info("Start typing or select a suggestion above to search.")
+
+# ------------------------------------
+#  Category Spend Chart Sorted Descending
+# ------------------------------------
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    cat_spend = (
+        filtered_df.groupby("Procurement Category")["Net Amount"]
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
+
+    fig_cat = px.bar(
+        cat_spend,
+        x="Procurement Category",
+        y="Spend (Cr ₹)",
+        title="Spend by Category (Descending)",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+    )
+    fig_cat.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_cat, use_container_width=True)
+else:
+    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
+
 
 
 
