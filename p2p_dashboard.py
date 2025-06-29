@@ -216,8 +216,7 @@ if valid_columns:
         row_combined = " | ".join(row[col].strip() for col in valid_columns)
         combined_values.append(row_combined)
         row_lookup.append(idx)
-        for val in row:
-            suggestions.append(val.strip())
+        suggestions.append(row_combined)  # Add full row string to suggestions
 
 suggestions = sorted(set(suggestions))
 
@@ -231,13 +230,14 @@ selected_suggestion = st.selectbox(
 if selected_suggestion and selected_suggestion != "Select or type...":
     keyword_lower = selected_suggestion.lower()
     matches = process.extract(keyword_lower, combined_values, limit=50, score_cutoff=70)
-    matched_indices = [row_lookup[i] for i, _ in matches]
+    matched_indices = [row_lookup[combined_values.index(match[0])] for match in matches if match[0] in combined_values]
     matching_rows = filtered_df.loc[matched_indices]
 
     st.markdown(f"### Found {len(matching_rows)} matching results:")
     st.dataframe(matching_rows, use_container_width=True)
 else:
     st.info("Start typing or select a suggestion above to search.")
+
 
 
 # ------------------------------------
