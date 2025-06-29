@@ -186,40 +186,53 @@ po_buyer_type_filter = st.sidebar.multiselect(
     default=list(df["PO.BuyerType"].dropna().unique()),
     key="po_buyer_type_filter"
 )
+# ------------------------------------
+#  8a) Filter by PR Date Submitted
+# ------------------------------------
+filtered_df = df.copy()
+
+if "PR Date Submitted" in df.columns:
+    df["PR Date Submitted"] = pd.to_datetime(df["PR Date Submitted"], errors="coerce")
+    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
+    filtered_df = df[(df["PR Date Submitted"] >= pr_range[0]) & (df["PR Date Submitted"] <= pr_range[1])]
+else:
+    st.error("❌ 'PR Date Submitted' column not found in dataset.")
 
 # ------------------------------------
-# 8b) Smart Keyword Search (Fuzzy with Suggestions)
+#  8b) AI-Enhanced Keyword Search (No External Library)
 # ------------------------------------
 from rapidfuzz import process, fuzz
 
 st.markdown("## 🔍 Keyword Search")
 
-valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in filtered_df.columns]
+# Combine searchable columns
+valid_columns = [col for col in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if col in df.columns]
 search_data = []
 row_lookup = []
-
 if valid_columns:
-    for idx, row in filtered_df[valid_columns].fillna("").astype(str).iterrows():
+    for idx, row in df[valid_columns].fillna("").astype(str).iterrows():
         combined = " | ".join(row[col].strip() for col in valid_columns)
         search_data.append(combined)
         row_lookup.append(idx)
 
+# Text input field
 user_query = st.text_input("Type to search PR Number, Purchase Doc, Product Name, or PO Vendor:")
 
+# Fuzzy match
 if user_query:
-    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.token_sort_ratio, limit=20, score_cutoff=60)
+    matches = process.extract(user_query.lower(), search_data, scorer=fuzz.token_sort_ratio, limit=50, score_cutoff=70)
     if matches:
         matched_indices = [row_lookup[search_data.index(match[0])] for match in matches]
-        matching_rows = filtered_df.loc[matched_indices]
+        matching_rows = df.loc[matched_indices]
         st.markdown(f"### 🔎 Found {len(matching_rows)} matching results:")
         st.dataframe(matching_rows, use_container_width=True)
     else:
         st.warning("No matching results found.")
 else:
-    st.info("Start typing to search across PRs, Products, Vendors, or POs.")
+    st.info("Start typing to search PRs, Products, Vendors, or POs.")
 
 # ------------------------------------
-# 8c) AI Chat-style Natural Language Search
+#  8c) Experimental: AI Chat-style Natural Language Search
 # ------------------------------------
 import re
 from datetime import datetime
@@ -230,7 +243,7 @@ if nl_query:
     vendor_match = re.search(r'from\s+(.*?)\s+(in|for)', nl_query, re.IGNORECASE)
     month_match = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{4})?', nl_query, re.IGNORECASE)
 
-    filtered_nl = filtered_df.copy()
+    filtered_nl = df.copy()
 
     if vendor_match:
         vendor_name = vendor_match.group(1).strip().lower()
@@ -246,7 +259,6 @@ if nl_query:
 
     st.markdown(f"### 🤖 AI Search Results ({len(filtered_nl)} matches):")
     st.dataframe(filtered_nl, use_container_width=True)
-
 
 
 # ------------------------------------
