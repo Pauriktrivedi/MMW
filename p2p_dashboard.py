@@ -37,7 +37,11 @@ def load_and_combine_data():
     mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
     mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
 
-   
+    # Tag each sheet with an "Entity" column
+    mepl_df["Entity"] = "MEPL"
+    mlpl_df["Entity"] = "MLPL"
+    mmw_df["Entity"]  = "MMW"
+    mmpl_df["Entity"] = "MMPL"
 
     # Concatenate into a single DataFrame
     combined = pd.concat([mepl_df, mlpl_df, mmw_df, mmpl_df], ignore_index=True)
