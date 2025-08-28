@@ -22,11 +22,7 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
     """
-    Reads the four Excel files from the current directory:
-      - MEPL.xlsx
-      - MLPL.xlsx
-      - mmw.xlsx
-      - mmpl.xlsx
+   
 
     Tags each with an "Entity" column, concatenates them, and
     normalizes column names by stripping whitespace.
