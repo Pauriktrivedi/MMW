@@ -511,6 +511,7 @@ fig_daily = px.line(
     labels={"PR Count": "PR Count"},
 )
 st.plotly_chart(fig_daily, use_container_width=True)
+
 # ------------------------------------
 # 18) Buyer-wise Spend
 # ------------------------------------
@@ -518,110 +519,197 @@ st.subheader("💰 Buyer-wise Spend (Cr ₹)")
 buyer_spend = (
     filtered_df.groupby("PO.Creator")["Net Amount"]
     .sum()
+    .sort_values(ascending=False)
     .reset_index()
 )
-buyer_spend["Spend (Cr ₹)"] = buyer_spend["Net Amount"] / 1e7
+buyer_spend["Net Amount (Cr)"] = buyer_spend["Net Amount"] / 1e7
 
-fig_buyer_spend = px.bar(
+fig_buyer = px.bar(
     buyer_spend,
     x="PO.Creator",
-    y="Spend (Cr ₹)",
+    y="Net Amount (Cr)",
     title="Spend by Buyer",
-    labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PO.Creator": "Buyer"},
+    labels={"Net Amount (Cr)": "Spend (Cr ₹)", "PO.Creator": "Buyer"},
+    text="Net Amount (Cr)",
 )
-fig_buyer_spend.update_layout(xaxis_tickangle=-45)
-st.plotly_chart(fig_buyer_spend, use_container_width=True)
+fig_buyer.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+st.plotly_chart(fig_buyer, use_container_width=True)
+
 
 # ------------------------------------
-# 19) PO Delivery Delay Analysis
+#  Category Spend Chart Sorted Descending
 # ------------------------------------
-st.subheader("🚚 PO Delivery Delay Analysis")
-if "PO Delivery Date" in filtered_df.columns and "PO Confirmation Date" in filtered_df.columns:
-    delay_df = filtered_df.copy()
-    delay_df["PO Delivery Date"] = pd.to_datetime(delay_df["PO Delivery Date"], errors="coerce")
-    delay_df["PO Confirmation Date"] = pd.to_datetime(delay_df["PO Confirmation Date"], errors="coerce")
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    cat_spend = (
+        filtered_df.groupby("Procurement Category")["Net Amount"]
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
 
-    delay_df["Delivery Delay (Days)"] = (
-        delay_df["PO Delivery Date"] - delay_df["PO Confirmation Date"]
+    fig_cat = px.bar(
+        cat_spend,
+        x="Procurement Category",
+        y="Spend (Cr ₹)",
+        title="Spend by Category (Descending)",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+    )
+    fig_cat.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_cat, use_container_width=True)
+else:
+    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
+
+# ------------------------------------
+# 19) PO Approval Summary & Details
+# ------------------------------------
+if "PO Approved Date" in filtered_df.columns:
+    st.subheader("📋 PO Approval Summary")
+    po_app_df = filtered_df[filtered_df["Po create Date"].notna()].copy()
+    po_app_df["PO Approved Date"] = pd.to_datetime(po_app_df["PO Approved Date"], errors="coerce")
+
+    total_pos    = po_app_df["Purchase Doc"].nunique()
+    approved_pos = po_app_df[po_app_df["PO Approved Date"].notna()]["Purchase Doc"].nunique()
+    pending_pos  = total_pos - approved_pos
+
+    po_app_df["PO Approval Lead Time"] = (
+        po_app_df["PO Approved Date"] - pd.to_datetime(po_app_df["Po create Date"])
     ).dt.days
+    avg_approval = po_app_df["PO Approval Lead Time"].mean().round(1)
 
-    delay_summary = delay_df.groupby("PO.Creator")["Delivery Delay (Days)"].mean().reset_index()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📦 Total POs",           total_pos)
+    c2.metric("✅ Approved POs",        approved_pos)
+    c3.metric("⏳ Pending Approval",    pending_pos)
+    c4.metric("⏱️ Avg Approval Lead Time (days)", avg_approval)
 
-    fig_delay = px.bar(
-        delay_summary,
-        x="PO.Creator",
-        y="Delivery Delay (Days)",
-        title="Average Delivery Delay by Buyer",
-        labels={"Delivery Delay (Days)": "Delay (Days)", "PO.Creator": "Buyer"},
-    )
-    st.plotly_chart(fig_delay, use_container_width=True)
+    st.subheader("📄 Detailed PO Approval Aging List")
+    approval_detail = po_app_df[
+        ["PO.Creator", "Purchase Doc", "Po create Date", "PO Approved Date", "PO Approval Lead Time"]
+    ].sort_values(by="PO Approval Lead Time", ascending=False)
+    st.dataframe(approval_detail, use_container_width=True)
 else:
-    st.info("ℹ️ Delivery delay analysis not available (columns missing).")
+    st.info("ℹ️ 'PO Approved Date' column not found.")
 
 # ------------------------------------
-# 20) Vendor Performance (On-time vs Delayed)
+# 20) PO Status Breakdown
 # ------------------------------------
-st.subheader("⭐ Vendor Performance")
-if "PO Vendor" in filtered_df.columns and "PO Delivery Date" in filtered_df.columns:
-    vendor_perf = delay_df.copy()
-    vendor_perf["On-time"] = vendor_perf["Delivery Delay (Days)"].apply(lambda x: 1 if x <= 0 else 0)
-
-    vendor_summary = (
-        vendor_perf.groupby("PO Vendor")["On-time"].mean().reset_index()
+if "PO Status" in filtered_df.columns:
+    st.subheader("📊 PO Status Breakdown")
+    po_status_summary = (
+        filtered_df["PO Status"].value_counts().reset_index()
     )
-    vendor_summary["On-time %"] = vendor_summary["On-time"] * 100
+    po_status_summary.columns = ["PO Status", "Count"]
 
-    top_vendors = vendor_summary.sort_values("On-time %", ascending=False).head(10)
-
-    fig_vendor = px.bar(
-        top_vendors,
-        x="PO Vendor",
-        y="On-time %",
-        title="Top 10 Vendors by On-time Delivery %",
-        labels={"On-time %": "On-time %", "PO Vendor": "Vendor"},
-    )
-    fig_vendor.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig_vendor, use_container_width=True)
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        st.dataframe(po_status_summary, use_container_width=True)
+    with c2:
+        fig_status = px.pie(
+            po_status_summary,
+            names="PO Status",
+            values="Count",
+            title="PO Status Distribution",
+            hole=0.3,
+        )
+        fig_status.update_traces(textinfo="percent+label")
+        st.plotly_chart(fig_status, use_container_width=True)
 else:
-    st.info("ℹ️ Vendor performance data not available.")
+    st.info("ℹ️ 'PO Status' column not found.")
 
 # ------------------------------------
-# 21) Entity-wise Procurement Scorecard
+# 21) PO Delivery Summary: Received vs Pending
 # ------------------------------------
-st.subheader("🏢 Entity-wise Procurement Scorecard")
-entity_summary = (
-    filtered_df.groupby("Entity")
-    .agg(
-        Total_PRs=("PR Number", "nunique"),
-        Total_POs=("Purchase Doc", "nunique"),
-        Spend=("Net Amount", "sum"),
+st.subheader("🚚 PO Delivery Summary: Received vs Pending")
+delivery_df = filtered_df.rename(columns={
+    "PO Quantity": "PO Qty",
+    "ReceivedQTY":   "Received Qty",
+    "Pending QTY":   "Pending Qty"
+}).copy()
+
+delivery_df["% Received"] = (delivery_df["Received Qty"] / delivery_df["PO Qty"]) * 100
+delivery_df["% Received"] = delivery_df["% Received"].fillna(0).round(1)
+
+po_delivery_summary = (
+    delivery_df.groupby(
+        ["Purchase Doc", "PO Vendor", "Product Name", "Item Description"],
+        dropna=False
     )
+    .agg({
+        "PO Qty":       "sum",
+        "Received Qty": "sum",
+        "Pending Qty":  "sum",
+        "% Received":   "mean",
+    })
     .reset_index()
 )
-entity_summary["Spend (Cr ₹)"] = entity_summary["Spend"] / 1e7
-st.dataframe(entity_summary, use_container_width=True)
 
-# ------------------------------------
-# 22) PR to PO Efficiency Comparison
-# ------------------------------------
-st.subheader("⚡ PR to PO Efficiency Comparison")
-eff_df = lead_df.copy()
-eff_summary = eff_df.groupby("Entity")["Lead Time (Days)"].mean().reset_index()
+st.dataframe(po_delivery_summary.sort_values(by="Pending Qty", ascending=False), use_container_width=True)
 
-fig_eff = px.bar(
-    eff_summary,
-    x="Entity",
-    y="Lead Time (Days)",
-    title="Average PR → PO Lead Time by Entity",
-    labels={"Lead Time (Days)": "Lead Time (Days)", "Entity": "Entity"},
+fig_pending = px.bar(
+    po_delivery_summary.sort_values(by="Pending Qty", ascending=False).head(20),
+    x="Purchase Doc",
+    y="Pending Qty",
+    color="PO Vendor",
+    hover_data=["Product Name", "Item Description"],
+    title="Top 20 POs Awaiting Delivery (Pending Qty)",
+    text="Pending Qty",
 )
-st.plotly_chart(fig_eff, use_container_width=True)
+fig_pending.update_traces(textposition="outside")
+st.plotly_chart(fig_pending, use_container_width=True)
+
+# Delivery Performance Summary Metrics
+total_po_lines    = len(delivery_df)
+fully_received    = (delivery_df["Pending Qty"] == 0).sum()
+partially_pending = (delivery_df["Pending Qty"] > 0).sum()
+avg_receipt_pct   = delivery_df["% Received"].mean().round(1)
+
+st.markdown("### 📋 Delivery Performance Summary")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("PO Lines",        total_po_lines)
+c2.metric("Fully Delivered", fully_received)
+c3.metric("Pending Delivery", partially_pending)
+c4.metric("Avg. Receipt %",   f"{avg_receipt_pct}%")
+
+st.download_button(
+    "📥 Download Delivery Status",
+    data=po_delivery_summary.to_csv(index=False),
+    file_name="PO_Delivery_Status.csv",
+    mime="text/csv"
+)
 
 # ------------------------------------
-# 23) Footer Notes
+# 22) Top 50 Pending Delivery Lines by Value
 # ------------------------------------
-st.markdown("---")
-st.caption("📌 Procure-to-Pay Dashboard • Built with ❤️ using Streamlit, Pandas, and Plotly")
+st.subheader("📋 Top 50 Pending Lines (by Value)")
+pending_items = delivery_df[delivery_df["Pending Qty"] > 0].copy()
+pending_items["Pending Value"] = pending_items["Pending Qty"] * pending_items["PO Unit Rate"]
+
+top_pending_items = (
+    pending_items.sort_values(by="Pending Value", ascending=False)
+    .head(50)[
+        [
+            "PR Number",
+            "Purchase Doc",
+            "Procurement Category",
+            "Buying legal entity",
+            "PR Budget description",
+            "Product Name",
+            "Item Description",
+            "Pending Qty",
+            "Pending Value",
+        ]
+    ]
+    .reset_index(drop=True)
+)
+
+st.dataframe(
+    top_pending_items.style.format({
+        "Pending Qty":   "{:,.0f}",
+        "Pending Value": "₹ {:,.2f}"
+    }),
+    use_container_width=True
+)
 
 # ------------------------------------
 # 23) Top 10 Vendors by Spend
