@@ -5,122 +5,6 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-import streamlit as st
-import pandas as pd
-from fuzzywuzzy import process, fuzz
-from io import BytesIO
-
-# -------------------------------
-# Load Data
-# -------------------------------
-@st.cache_data
-def load_data():
-    df = pd.read_csv("your_data.csv")  # change file path
-    return df
-
-df = load_data()
-
-st.title("📊 P2P Dashboard - Global Search & Filters")
-
-# -------------------------------
-# Define Filter Options
-# -------------------------------
-fy_options = {
-    "All Years": (pd.Timestamp("2000-01-01"), pd.Timestamp.today()),
-    "FY 2023-24": (pd.Timestamp("2023-04-01"), pd.Timestamp("2024-03-31")),
-    "FY 2024-25": (pd.Timestamp("2024-04-01"), pd.Timestamp("2025-03-31")),
-}
-
-selected_fy = st.selectbox("📅 Financial Year", list(fy_options.keys()))
-buyer_type = st.multiselect("👤 Buyer Type", df["Buyer Type"].dropna().unique())
-selected_entities = st.multiselect("🏢 Entity", df["Entity"].dropna().unique())
-selected_po_ordered = st.multiselect("🧾 PO Ordered By", df["PO Ordered By"].dropna().unique())
-selected_categories = st.multiselect("📂 Procurement Category", df["Procurement Category"].dropna().unique())
-selected_vendors = st.multiselect("🏭 Vendor", df["PO Vendor"].dropna().unique())
-
-user_query = st.text_input("🔎 Keyword Search (Vendor, Product, PO, PR...)")
-
-# -------------------------------
-# Apply All Filters
-# -------------------------------
-filtered_df = df.copy()
-
-# 1) Filter by Financial Year
-if "PR Date Submitted" in df.columns:
-    df["PR Date Submitted"] = pd.to_datetime(df["PR Date Submitted"], errors="coerce")
-    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = filtered_df[
-        (df["PR Date Submitted"] >= pr_range[0]) &
-        (df["PR Date Submitted"] <= pr_range[1])
-    ]
-
-# 2) Buyer Type
-if buyer_type:
-    filtered_df = filtered_df[filtered_df["Buyer Type"].isin(buyer_type)]
-
-# 3) Entity
-if selected_entities:
-    filtered_df = filtered_df[filtered_df["Entity"].isin(selected_entities)]
-
-# 4) PO Ordered By
-if selected_po_ordered:
-    filtered_df = filtered_df[filtered_df["PO Ordered By"].isin(selected_po_ordered)]
-
-# 5) Procurement Category
-if selected_categories:
-    filtered_df = filtered_df[filtered_df["Procurement Category"].isin(selected_categories)]
-
-# 6) Vendor
-if selected_vendors:
-    filtered_df = filtered_df[filtered_df["PO Vendor"].isin(selected_vendors)]
-
-# -------------------------------
-# Keyword / Fuzzy Search
-# -------------------------------
-if user_query:
-    valid_columns = [col for col in filtered_df.columns if filtered_df[col].dtype == "object"]
-    matches = process.extract(
-        user_query.lower(),
-        [" | ".join(row[valid_columns].fillna("").astype(str)) for _, row in filtered_df.iterrows()],
-        limit=200,  # number of results to fetch
-        scorer=fuzz.WRatio
-    )
-    match_indices = [filtered_df.index[i] for _, score, i in matches if score >= 60]
-    result_df = filtered_df.loc[match_indices]
-else:
-    result_df = filtered_df
-
-# -------------------------------
-# Display Results
-# -------------------------------
-if not result_df.empty:
-    st.success(f"✅ Found {len(result_df)} matching results")
-    st.dataframe(result_df, use_container_width=True)
-
-    # Download CSV
-    st.download_button(
-        "⬇️ Download CSV",
-        result_df.to_csv(index=False).encode("utf-8"),
-        file_name="search_results.csv",
-        mime="text/csv"
-    )
-
-    # Download Excel
-    def convert_df_to_excel(df):
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="Results")
-        return output.getvalue()
-
-    st.download_button(
-        "⬇️ Download Excel",
-        convert_df_to_excel(result_df),
-        file_name="search_results.xlsx"
-    )
-else:
-    st.warning("⚠️ No matching results found.")
-
-
 # ====================================
 #  Procure-to-Pay Dashboard (Streamlit)
 # ====================================
@@ -147,7 +31,7 @@ def load_and_combine_data():
     Tags each with an "Entity" column, concatenates them, and
     normalizes column names by stripping whitespace.
     """
-       # NOTE: Filenames must match exactly (case-sensitive on some platforms).
+    # NOTE: Filenames must match exactly (case-sensitive on some platforms).
     mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
     mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
     mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
