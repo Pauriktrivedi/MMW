@@ -483,13 +483,15 @@ monthly_summary["Month"] = monthly_summary["Month"].astype(str)
 st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
 # ------------------------------------
-# 13) Procurement Category Spend
+# 13) Procurement Category Spend (Ascending Order)
 # ------------------------------------
-st.subheader("📦 Procurement Category Spend")
-if "Procurement Category" in filtered_df.columns:
+st.subheader("📦 Procurement Category Spend (Ascending Order)")
+
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
     cat_spend = (
         filtered_df.groupby("Procurement Category")["Net Amount"]
         .sum()
+        .sort_values(ascending=True)   # 👈 ascending order
         .reset_index()
     )
     cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
@@ -498,13 +500,17 @@ if "Procurement Category" in filtered_df.columns:
         cat_spend,
         x="Procurement Category",
         y="Spend (Cr ₹)",
-        title="Spend by Category",
+        title="Spend by Category (Ascending)",
         labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+        text="Spend (Cr ₹)"
     )
+    fig_cat.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig_cat.update_layout(xaxis_tickangle=-45)
+
     st.plotly_chart(fig_cat, use_container_width=True)
 else:
-    st.info("ℹ️ No 'Procurement Category' column found.")
+    st.info("ℹ️ No 'Procurement Category' or 'Net Amount' column found.")
+
 
 # ------------------------------------
 # 14) PR → PO Aging Buckets
