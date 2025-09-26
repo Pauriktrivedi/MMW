@@ -359,6 +359,41 @@ gauge_fig = go.Figure(
 st.plotly_chart(gauge_fig, use_container_width=True)
 st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
+
+# ------------------------------------
+# 26) Monthly Spend Trend by Entity
+# ------------------------------------
+st.subheader("💹 Monthly Spend Trend by Entity")
+spend_df = filtered_df.copy()
+spend_df["PO Month"] = (
+    pd.to_datetime(spend_df["Po create Date"], errors="coerce")
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+
+monthly_spend = (
+    spend_df.dropna(subset=["PO Month"])
+    .groupby(["PO Month", "Entity"], as_index=False)["Net Amount"]
+    .sum()
+)
+monthly_spend["Spend (Cr ₹)"] = monthly_spend["Net Amount"] / 1e7
+
+# Convert timestamp to string like "Apr-2023", "May-2023", etc.
+monthly_spend["Month_Str"] = monthly_spend["PO Month"].dt.strftime("%b-%Y")
+
+fig_spend = px.line(
+    monthly_spend,
+    x="Month_Str",
+    y="Spend (Cr ₹)",
+    color="Entity",
+    markers=True,
+    title="Monthly Spend Trend by Entity",
+    labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"},
+)
+fig_spend.update_layout(xaxis_tickangle=-45)
+st.plotly_chart(fig_spend, use_container_width=True)
+
+
 # ------------------------------------
 # 11) PR → PO Lead Time by Buyer Type & Buyer
 # ------------------------------------
@@ -871,39 +906,6 @@ fig_monthly_po = px.bar(
 )
 fig_monthly_po.update_traces(textposition="outside")
 st.plotly_chart(fig_monthly_po, use_container_width=True)
-
-# ------------------------------------
-# 26) Monthly Spend Trend by Entity
-# ------------------------------------
-st.subheader("💹 Monthly Spend Trend by Entity")
-spend_df = filtered_df.copy()
-spend_df["PO Month"] = (
-    pd.to_datetime(spend_df["Po create Date"], errors="coerce")
-    .dt.to_period("M")
-    .dt.to_timestamp()
-)
-
-monthly_spend = (
-    spend_df.dropna(subset=["PO Month"])
-    .groupby(["PO Month", "Entity"], as_index=False)["Net Amount"]
-    .sum()
-)
-monthly_spend["Spend (Cr ₹)"] = monthly_spend["Net Amount"] / 1e7
-
-# Convert timestamp to string like "Apr-2023", "May-2023", etc.
-monthly_spend["Month_Str"] = monthly_spend["PO Month"].dt.strftime("%b-%Y")
-
-fig_spend = px.line(
-    monthly_spend,
-    x="Month_Str",
-    y="Spend (Cr ₹)",
-    color="Entity",
-    markers=True,
-    title="Monthly Spend Trend by Entity",
-    labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"},
-)
-fig_spend.update_layout(xaxis_tickangle=-45)
-st.plotly_chart(fig_spend, use_container_width=True)
 
 # ------------------------------------
 # 27) Today’s Snapshot (KPIs)
