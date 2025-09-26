@@ -144,6 +144,95 @@ all_suggestions = list(dict.fromkeys(all_suggestions))
 # ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
+# ---------------------------
+# Sidebar Filters (robust)
+# ---------------------------
+st.sidebar.header("🔍 Filters (robust)")
+
+# Ensure key columns exist and normalize dtype/strings to avoid mismatches
+def safe_unique_vals(series):
+    if series is None:
+        return []
+    # cast to string, strip, drop null-like values, give sorted unique
+    return sorted([str(x).strip() for x in series.dropna().unique()])
+
+# Make sure these columns exist (create dummy empty columns if missing)
+for col in ["Buyer.Type", "Entity", "PO.Creator", "PO.BuyerType", "PR Date Submitted"]:
+    if col not in df.columns:
+        df[col] = pd.NA
+
+# Convert important string-like columns to stripped strings to avoid whitespace mismatches
+for col in ["Buyer.Type", "Entity", "PO.Creator", "PO.BuyerType"]:
+    df[col] = df[col].astype(str).fillna("").apply(lambda x: x.strip() if x is not None else "")
+
+# Prepare options
+buyer_options = safe_unique_vals(df["Buyer.Type"]) if "Buyer.Type" in df.columns else []
+entity_options = safe_unique_vals(df["Entity"]) if "Entity" in df.columns else []
+orderer_options = safe_unique_vals(df["PO.Creator"]) if "PO.Creator" in df.columns else []
+po_buyer_type_options = safe_unique_vals(df["PO.BuyerType"]) if "PO.BuyerType" in df.columns else []
+
+# Financial Year select (same as before)
+fy_options = {
+    "All Years": (pd.to_datetime("2023-04-01"), pd.to_datetime("2026-03-31")),
+    "2023": (pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
+    "2024": (pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
+    "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
+    "2026": (pd.to_datetime("2026-04-01"), pd.to_datetime("2027-03-31")),
+}
+selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=0)
+pr_start, pr_end = fy_options[selected_fy]
+
+# Multiselects with safe defaults
+buyer_filter = st.sidebar.multiselect("Buyer Type", options=buyer_options, default=buyer_options)
+entity_filter = st.sidebar.multiselect("Entity", options=entity_options, default=entity_options)
+orderer_filter = st.sidebar.multiselect("PO Ordered By", options=orderer_options, default=orderer_options)
+po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", options=po_buyer_type_options, default=po_buyer_type_options)
+
+# Date range filter: use PR Date Submitted if available, else use Po create Date
+date_col_for_filter = "PR Date Submitted" if "PR Date Submitted" in df.columns else ("Po create Date" if "Po create Date" in df.columns else None)
+if date_col_for_filter:
+    # ensure datetime dtype
+    df[date_col_for_filter] = pd.to_datetime(df[date_col_for_filter], errors="coerce")
+    min_date = df[date_col_for_filter].min().date() if pd.notna(df[date_col_for_filter].min()) else date.today()
+    max_date = df[date_col_for_filter].max().date() if pd.notna(df[date_col_for_filter].max()) else date.today()
+    date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
+else:
+    date_range = None
+
+# ---------------------------
+# Apply filters (all safe)
+# ---------------------------
+filtered_df = df.copy()
+
+# Apply FY filter using PR Date Submitted if present
+if "PR Date Submitted" in filtered_df.columns:
+    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+    # pr_start, pr_end are Timestamps; compare accordingly
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_start) & (filtered_df["PR Date Submitted"] <= pr_end)]
+
+# Apply date_range if chosen
+if date_range and date_col_for_filter:
+    # date_range may be (start, end) or a single date on some UI states
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+        filtered_df = filtered_df[(filtered_df[date_col_for_filter] >= s_dt) & (filtered_df[date_col_for_filter] <= e_dt)]
+
+# Apply string-based multiselect filters (coerce to str before matching)
+if buyer_filter:
+    filtered_df = filtered_df[filtered_df["Buyer.Type"].astype(str).str.strip().isin(buyer_filter)]
+if entity_filter:
+    filtered_df = filtered_df[filtered_df["Entity"].astype(str).str.strip().isin(entity_filter)]
+if orderer_filter:
+    filtered_df = filtered_df[filtered_df["PO.Creator"].astype(str).str.strip().isin(orderer_filter)]
+if po_buyer_type_filter:
+    filtered_df = filtered_df[filtered_df["PO.BuyerType"].astype(str).str.strip().isin(po_buyer_type_filter)]
+
+# Debug: show applied filters & counts
+st.sidebar.markdown("----")
+st.sidebar.write("Selected FY:", selected_fy)
+st.sidebar.write("Selected Buyer Types:", buyer_filter if buyer_filter else "ALL")
+st.sidebar.write("Selected Entities:", entity_filter if entity_filter else "ALL")
+st.sidebar.write("Row count after filters:", len(filtered_df))
 
 
 # ------------------------------------
