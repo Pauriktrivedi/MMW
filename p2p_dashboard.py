@@ -483,24 +483,32 @@ monthly_summary["Month"] = monthly_summary["Month"].astype(str)
 st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
 # ------------------------------------
-# 13) Procurement Category Spend (Ascending Order)
+# 13) Procurement Category Spend (Top 15, Descending, Excluding <0)
 # ------------------------------------
-st.subheader("📦 Procurement Category Spend (Ascending Order)")
+st.subheader("📦 Top 15 Procurement Categories by Spend (Descending)")
 
 if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
     cat_spend = (
         filtered_df.groupby("Procurement Category")["Net Amount"]
         .sum()
-        .sort_values(ascending=True)   # 👈 ascending order
         .reset_index()
     )
+
+    # Exclude negative spend
+    cat_spend = cat_spend[cat_spend["Net Amount"] > 0]
+
+    # Sort descending and keep Top 15
+    cat_spend = cat_spend.sort_values(by="Net Amount", ascending=False).head(15)
+
+    # Add Spend in Cr ₹
     cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
 
+    # Plot
     fig_cat = px.bar(
         cat_spend,
         x="Procurement Category",
         y="Spend (Cr ₹)",
-        title="Spend by Category (Ascending)",
+        title="Top 15 Procurement Categories by Spend",
         labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
         text="Spend (Cr ₹)"
     )
