@@ -234,19 +234,8 @@ st.sidebar.write("Selected Buyer Types:", buyer_filter if buyer_filter else "ALL
 st.sidebar.write("Selected Entities:", entity_filter if entity_filter else "ALL")
 st.sidebar.write("Row count after filters:", len(filtered_df))
 
-# ------------------------------------
-#  8a) Filter by PR Date Submitted
-# ------------------------------------
-filtered_df = df.copy()
-
-if "PR Date Submitted" in df.columns:
-    df["PR Date Submitted"] = pd.to_datetime(df["PR Date Submitted"], errors="coerce")
-    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = df[
-        (df["PR Date Submitted"] >= pr_range[0]) & (df["PR Date Submitted"] <= pr_range[1])
-    ]
-else:
-    st.error("❌ 'PR Date Submitted' column not found in dataset.")
+st.write("DEBUG - unique Buyer.Type values:", df["Buyer.Type"].unique()[:50])
+st.write("DEBUG - sample rows (post-normalize):", df.head(5))
 
 # ------------------------------------
 #  8b) Keyword Search with Chips and Autocomplete + Memory
