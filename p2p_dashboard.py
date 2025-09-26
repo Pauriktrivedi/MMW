@@ -32,7 +32,10 @@ def load_and_combine_data():
     normalizes column names by stripping whitespace.
     """
     # NOTE: Filenames must match exactly (case-sensitive on some platforms).
-   
+    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
+    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
+    mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
+    mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
 
     # Tag each sheet with an "Entity" column
     mepl_df["Entity"] = "MEPL"
