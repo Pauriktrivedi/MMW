@@ -359,11 +359,13 @@ gauge_fig = go.Figure(
 st.plotly_chart(gauge_fig, use_container_width=True)
 st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
-# ---------- Monthly Total Spend (grouped by Entity, top 4 entities) ----------
-st.subheader("📊 Monthly Total Spend — Top 4 Entities (Grouped Bar)")
+# ---------- Monthly Total Spend (single bar per month) ----------
+st.subheader("📊 Monthly Total Spend (All Entities Combined)")
 
-# choose date column to use for month aggregation
-date_col = "Po create Date" if "Po create Date" in filtered_df.columns else ("PR Date Submitted" if "PR Date Submitted" in filtered_df.columns else None)
+# choose which date column to use
+date_col = "Po create Date" if "Po create Date" in filtered_df.columns else (
+    "PR Date Submitted" if "PR Date Submitted" in filtered_df.columns else None
+)
 
 if date_col is None:
     st.info("No date column available ('Po create Date' or 'PR Date Submitted') to compute monthly spend.")
@@ -377,53 +379,36 @@ else:
         st.info("No 'Net Amount' column found to compute spend.")
     else:
         temp = temp.copy()
-        # compute month period and keep a timestamp for sorting
+        # compute month
         temp["PO_Month"] = temp[date_col].dt.to_period("M").dt.to_timestamp()
         temp["Month_Str"] = temp["PO_Month"].dt.strftime("%b-%Y")
 
-        # aggregate spend by month & entity
-        monthly_entity_spend = (
-            temp.groupby(["PO_Month", "Month_Str", "Entity"], as_index=False)["Net Amount"]
+        # aggregate spend by month (all entities together)
+        monthly_total_spend = (
+            temp.groupby(["PO_Month", "Month_Str"], as_index=False)["Net Amount"]
             .sum()
         )
+        monthly_total_spend["Spend (Cr ₹)"] = monthly_total_spend["Net Amount"] / 1e7
 
-        # compute top 4 entities by overall spend in the filtered data
-        top_entities = (
-            monthly_entity_spend.groupby("Entity")["Net Amount"].sum()
-            .sort_values(ascending=False)
-            .head(4)
-            .index.tolist()
+        # ensure months sorted chronologically
+        monthly_total_spend = monthly_total_spend.sort_values("PO_Month")
+        month_order = monthly_total_spend["Month_Str"].tolist()
+        monthly_total_spend["Month_Str"] = pd.Categorical(monthly_total_spend["Month_Str"], categories=month_order, ordered=True)
+
+        # bar chart
+        fig_total = px.bar(
+            monthly_total_spend,
+            x="Month_Str",
+            y="Spend (Cr ₹)",
+            text="Spend (Cr ₹)",
+            title="Monthly Total Spend",
+            labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"}
         )
+        fig_total.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig_total.update_layout(xaxis_tickangle=-45)
 
-        if not top_entities:
-            st.info("No entity spend data available to show chart.")
-        else:
-            # filter to top entities
-            chart_df = monthly_entity_spend[monthly_entity_spend["Entity"].isin(top_entities)].copy()
+        st.plotly_chart(fig_total, use_container_width=True)
 
-            # convert spend to Cr for display
-            chart_df["Spend (Cr ₹)"] = chart_df["Net Amount"] / 1e7
-
-            # ensure months are sorted chronologically
-            chart_df = chart_df.sort_values("PO_Month")
-
-            # optional: set Month_Str as categorical with chronological order so plotly keeps order
-            month_order = chart_df["Month_Str"].drop_duplicates().tolist()
-            chart_df["Month_Str"] = pd.Categorical(chart_df["Month_Str"], categories=month_order, ordered=True)
-
-            # grouped bar chart: one bar per entity for each month
-            fig_monthly = px.bar(
-                chart_df,
-                x="Month_Str",
-                y="Spend (Cr ₹)",
-                color="Entity",
-                barmode="group",
-                title=f"Monthly Spend — Top {len(top_entities)} Entities",
-                labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"}
-            )
-            fig_monthly.update_layout(xaxis_tickangle=-45, legend_title_text="Entity")
-
-            st.plotly_chart(fig_monthly, use_container_width=True)
 
 
 # ------------------------------------
