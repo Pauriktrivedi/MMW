@@ -359,10 +359,10 @@ gauge_fig = go.Figure(
 st.plotly_chart(gauge_fig, use_container_width=True)
 st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
-# ---------- Monthly Total Spend (bars) + Cumulative % line (secondary axis) ----------
+# ---------- Monthly Total Spend (bars) + Cumulative Spend line ----------
 from plotly.subplots import make_subplots
 
-st.subheader("📊 Monthly Total Spend (with Cumulative % Line)")
+st.subheader("📊 Monthly Total Spend (with Cumulative Value Line)")
 
 # pick date column
 date_col = "Po create Date" if "Po create Date" in filtered_df.columns else (
@@ -389,13 +389,8 @@ else:
         monthly_total_spend["Spend (Cr ₹)"] = monthly_total_spend["Net Amount"] / 1e7
         monthly_total_spend = monthly_total_spend.sort_values("PO_Month").reset_index(drop=True)
 
-        # cumulative in Cr and as percentage of final total
-        monthly_total_spend["Cumulative_Cr"] = monthly_total_spend["Spend (Cr ₹)"].cumsum()
-        total_cr = monthly_total_spend["Spend (Cr ₹)"].sum()
-        if total_cr == 0 or pd.isna(total_cr):
-            monthly_total_spend["Cumulative %"] = 0.0
-        else:
-            monthly_total_spend["Cumulative %"] = (monthly_total_spend["Cumulative_Cr"] / total_cr) * 100
+        # cumulative spend in Cr
+        monthly_total_spend["Cumulative Spend (Cr ₹)"] = monthly_total_spend["Spend (Cr ₹)"].cumsum()
 
         # keep month order
         month_order = monthly_total_spend["Month_Str"].tolist()
@@ -416,32 +411,33 @@ else:
             secondary_y=False,
         )
 
-        # line: cumulative percentage (0-100)
+        # line: cumulative spend (Cr)
         fig.add_trace(
             go.Scatter(
                 x=monthly_total_spend["Month_Str"],
-                y=monthly_total_spend["Cumulative %"],
+                y=monthly_total_spend["Cumulative Spend (Cr ₹)"],
                 mode="lines+markers",
-                name="Cumulative % of Total",
-                line=dict(width=3),
+                name="Cumulative Spend (Cr ₹)",
+                line=dict(width=3, color="darkblue"),
                 marker=dict(size=8),
-                hovertemplate="%{y:.1f}%<br>%{x}<extra></extra>"
+                hovertemplate="₹ %{y:.2f} Cr<br>%{x}<extra></extra>"
             ),
             secondary_y=True,
         )
 
         # layout and axis titles
         fig.update_layout(
-            title="Monthly Total Spend with Cumulative %",
+            title="Monthly Total Spend with Cumulative Value",
             xaxis=dict(tickangle=-45),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             margin=dict(t=70, b=120),
         )
 
-        fig.update_yaxes(title_text="Spend (Cr ₹)", secondary_y=False)
-        fig.update_yaxes(title_text="Cumulative % of Total", secondary_y=True, range=[0, 100])
+        fig.update_yaxes(title_text="Monthly Spend (Cr ₹)", secondary_y=False)
+        fig.update_yaxes(title_text="Cumulative Spend (Cr ₹)", secondary_y=True)
 
         st.plotly_chart(fig, use_container_width=True)
+
 
 
 # ------------------------------------
