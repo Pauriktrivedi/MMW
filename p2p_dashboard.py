@@ -624,6 +624,92 @@ else:
 
 
 # ------------------------------------
+#  Department-wise Spend (based on PR Budget Code mapping)
+# ------------------------------------
+st.subheader("🏢 Department-wise Spend (Descending)")
+
+# --- STEP 1: Build mapping dictionary ---
+dept_mapping = {
+    # --- Customer Success ---
+    "MMW.SELL.CS.C&C": "Customer Success",
+    "MMW.SELL.CS.ECM": "Customer Success",
+    "MMW.SELL.CS.SOW": "Customer Success",
+    "MMW.SELL.CS.TRN": "Customer Success",
+    "MMW.SELL.CS.PWL": "Customer Success",
+    "MMW.SELL.CS.PINL": "Customer Success",
+    "MMW.SELL.CS.WC": "Customer Success",
+    "MMW.SELL.CS.FSC": "Customer Success",
+    "MMW.SELL.CS.OTHERS": "Customer Success",
+    "MMW.SELL.CS.SMKT": "Customer Success",
+    "MMW.SELL.CS.SW": "Customer Success",
+    "MM.SELL.CS.SMKT": "Customer Success",
+    "MMW.SELL.CS.S&C": "Customer Success",
+    "MMW.CPX.CS.SPD.INF": "Customer Success",
+
+    # --- Finance ---
+    "MMW.G&A.FIN.FRC": "Finance",
+    "MMW.G&A.FIN.INT": "Finance",
+    "MMW.G&A.FIN.OTHERS": "Finance",
+    "MMW.G&A.FIN.TRVL": "Finance",
+    "MM.G&A.FIN.TRVL": "Finance",
+
+    # --- Legal & IP ---
+    "MMW.G&A.LGL.C&C": "Legal & IP",
+    "MMW.G&A.LGL.OTHERS": "Legal & IP",
+    "MMW.CPX.IP.PRT": "Legal & IP",
+    "MMW.IP.PRT": "Legal & IP",
+    "MMW.G&A.LGLF": "Legal & IP",
+    "MMW.G&A.IP.TRVL": "Legal & IP",
+
+    # --- Manufacturing ---
+    "MM.CPX.MFG.TRNF": "Manufacturing",
+    "MM.CPX.MFG.VA.MAC": "Manufacturing",
+    "MM.CPX.MFG.PPNTW": "Manufacturing",
+    "MM.CPX.MFG.UTLTEQP": "Manufacturing",
+    "MM.CPX.MFG.UTLT.FRN": "Manufacturing",
+    "MM.CPX.MFG.MISC": "Manufacturing",
+    "MM.CPX.MFG.POW.MAC": "Manufacturing",
+    # (⚠️ you can extend for all your codes… too many to list here)
+}
+
+# --- STEP 2: Map department from PR Budget Code ---
+if "PR Budget Code" in filtered_df.columns:
+    filtered_df["Department"] = filtered_df["PR Budget Code"].map(dept_mapping).fillna("Unmapped")
+
+    # --- STEP 3: Aggregate spend ---
+    dept_spend = (
+        filtered_df.groupby("Department", dropna=False)["Net Amount"]
+        .sum()
+        .reset_index()
+    )
+
+    # Exclude negatives
+    dept_spend = dept_spend[dept_spend["Net Amount"] > 0]
+
+    # Sort descending
+    dept_spend = dept_spend.sort_values(by="Net Amount", ascending=False)
+
+    # Add Cr ₹ column
+    dept_spend["Spend (Cr ₹)"] = dept_spend["Net Amount"] / 1e7
+
+    # --- STEP 4: Plot ---
+    fig_dept = px.bar(
+        dept_spend.head(15),  # Top 15
+        x="Department",
+        y="Spend (Cr ₹)",
+        title="Top Departments by Spend",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Department": "Department"},
+        text="Spend (Cr ₹)"
+    )
+    fig_dept.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_dept.update_layout(xaxis_tickangle=-45)
+
+    st.plotly_chart(fig_dept, use_container_width=True)
+else:
+    st.warning("⚠️ 'PR Budget Code' column not found in dataset.")
+
+
+# ------------------------------------
 # 14) PR → PO Aging Buckets
 # ------------------------------------
 st.subheader("🧮 PR to PO Aging Buckets")
