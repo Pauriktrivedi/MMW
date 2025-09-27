@@ -359,8 +359,8 @@ gauge_fig = go.Figure(
 st.plotly_chart(gauge_fig, use_container_width=True)
 st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
-# ---------- Monthly Total Spend (single bar per month) ----------
-st.subheader("📊 Monthly Total Spend (All Entities Combined)")
+# ---------- Monthly Total Spend (bars) + Cumulative Line ----------
+st.subheader("📊 Monthly Total Spend (All Entities Combined) — with Cumulative Line")
 
 # choose which date column to use
 date_col = "Po create Date" if "Po create Date" in filtered_df.columns else (
@@ -388,27 +388,55 @@ else:
             temp.groupby(["PO_Month", "Month_Str"], as_index=False)["Net Amount"]
             .sum()
         )
+
+        # convert to Cr for display
         monthly_total_spend["Spend (Cr ₹)"] = monthly_total_spend["Net Amount"] / 1e7
 
         # ensure months sorted chronologically
-        monthly_total_spend = monthly_total_spend.sort_values("PO_Month")
+        monthly_total_spend = monthly_total_spend.sort_values("PO_Month").reset_index(drop=True)
+
+        # compute cumulative spend (in Cr)
+        monthly_total_spend["Cumulative Spend (Cr ₹)"] = monthly_total_spend["Spend (Cr ₹)"].cumsum()
+
+        # keep Month_Str ordered for plotting
         month_order = monthly_total_spend["Month_Str"].tolist()
         monthly_total_spend["Month_Str"] = pd.Categorical(monthly_total_spend["Month_Str"], categories=month_order, ordered=True)
 
-        # bar chart
+        # build bar chart with px
         fig_total = px.bar(
             monthly_total_spend,
             x="Month_Str",
             y="Spend (Cr ₹)",
             text="Spend (Cr ₹)",
-            title="Monthly Total Spend",
+            title="Monthly Total Spend (with Cumulative)",
             labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"}
         )
+
+        # make bars a bit transparent so line behind/over them is visible
+        fig_total.update_traces(marker=dict(opacity=0.85), selector=dict(type="bar"))
         fig_total.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-        fig_total.update_layout(xaxis_tickangle=-45)
+
+        # add cumulative line as a secondary trace (same y-axis)
+        fig_total.add_trace(
+            go.Scatter(
+                x=monthly_total_spend["Month_Str"],
+                y=monthly_total_spend["Cumulative Spend (Cr ₹)"],
+                mode="lines+markers",
+                name="Cumulative Spend (Cr ₹)",
+                line=dict(width=3, dash="solid"),
+                hovertemplate="%{y:.2f} Cr<br>%{x}<extra></extra>",
+                yaxis="y1",
+            )
+        )
+
+        # layout tweaks
+        fig_total.update_layout(
+            xaxis_tickangle=-45,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=60, b=120),
+        )
 
         st.plotly_chart(fig_total, use_container_width=True)
-
 
 
 # ------------------------------------
