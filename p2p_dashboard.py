@@ -511,6 +511,304 @@ monthly_summary["Month"] = monthly_summary["Month"].astype(str)
 
 st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
+# department_spend.py
+# Paste this into your Streamlit app (after you have `filtered_df` ready)
+# to parse the Department <-> Budget Code mapping, map PR Budget Code to
+# Department/Subcategory, aggregate Net Amount (positive only), and display charts + download.
+
+import io
+import re
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+# -----------------------------
+# RAW_MAPPING: paste your mapping block here (kept truncated for brevity).
+# It must be lines with: Main Department <tab or many spaces> Sub Category <tab> Budget Code
+# -----------------------------
+RAW_MAPPING = r"""
+Main Department	Sub Category	Budget Code
+AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHADM
+AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHMPW
+AMD - Regional Sales Office	Electricity	MMW.SELL.HR.OTHADM
+AMD - Regional Sales Office	Pantry and Canteen	MMW.SELL.HR.STFWLF
+AMD - Regional Sales Office	Water	MMW.SELL.HR.OTHADM
+Apparel	- Apparel Marketing campaign shoots	MMW.SELL.A&M.APPR.CAMPSHT
+Apparel	- E-comm Product Shoot	MMW.SEL.A&M.APPR.PRDSHT
+Apparel	- Inventory Circulation Cost	MMW.OPX.APPR.COGS
+Apparel	- Inventory Circulation Cost	MMW.SELL.A&M.APPR.INV
+Apparel	- Lifestyle out sourcing	MMW.SELL.A&M.APPR.LIFOTSR
+Apparel	- Merchandise out sourcing	MMW.SELL.A&M.APPR.OTSR
+Apparel	- Sample development	MMW.SELL.A&M.APPR.SMPLDEV
+Apparel	- Travel & Other	MMW.SELL.A&M.OTHERS
+CONCOR	Admin Expenses	ME.G&A.COUR
+CONCOR	Admin Expenses	MMW.G&A.COUR
+CONCOR	Admin Expenses	MMW.G&A.HR.OTHADM
+CONCOR	Admin Expenses	MMW/ME.G&A.HR.OTHADM
+CONCOR	Cab Expenses	ME.G&A.HR.CAB
+CONCOR	Cab Expenses	MM.G&A.HR.CAB
+CONCOR	Cab Expenses	MMW.G&A.HR.CAB
+CONCOR	Cab Expenses	MMW/ME.G&A.HR.CAB
+CONCOR	Capital Purchase	MMW.CPX.HR
+CONCOR	Capital Purchase	MMW.CPX.HR.FURN
+CONCOR	Consultant for Compliance (Expenses)	ME.G&A.HR.CNST
+CONCOR	Consultant for Compliance (Expenses)	MMW/ME.G&A.HR.COMP
+CONCOR	Electricity Expenses	MMW/ME.OPS.HR.ELEC
+CONCOR	Housekeeping Material Expenses	MMW/ME.G&A.HR.HK
+CONCOR	Pantry Material Expenses	MMW/ME.G&A.HR.PM
+CONCOR	Total Monthly Associates Expenses	MMW/ME.OPS.HR.C&C
+CONCOR	Total Monthwise Canteen Food Expenses	ME.G&A.HR.STFWLF
+CONCOR	Total Monthwise Canteen Food Expenses	MMW.G&A.HR.STFWLF
+CONCOR	Total Monthwise Canteen Food Expenses	MMW/ME.G&A.HR.STFWLF
+CONCOR	Total Monthwise HK Expenses	MMW.G&A.HR.HKM
+CONCOR	Total Monthwise HK Expenses	MMW/ME.G&A.HR.OTHMPW
+CONCOR	Total Monthwise Medical Expenses	MMW/ME.G&A.HR.OTHADM
+CONCOR	Total Monthwise Security Expenses	ME.G&A.HR.SECM
+CONCOR	Total Monthwise Security Expenses	MMW.G&A.HR.SECM
+CONCOR	Total Monthwise Security Expenses	MMW/ME.G&A.HR.OTHMPW
+Customer Success	- COCO Manpower Expense	MMW.SELL.CS.C&C
+Customer Success	- COCO Manpower Expense	MMW.SELL.CS.ECM
+Customer Success	- COCO Manpower Expense	MMW.SELL.CS.SOW
+Customer Success	- COCO Manpower Expense	MMW.SELL.CS.TRN
+Customer Success	- Parts / Warranty / Logistics cost	MMW.SELL.CS.FSC
+Customer Success	- Parts / Warranty / Logistics cost	MMW.SELL.CS.PINL
+Customer Success	- Parts / Warranty / Logistics cost	MMW.SELL.CS.PWL
+Customer Success	- Parts / Warranty / Logistics cost	MMW.SELL.CS.WC
+Customer Success	-Service Marketing / Training / Software Cost	MM.SELL.CS.SMKT
+Customer Success	-Service Marketing / Training / Software Cost	MMW.CPX.CS.SPD.INF
+Customer Success	-Service Marketing / Training / Software Cost	MMW.SELL.CS.OTHERS
+Customer Success	-Service Marketing / Training / Software Cost	MMW.SELL.CS.S&C
+Customer Success	-Service Marketing / Training / Software Cost	MMW.SELL.CS.SMKT
+Customer Success	-Service Marketing / Training / Software Cost	MMW.SELL.CS.SW
+Customer Success	-Service Marketing / Training / Software Cost	MMW.SELL.CS.TRN
+Customer Success	-Travel & Other	MMW.SELL.CS.OTHERS
+Customer Success	-Travel & Other	MMW.SELL.CS.TRVL
+Design	- COCO Infra	MMW.CPX.DSN.COCO
+Design	- COCO Infra	MMW.CPX.DSN.INF
+Design	- Digital & other assets	MMW.CPX.DSN.DIGA
+Design	- Digital & other assets	MMW.CPX.DSN.DIGA.3D
+Design	- Projects, research & Testing	MMW.CPX.DSN.PNTBH
+Design	- Projects, research & Testing	MMW.CPX.DSN.PRT
+Design	- Projects, research & Testing	MMW.DSN.ACCS
+Design	- Projects, research & Testing	MMW.DSN.PRJ
+Design	- Projects, research & Testing	MMW.SELL.DSN.CNST
+Design	- Softwares & Tools	MMW.G&A.DSN.SFT
+Design	-Travel & Other	MMW.DSN.OTHADM
+Design	-Travel & Other	MMW.G&A.DSN.OTHERS
+Design	-Travel & Other	MMW.G&A.DSN.TRVL
+Design	Design	MMW.G&A.DSN.CNST
+Finance	-Fund Raising Cost	MMW.G&A.FIN.FRC
+Finance	-Interest Payment	MMW.G&A.FIN.INT
+Finance	-Statutory Expense	MMW.G&A.FIN.OTHERS
+Finance	-Travel & Other	MM.G&A.FIN.TRVL
+Finance	-Travel & Other	MMW.G&A.FIN.OTHERS
+Finance	-Travel & Other	MMW.G&A.FIN.TRVL
+Founder's projects and expenses	Founder's projects and expenses	ME.SPM.LWM
+Founder's projects and expenses	Founder's projects and expenses	MM.R&D.TV
+Founder's projects and expenses	Founder's projects and expenses	MMW.FND.OTHERS
+Founder's projects and expenses	Founder's projects and expenses	MMW.FNDR.HPC
+Founder's projects and expenses	Founder's projects and expenses	MMW.FNDR.TRVL
+Founder's projects and expenses	Founder's projects and expenses	MMW.SOW.TV
+HR & Admin	HR Software Subscription	MMW.G&A.HR.TRN
+HR & Admin	HR Software Subscription	MMW/ME/MM.G&A.HR.OTHERS
+HR & Admin	Insurance	MMW.G&A.HR.INS
+HR & Admin	Insurance	MMW/ME/MM.G&A.HR.INS
+HR & Admin	Salaries (Existing + Appraisal + New Joining)	ME.OPS.HR.C&C
+HR & Admin	Salaries (Existing + Appraisal + New Joining)	MMW.G&A.HR.CNST
+HR & Admin	Salaries (Existing + Appraisal + New Joining)	MMW.MFG.HR.CNST
+HR & Admin	Salaries (Existing + Appraisal + New Joining)	MMW.OPS.HR.C&C
+HR & Admin	Salaries (Existing + Appraisal + New Joining)	MMW/ME/MM.G&A.HR.SLR
+HR & Admin	TA - Subscriptions (Naukri already paid for FY24-25)	MMW/ME/MM.G&A.HR.TA
+HR & Admin	Talent Acquisition	ME.G&A.HR.TA
+HR & Admin	Talent Acquisition	MM.G&A.HR.TA
+HR & Admin	Talent Acquisition	MMW.G&A.HR.TA
+HR & Admin	Talent Acquisition	MMW/ME/MM.G&A.HR.TA
+HR & Admin	Travel (New Hires + Existing )	ME.G&A.HR.TRVL
+HR & Admin	Travel (New Hires + Existing )	MM.G&A.HR.TRVL
+HR & Admin	Travel (New Hires + Existing )	MMW.G&A.HR.TRVL
+HR & Admin	Travel (New Hires + Existing )	MMW/ME/MM.G&A.HR.OTHERS
+Infra	-COCO	MMW.CPX.INF.COCO
+Infra	-COCO	MMW.CPX.INF.COCO.PH1
+Infra	-COCO	MMW.CPX.INF.COCO.PH2
+Infra	-Changodar	MM.CPX.INF.PLNT
+Infra	-Changodar	MM.CPX.INF.SPD
+Infra	-Concor	MMW.CPX.INF.CNCR
+Infra	-Concor	MMW.CPX.INF.PM
+Infra	-Pune	MMW.CPX.INF.PN
+Infra	-Sales Office	MMW.CPX.INF.SO
+Infra	-Pune	MMW.CPX.INF.PN
+Legal & IP	-Legal Fee	MMW.G&A.LGL.OTHERS
+Legal & IP	-Legal Fee	MMW.G&A.LGLF
+Legal & IP	-PLI Project	MMW.G&A.LGL.OTHERS
+Legal & IP	-Patents / Registration / Trademark	MMW.CPX.IP.PRT
+Legal & IP	-Patents / Registration / Trademark	MMW.IP.PRT
+Legal & IP	-Regular Consultants	MMW.G&A.LGL.C&C
+Legal & IP	-Travel & Other	MMW.G&A.IP.TRVL
+Legal & IP	-Travel & Other	MMW.G&A.LGL.OTHERS
+Manufacturing	Manufacturing	Budget Pending
+Manufacturing	Manufacturing	ME.CPX.M1MFG
+Manufacturing	Manufacturing	ME.OPS.INF.MNT
+Manufacturing	Manufacturing	MM.CPX.MFG.MNTTLS
+Manufacturing	Manufacturing	MM.CPX.MFG.PPNTW
+Manufacturing	Manufacturing	MM.CPX.MFG.STR
+Manufacturing	Manufacturing	MM.CPX.MFG.TRNF
+Manufacturing	Manufacturing	MM.CPX.MFG.UTLT.FRN
+Manufacturing	Manufacturing	MM.CPX.MFG.UTLTEQP
+Manufacturing	Manufacturing	MM.CPX.MFG.VA.MAC
+Manufacturing	Manufacturing	MM.MFG.EHS.M&S
+Manufacturing	Manufacturing	MM.OPS.MFG.COUR
+Manufacturing	Manufacturing	MM.OPS.MFG.R&M
+Manufacturing	Manufacturing	MM.OPS.MFG.S&C
+Manufacturing	Manufacturing	MM.OPS.MFG.TRVL
+Manufacturing	Manufacturing	MMW.G&A.INF.MNT
+Manufacturing	Manufacturing	MMW.MFG.PRT.RM
+Manufacturing	Manufacturing	MMW.MFG.T&C
+Manufacturing	Manufacturing	MMW.MFG.TRVL
+Marketing	-Agency Retainers	MMW.SELL.A&M.C&C
+Marketing	-Brand Ambassador Contract Renewal	MMW.SELL.A&M.BR
+Marketing	-Brand Ambassador Contract Renewal	MMW.SELL.A&M.BRAND
+Marketing	-Dealer Campaigns- Market Activation	MMW.SELL.A&M.DLR
+... (truncated for brevity)
+"""
+
+# -----------------------------
+# Parser: convert RAW_MAPPING into DataFrame
+# -----------------------------
+def parse_mapping(raw_text: str) -> pd.DataFrame:
+    """
+    Robust parser for the mapping text block.
+
+    - Splits each non-empty line on tabs or on two-or-more whitespace chars.
+    - Handles lines with 3 columns (Main Dept, Sub Category, Budget Code),
+      2 columns (Main Dept, Budget Code) and 1-column fallbacks.
+    - Returns a DataFrame with columns: ['Main Department','Sub Category','Budget Code'].
+    """
+    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip()]
+    rows = []
+
+    # Skip header line if present
+    header = lines[0]
+    start_idx = 1 if ('Main Department' in header and 'Budget Code' in header) else 0
+
+    for ln in lines[start_idx:]:
+        # split by tab(s) OR by two-or-more whitespace characters
+        parts = re.split(r"\t+|\s{2,}", ln)
+        parts = [p.strip() for p in parts if p.strip()]
+
+        if len(parts) >= 3:
+            main, sub, code = parts[0], parts[1], parts[2]
+        elif len(parts) == 2:
+            main, sub, code = parts[0], "", parts[1]
+        else:
+            main, sub, code = "", "", parts[0]
+
+        rows.append((main, sub, code))
+
+    map_df = pd.DataFrame(rows, columns=['Main Department', 'Sub Category', 'Budget Code'])
+    map_df['Budget Code'] = map_df['Budget Code'].astype(str).str.strip()
+    # normalize empty main dept to 'Unassigned'
+    map_df['Main Department'] = map_df['Main Department'].fillna('').replace('', 'Unassigned')
+    map_df['Sub Category'] = map_df['Sub Category'].fillna('')
+    return map_df
+
+# -----------------------------
+# Build map_df and show a sample
+# -----------------------------
+map_df = parse_mapping(RAW_MAPPING)
+st.write(f"Loaded {len(map_df)} budget-code → department mappings. Sample:")
+st.dataframe(map_df.head(10))
+
+# -----------------------------
+# Main function to compute and plot department spend
+# -----------------------------
+def compute_and_plot_department_spend(dframe: pd.DataFrame, top_n: int = 15):
+    df = dframe.copy()
+    if 'PR Budget Code' not in df.columns:
+        st.error("Column 'PR Budget Code' not found in data.")
+        return
+    if 'Net Amount' not in df.columns:
+        st.error("Column 'Net Amount' not found in data.")
+        return
+
+    # Normalize codes and join
+    df['PR Budget Code_norm'] = df['PR Budget Code'].astype(str).str.strip()
+    map_df_local = map_df.copy()
+    map_df_local['Budget Code'] = map_df_local['Budget Code'].astype(str).str.strip()
+
+    merged = df.merge(map_df_local, left_on='PR Budget Code_norm', right_on='Budget Code', how='left')
+    # Unmapped codes will have NaN Main Department
+    merged['Main Department'] = merged['Main Department'].fillna('Unmapped')
+
+    # Exclude negative or zero Net Amounts
+    merged = merged[merged['Net Amount'].notna()]
+    merged = merged[merged['Net Amount'] > 0]
+
+    # Aggregate by Main Department and Sub Category
+    dept_spend = (
+        merged.groupby(['Main Department', 'Sub Category'], dropna=False)['Net Amount']
+        .sum()
+        .reset_index()
+    )
+
+    # Convert to Cr and sort
+    dept_spend['Spend (Cr ₹)'] = dept_spend['Net Amount'] / 1e7
+    dept_spend = dept_spend.sort_values('Net Amount', ascending=False).reset_index(drop=True)
+
+    # Aggregate at main-department level
+    main_dept_agg = (
+        dept_spend.groupby('Main Department', as_index=False)['Net Amount'].sum()
+        .sort_values('Net Amount', ascending=False)
+    )
+    main_dept_agg['Spend (Cr ₹)'] = main_dept_agg['Net Amount'] / 1e7
+
+    # Display top N main departments
+    st.markdown(f"### Top {top_n} Departments by Spend (Main Department)")
+    st.dataframe(main_dept_agg.head(top_n), use_container_width=True)
+
+    fig_main = px.bar(
+        main_dept_agg.head(top_n),
+        x='Main Department',
+        y='Spend (Cr ₹)',
+        title=f'Top {top_n} Departments by Spend',
+        text='Spend (Cr ₹)'
+    )
+    fig_main.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    fig_main.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_main, use_container_width=True)
+
+    # Sub-category breakdown for top departments
+    top_depts = main_dept_agg.head(top_n)['Main Department'].tolist()
+    subcat_breakdown = dept_spend[dept_spend['Main Department'].isin(top_depts)].copy()
+
+    st.markdown(f"### Sub-Category breakdown (for top {top_n} departments)")
+    st.dataframe(subcat_breakdown, use_container_width=True)
+
+    fig_sub = px.bar(
+        subcat_breakdown,
+        x='Sub Category',
+        y='Spend (Cr ₹)',
+        color='Main Department',
+        title='Sub-Category Spend for Top Departments',
+        text='Spend (Cr ₹)'
+    )
+    fig_sub.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    fig_sub.update_layout(xaxis_tickangle=-45, barmode='group')
+    st.plotly_chart(fig_sub, use_container_width=True)
+
+    # CSV download
+    csv_buf = io.StringIO()
+    main_dept_agg.to_csv(csv_buf, index=False)
+    st.download_button('⬇️ Download Department Spend (CSV)', csv_buf.getvalue(), file_name='department_spend.csv', mime='text/csv')
+
+# Auto-run if filtered_df is available
+if 'filtered_df' in globals():
+    compute_and_plot_department_spend(filtered_df, top_n=15)
+elif 'filtered_df' in st.session_state:
+    compute_and_plot_department_spend(st.session_state['filtered_df'], top_n=15)
+else:
+    st.info('Once you paste this file into your app, call compute_and_plot_department_spend(filtered_df) after filters applied.')
+
+
 # ------------------------------------
 # 13) Procurement Category Spend (Top 15, Descending, Excluding <0)
 # ------------------------------------
