@@ -548,6 +548,43 @@ if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df
 else:
     st.info("ℹ️ No 'Procurement Category' or 'Net Amount' column found.")
 
+# ------------------------------------
+#  PR Budget Code Spend (Top 15, Descending, Excluding <0)
+# ------------------------------------
+st.subheader("🏷️ Top 15 PR Budget Codes by Spend (Descending)")
+
+if "PR Budget Code" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    budget_spend = (
+        filtered_df.groupby("PR Budget Code")["Net Amount"]
+        .sum()
+        .reset_index()
+    )
+
+    # Exclude negative/zero spend
+    budget_spend = budget_spend[budget_spend["Net Amount"] > 0]
+
+    # Sort descending and keep Top 15
+    budget_spend = budget_spend.sort_values(by="Net Amount", ascending=False).head(15)
+
+    # Add Spend in Cr ₹
+    budget_spend["Spend (Cr ₹)"] = budget_spend["Net Amount"] / 1e7
+
+    # Plot
+    fig_budget = px.bar(
+        budget_spend,
+        x="PR Budget Code",
+        y="Spend (Cr ₹)",
+        title="Top 15 PR Budget Codes by Spend",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PR Budget Code": "PR Budget Code"},
+        text="Spend (Cr ₹)"
+    )
+    fig_budget.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_budget.update_layout(xaxis_tickangle=-45)
+
+    st.plotly_chart(fig_budget, use_container_width=True)
+else:
+    st.info("ℹ️ No 'PR Budget Code' or 'Net Amount' column found.")
+
 
 # ------------------------------------
 # 14) PR → PO Aging Buckets
