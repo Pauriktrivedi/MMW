@@ -622,191 +622,88 @@ if "PR Budget description" in filtered_df.columns and "Net Amount" in filtered_d
     st.plotly_chart(fig_budget_desc, use_container_width=True)
 else:
     st.info("ℹ️ No 'PR Budget description' or 'Net Amount' column found.")
+# ===== interactive stacked chart + click-to-show-details =====
+# Requires: pip install streamlit-plotly-events
+from streamlit_plotly_events import plotly_events
 
-
-# ------------------------------
-# Department Spend: Mapping + Charts (paste this block into your app)
-# ------------------------------
-import io
-import re
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-import streamlit as st
-
-RAW_MAPPING = r"""
-Main Department	Sub Category	Budget Code
-AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHADM
-AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHMPW
-AMD - Regional Sales Office	Electricity	MMW.SELL.HR.OTHADM
-AMD - Regional Sales Office	Pantry and Canteen	MMW.SELL.HR.STFWLF
-AMD - Regional Sales Office	Water	MMW.SELL.HR.OTHADM
-Apparel	- Apparel Marketing campaign shoots	MMW.SELL.A&M.APPR.CAMPSHT
-Apparel	- E-comm Product Shoot	MMW.SEL.A&M.APPR.PRDSHT
-Apparel	- Inventory Circulation Cost	MMW.OPX.APPR.COGS
-Apparel	- Inventory Circulation Cost	MMW.SELL.A&M.APPR.INV
-Apparel	- Lifestyle out sourcing	MMW.SELL.A&M.APPR.LIFOTSR
-Apparel	- Merchandise out sourcing	MMW.SELL.A&M.APPR.OTSR
-Apparel	- Sample development	MMW.SELL.A&M.APPR.SMPLDEV
-Apparel	- Travel & Other	MMW.SELL.A&M.OTHERS
-# ... (extend or replace this block with your full mapping)
-"""
-
-def parse_mapping(raw_text: str) -> pd.DataFrame:
-    """
-    Parse a mapping block into a DataFrame with columns:
-      ['Main Department', 'Sub Category', 'Budget Code'].
-
-    Splits on tabs or two-or-more spaces. Handles lines with 3, 2, or 1 columns.
-    """
-    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip() and not ln.strip().startswith("#")]
-    rows = []
-
-    # Detect header; skip if present
-    start_idx = 1 if ('Main Department' in lines[0] and 'Budget Code' in lines[0]) else 0
-
-    for ln in lines[start_idx:]:
-        # split by tab(s) OR by two-or-more whitespace characters
-        parts = re.split(r"\t+|\s{2,}", ln)
-        parts = [p.strip() for p in parts if p.strip()]
-
-        if len(parts) >= 3:
-            main, sub, code = parts[0], parts[1], parts[2]
-        elif len(parts) == 2:
-            main, sub, code = parts[0], "", parts[1]
-        else:
-            main, sub, code = "", "", parts[0]
-
-        rows.append((main or "Unassigned", sub or "", code))
-
-    map_df = pd.DataFrame(rows, columns=['Main Department', 'Sub Category', 'Budget Code'])
-    map_df['Budget Code'] = map_df['Budget Code'].astype(str).str.strip()
-    map_df['Main Department'] = map_df['Main Department'].astype(str).str.strip().replace("", "Unassigned")
-    map_df['Sub Category'] = map_df['Sub Category'].astype(str).str.strip().replace("", "Unspecified")
-    return map_df
-
-# Build mapping DF once
-_mapping_df = parse_mapping(RAW_MAPPING)
-st.write(f"Loaded mapping: {len(_mapping_df)} budget codes (sample shown).")
-st.dataframe(_mapping_df.head(8))
-
-def compute_and_plot_department_spend(dframe: pd.DataFrame, top_n:int=15):
-    """
-    dframe: DataFrame (filtered_df recommended)
-    top_n: top N departments to show
-    """
-    df = dframe.copy()
-
-    # Basic validations
-    if 'PR Budget Code' not in df.columns and 'PR Budget code' not in df.columns:
-        st.error("Column 'PR Budget Code' (case-sensitive) not found in data. Please check column name.")
-        return
-    if 'Net Amount' not in df.columns:
-        st.error("Column 'Net Amount' not found in data.")
-        return
-
-    # accept either capitalization
-    if 'PR Budget Code' in df.columns:
-        code_col = 'PR Budget Code'
-    else:
-        code_col = 'PR Budget code'
-
-    # Normalize and merge
-    df['PR_Budget_Code_norm'] = df[code_col].astype(str).str.strip()
-    map_df_local = _mapping_df[['Main Department','Sub Category','Budget Code']].copy()
-    merged = df.merge(map_df_local, left_on='PR_Budget_Code_norm', right_on='Budget Code', how='left')
-
-    # Fill unmapped
-    merged['Main Department'] = merged['Main Department'].fillna('Unmapped')
-    merged['Sub Category'] = merged['Sub Category'].fillna('Unspecified')
-
-    # Keep only positive spend
-    merged = merged[merged['Net Amount'].notna()]
-    merged = merged[merged['Net Amount'] > 0]
-
-    if merged.empty:
-        st.warning("No positive Net Amount rows found after filtering/mapping.")
-        return
-
-    # Aggregate subcategory spend (INR)
-    subcat = merged.groupby(['Main Department','Sub Category'], as_index=False)['Net Amount'].sum()
-    subcat = subcat.sort_values(['Main Department','Net Amount'], ascending=[True, False])
-
-    # Department totals
-    dept_totals = subcat.groupby('Main Department', as_index=False)['Net Amount'].sum().sort_values('Net Amount', ascending=False)
-    dept_totals['Spend (Cr ₹)'] = dept_totals['Net Amount'] / 1e7
-
-    # Show top_n departments
-    top_depts = dept_totals.head(top_n)['Main Department'].tolist()
-    st.markdown(f"### Top {top_n} Departments by Spend (positive Net Amount only)")
-    st.dataframe(dept_totals.head(top_n)[['Main Department','Spend (Cr ₹)']], use_container_width=True)
-
-    # Prepare pivot for stacked bars: rows = main dept, cols = sub category, values = Net Amount
-    pivot = subcat[subcat['Main Department'].isin(top_depts)].pivot_table(
-        index='Main Department', columns='Sub Category', values='Net Amount', aggfunc='sum'
-    ).fillna(0)
-    # Ensure same order as dept_totals
-    pivot = pivot.reindex(top_depts)
-
-    # Build figure: stacked bars (sub-categories) + overlay dept total line (not percent, but actual cumulative value)
-    fig = go.Figure()
-    # Add stacked bars for each subcategory
-    for col in pivot.columns:
-        fig.add_trace(
-            go.Bar(
-                x=pivot.index,
-                y=pivot[col] / 1e7,  # convert to Cr
-                name=str(col),
-                hovertemplate='%{x}<br>%{y:.2f} Cr<extra></extra>',
-            )
-        )
-
-    # Overlay department totals as a line (value in Cr) to avoid scale mismatch and make ratio-fitting clean
-    totals_cr = dept_totals.set_index('Main Department').reindex(top_depts)['Net Amount'].fillna(0) / 1e7
+# Build the stacked bar + total line (same as before)
+fig = go.Figure()
+for col in pivot.columns:
     fig.add_trace(
-        go.Scatter(
-            x=top_depts,
-            y=totals_cr,
-            name='Department Total (Cr ₹)',
-            mode='lines+markers',
-            marker=dict(symbol='diamond', size=10),
-            line=dict(color='black', width=2),
-            yaxis='y'  # using same y (Cr) for simplicity
+        go.Bar(
+            x=pivot.index,
+            y=pivot[col] / 1e7,  # convert to Cr
+            name=str(col),
+            customdata=[pivot.index[i] for i in range(len(pivot.index))],  # dept name for click
+            hovertemplate='%{x}<br>%{y:.2f} Cr<extra></extra>',
         )
     )
 
-    fig.update_layout(
-        barmode='stack',
-        title=f'Top {top_n} Departments — Sub-Category stacked spend (Cr ₹) with Department Total line',
-        xaxis_title='Main Department',
-        yaxis_title='Spend (Cr ₹)',
-        legend_title='Sub Category / Total',
-        xaxis_tickangle=-45,
-        height=650,
+# Overlay department totals as a line (value in Cr)
+totals_cr = dept_totals.set_index('Main Department').reindex(top_depts)['Net Amount'].fillna(0) / 1e7
+fig.add_trace(
+    go.Scatter(
+        x=top_depts,
+        y=totals_cr,
+        name='Department Total (Cr ₹)',
+        mode='lines+markers',
+        marker=dict(symbol='diamond', size=10),
+        line=dict(color='black', width=2),
+        hovertemplate='%{x}<br>Total: %{y:.2f} Cr<extra></extra>',
     )
+)
 
-    st.plotly_chart(fig, use_container_width=True)
+fig.update_layout(
+    barmode='stack',
+    title=f'Top {top_n} Departments — Sub-Category stacked spend (Cr ₹) with Department Total line',
+    xaxis_title='Main Department',
+    yaxis_title='Spend (Cr ₹)',
+    legend_title='Sub Category / Total',
+    xaxis_tickangle=-45,
+    height=650,
+)
 
-    # Also present subcategory table
-    st.markdown("#### Sub-category breakout for selected departments")
-    st.dataframe(subcat[subcat['Main Department'].isin(top_depts)].sort_values(['Main Department','Net Amount'], ascending=[True, False]), use_container_width=True)
+# Render the chart and capture click events
+# plotly_events returns a list of clicked points; we ask for click_event=True
+clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="dept_spend_plot")
 
-    # CSV download: write department totals then subcategory details (plain CSV with separators)
-    csv_buf = io.StringIO()
-    csv_buf.write("Department Totals (Net Amount INR)\n")
-    dept_totals[['Main Department','Net Amount']].to_csv(csv_buf, index=False)
-    csv_buf.write("\nSubcategory Details (Net Amount INR)\n")
-    subcat.to_csv(csv_buf, index=False)
-    csv_value = csv_buf.getvalue()
-    st.download_button("⬇️ Download Department+Subcategory Spend (CSV)", csv_value, file_name="department_subcategory_spend.csv", mime="text/csv")
+st.plotly_chart(fig, use_container_width=True)
 
-# Run automatically if filtered_df exists
-if 'filtered_df' in globals():
-    compute_and_plot_department_spend(filtered_df, top_n=15)
-elif 'filtered_df' in st.session_state:
-    compute_and_plot_department_spend(st.session_state['filtered_df'], top_n=15)
+# clicked is a list of dictionaries when user clicks; e.g. [{'x': 'Customer Success', 'y': 1.23, ...}]
+selected_depts = []
+if clicked:
+    # could be multiple sequential clicks; take unique x values
+    for ev in clicked:
+        if 'x' in ev:
+            selected_depts.append(ev['x'])
+    selected_depts = list(dict.fromkeys(selected_depts))  # unique preserving order
+
+# Show instructions and results
+if selected_depts:
+    st.markdown("### 🔎 Details for clicked department(s)")
+    for dept in selected_depts:
+        st.markdown(f"**Department:** {dept}")
+        # Filter original merged dataframe for this dept
+        details = merged[merged['Main Department'] == dept].copy()
+        # Optionally show a smaller / relevant set of columns — change as needed
+        show_cols = ['PR Number','Purchase Doc','PR Date Submitted','Po create Date',
+                     'PR Budget Code','PO Vendor','Product Name','Net Amount','Main Department','Sub Category']
+        # keep only existing columns
+        show_cols = [c for c in show_cols if c in details.columns]
+        if details.empty:
+            st.info("No rows available for this department.")
+        else:
+            # Format Net Amount as INR and show
+            if 'Net Amount' in details.columns:
+                details['Net Amount (₹)'] = details['Net Amount'].map(lambda v: f"₹{v:,.2f}")
+            st.dataframe(details[show_cols], use_container_width=True)
+            # download button for the filtered details
+            csv_buf = io.StringIO()
+            details.to_csv(csv_buf, index=False)
+            st.download_button(f"⬇️ Download {dept} details (CSV)", csv_buf.getvalue(),
+                               file_name=f"{dept.replace(' ','_')}_details.csv", mime="text/csv")
 else:
-    st.info("Call compute_and_plot_department_spend(filtered_df) after filters applied to see department spend charts.")
+    st.info("Click a bar or a segment in the chart above to view its underlying rows below.")
 
 # ------------------------------------
 # 14) PR → PO Aging Buckets
