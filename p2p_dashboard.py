@@ -939,7 +939,8 @@ def compute_and_plot_department_spend(dframe: pd.DataFrame, top_n: int = 15):
         on='Main Department', how='left'
     )
     # save both dept totals and subcategory detail separately in downloadable zip-like CSV (simple approach: concatenated)
-    csv_buf.write('--- Department Totals ---
+    csv_buf.write('--- Department Totals ---\n')
+ ---
 ')
     main_dept_agg.to_csv(csv_buf, index=False)
     csv_buf.write('
