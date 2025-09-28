@@ -746,32 +746,7 @@ def compute_and_plot_department_spend(dframe: pd.DataFrame, top_n: int = 15):
         st.info("Select a department from the dropdown above to view details here.")
 
 
-# ------------------------------------
-# 14) PR → PO Aging Buckets
-# ------------------------------------
-st.subheader("🧮 PR to PO Aging Buckets")
-bins = [0, 7, 15, 30, 60, 90, 999]
-labels = ["0-7", "8-15", "16-30", "31-60", "61-90", "90+"]
 
-aging_buckets = pd.cut(lead_df["Lead Time (Days)"], bins=bins, labels=labels)
-age_summary = (
-    aging_buckets.value_counts(normalize=True)
-    .sort_index()
-    .reset_index()
-)
-age_summary.columns = ["Aging Bucket", "Percentage"]
-age_summary["Percentage"] *= 100
-
-fig_aging = px.bar(
-    age_summary,
-    x="Aging Bucket",
-    y="Percentage",
-    text="Percentage",
-    title="PR to PO Aging Bucket Distribution (%)",
-    labels={"Percentage": "Percentage (%)"},
-)
-fig_aging.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-st.plotly_chart(fig_aging, use_container_width=True)
 
 # ------------------------------------
 # 15) PRs & POs by Weekday
