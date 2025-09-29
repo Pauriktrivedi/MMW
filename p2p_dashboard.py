@@ -1265,3 +1265,121 @@ try:
 except Exception as e:
     st.error(f"Department plot failed: {e}")
 
+
+# Enhanced interactive department-spend helper for your Streamlit dashboard
+# Save this as a separate file or paste into your main app after you have loaded df and _mapping_df.
+# This tries to capture Plotly click events using streamlit-plotly-events if available.
+# If the package is not installed it falls back to a selectbox which simulates click behaviour.
+
+import io
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+try:
+    from streamlit_plotly_events import plotly_events
+    HAS_PLOTLY_EVENTS = True
+except Exception:
+    HAS_PLOTLY_EVENTS = False
+
+
+def plot_department_bar_interactive(df: pd.DataFrame, mapping_df: pd.DataFrame, top_n: int = 20):
+    """Plot top departments by spend and allow clicking a bar (if supported) to show underlying rows.
+
+    - df: filtered dataframe with at least 'Net Amount' and 'PR Budget Code' columns
+    - mapping_df: DataFrame with columns ['Main Department','Sub Category','Budget Code'] mapping budget codes
+    - top_n: number of top departments to show
+    """
+
+    # validate
+    if 'Net Amount' not in df.columns:
+        st.error("'Net Amount' column missing from dataframe")
+        return
+    if 'PR Budget Code' not in df.columns and 'PR Budget code' not in df.columns:
+        st.error("'PR Budget Code' column missing from dataframe")
+        return
+
+    code_col = 'PR Budget Code' if 'PR Budget Code' in df.columns else 'PR Budget code'
+
+    temp = df.copy()
+    temp[code_col] = temp[code_col].astype(str).str.strip()
+    mapping_df = mapping_df.copy()
+    mapping_df['Budget Code'] = mapping_df['Budget Code'].astype(str).str.strip()
+
+    merged = temp.merge(mapping_df[['Main Department','Sub Category','Budget Code']], left_on=code_col, right_on='Budget Code', how='left')
+    merged['Main Department'] = merged['Main Department'].fillna('Unmapped')
+    merged['Sub Category'] = merged['Sub Category'].fillna('Unspecified')
+
+    # positive spend only
+    merged = merged[merged['Net Amount'].notna()]
+    merged = merged[merged['Net Amount'] > 0]
+
+    if merged.empty:
+        st.info('No positive Net Amount rows to display for departments.')
+        return
+
+    dept_totals = merged.groupby('Main Department', as_index=False)['Net Amount'].sum()
+    dept_totals = dept_totals.sort_values('Net Amount', ascending=False).reset_index(drop=True)
+    dept_totals['Spend (Cr ₹)'] = dept_totals['Net Amount'] / 1e7
+
+    top_depts = dept_totals.head(top_n)
+
+    # build plotly bar
+    fig = go.Figure([go.Bar(x=top_depts['Main Department'], y=top_depts['Spend (Cr ₹)'], text=top_depts['Spend (Cr ₹)'].map('{:.2f}'.format), textposition='outside')])
+    fig.update_layout(title=f'Top {len(top_depts)} Departments by Spend (Cr ₹)', xaxis_tickangle=-45, height=600)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    clicked_dept = None
+    if HAS_PLOTLY_EVENTS:
+        # capture click (user needs to install streamlit-plotly-events)
+        st.write('Click a bar to load details — using streamlit-plotly-events')
+        clicks = plotly_events(fig, click_event=True)
+        if clicks and isinstance(clicks, list) and len(clicks) > 0:
+            payload = clicks[0]
+            # payload may have 'x' or nested points
+            clicked_dept = payload.get('x') or payload.get('points', [{}])[0].get('x')
+            if isinstance(clicked_dept, (list, tuple)):
+                clicked_dept = clicked_dept[0] if clicked_dept else None
+    else:
+        st.warning('Package `streamlit-plotly-events` not installed. Select a department from dropdown below.')
+
+    # fallback or show details
+    dept_list = ['(All top departments)'] + top_depts['Main Department'].tolist()
+    sel = st.selectbox('Or pick department to view details', dept_list, index=0)
+
+    # prioritize clicked value if exists
+    if clicked_dept:
+        sel = clicked_dept
+
+    if sel and sel != '(All top departments)':
+        details = merged[merged['Main Department'] == sel].copy()
+        show_cols = [c for c in ['PR Number','Purchase Doc','PR Date Submitted','Po create Date','PR Budget Code','PO Vendor','Product Name','Net Amount','Main Department','Sub Category'] if c in details.columns]
+        if 'Net Amount' in details.columns:
+            details = details.assign(**{'Net Amount (₹)': details['Net Amount'].map(lambda v: f"₹{v:,.2f}")})
+        st.markdown(f"#### Details for: **{sel}** ({len(details)} rows)")
+        st.dataframe(details[show_cols], use_container_width=True)
+        csv_buf = io.StringIO()
+        details.to_csv(csv_buf, index=False)
+        st.download_button('⬇️ Download details (CSV)', csv_buf.getvalue(), file_name=f"{sel.replace(' ','_')}_details.csv", mime='text/csv')
+    else:
+        # all top depts combined
+        details = merged[merged['Main Department'].isin(top_depts['Main Department'].tolist())].copy()
+        show_cols = [c for c in ['PR Number','Purchase Doc','PR Date Submitted','Po create Date','PR Budget Code','PO Vendor','Product Name','Net Amount','Main Department','Sub Category'] if c in details.columns]
+        if 'Net Amount' in details.columns:
+            details = details.assign(**{'Net Amount (₹)': details['Net Amount'].map(lambda v: f"₹{v:,.2f}")})
+        st.markdown(f"#### Combined details for top {len(top_depts)} departments ({len(details)} rows)")
+        st.dataframe(details[show_cols], use_container_width=True)
+        csv_buf = io.StringIO()
+        details.to_csv(csv_buf, index=False)
+        st.download_button('⬇️ Download combined details (CSV)', csv_buf.getvalue(), file_name="top_departments_details.csv", mime='text/csv')
+
+
+# Example usage (call this after you've loaded `df` (filtered) and your mapping df as `_mapping_df`):
+# plot_department_bar_interactive(filtered_df, mapping_df=_mapping_df, top_n=20)
+
+# Note: To enable click-to-filter functionality install the package:
+# pip install streamlit-plotly-events
+# and redeploy the app.
+
+
