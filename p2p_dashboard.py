@@ -1100,8 +1100,6 @@ fig_monthly_po = px.bar(
 fig_monthly_po.update_traces(textposition="outside")
 st.plotly_chart(fig_monthly_po, use_container_width=True)
 
-
-
 # ------------------------------------
 # 31) End of Dashboard
 # ------------------------------------
