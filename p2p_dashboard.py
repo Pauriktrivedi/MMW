@@ -733,3 +733,258 @@ with st.expander("⬇️ Download CSVs"):
     download_df(by_entity_gap, "Unmapped_BudgetCodes_ByEntity.csv", "Unmapped by Entity")
 
 st.success("Done. Budget codes are mapped to Department/Subcategory. Any codes without a Department appear in the Unmapped list.")
+
+# streamlit run spend_module.py
+
+import io
+import pandas as pd
+import numpy as np
+import altair as alt
+import streamlit as st
+
+st.set_page_config(page_title="Department & Subcategory Spend", layout="wide")
+
+# ----------------------------
+# Utilities
+# ----------------------------
+REQ_COLS = {
+    "Department": ["Department", "Dept", "department", "dept"],
+    "Subcategory": ["Subcategory", "Sub Category", "Sub-Category", "Sub Cat", "Subcat", "sub_category"],
+    "PO Number": ["PO Number", "PO_No", "PONumber", "PO", "po_number"],
+    "Vendor": ["Vendor", "Supplier", "vendor_name"],
+    "Item": ["Item", "Item Name", "Description", "Line Description", "item_desc"],
+    "Amount": ["Amount", "Net Amount", "PO Amount", "Value", "amount", "Total"],
+    "Date": ["PO Date", "Date", "Created Date", "Posting Date", "date"],
+    "Budget Code": ["Budget Code", "BudgetCode", "Cost Center", "GL Code", "budget_code"],
+}
+
+
+def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Map incoming columns to the required names if possible."""
+    colmap = {}
+    for std_col, candidates in REQ_COLS.items():
+        for c in candidates:
+            for col in df.columns:
+                if str(col).strip().lower() == str(c).strip().lower():
+                    colmap[col] = std_col
+                    break
+            if std_col in colmap.values():
+                break
+    df = df.rename(columns=colmap)
+    return df
+
+
+def _validate(df: pd.DataFrame) -> tuple[bool, list]:
+    missing = [c for c in ["Department", "Subcategory", "PO Number", "Vendor", "Item", "Amount"] if c not in df.columns]
+    return (len(missing) == 0, missing)
+
+
+def money(x):
+    try:
+        return f"₹{x:,.0f}"
+    except Exception:
+        return x
+
+
+@st.cache_data
+def load_csv(upload) -> pd.DataFrame:
+    df = pd.read_csv(upload)
+    df = _standardize_columns(df)
+    # Clean Amount
+    if "Amount" in df.columns:
+        df["Amount"] = (
+            pd.to_numeric(df["Amount"].astype(str).str.replace(",", "", regex=False).str.replace("₹", "", regex=False), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
+    # Parse Date if present
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # Trim strings
+    for c in ["Department", "Subcategory", "Vendor", "Item", "PO Number", "Budget Code"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip()
+    return df
+
+
+st.title("Department-wise & Subcategory-wise Spend")
+
+st.caption("Upload your PO-level extract (must include Department, Subcategory, PO Number, Vendor, Item, Amount; Date/Budget Code optional).")
+
+uploaded = st.file_uploader("Upload CSV", type=["csv"]) 
+
+if not uploaded:
+    st.info("👆 Upload your CSV to see charts and tables.")
+    st.stop()
+
+po_df = load_csv(uploaded)
+
+ok, missing = _validate(po_df)
+if not ok:
+    st.error(f"Missing required columns: {', '.join(missing)}. Please add/rename these in your file.")
+    st.dataframe(po_df.head(20))
+    st.stop()
+
+# Global filters row
+with st.container():
+    c1, c2, c3, c4 = st.columns([2,2,2,2])
+    # Date filter (optional)
+    if "Date" in po_df.columns and po_df["Date"].notna().any():
+        mind, maxd = po_df["Date"].min(), po_df["Date"].max()
+        start, end = c1.date_input("Date range", value=(mind.date(), maxd.date()), min_value=mind.date(), max_value=maxd.date())
+        mask_date = po_df["Date"].between(pd.to_datetime(start), pd.to_datetime(end))
+    else:
+        start = end = None
+        mask_date = pd.Series(True, index=po_df.index)
+
+    # Department prefilter
+    dept_opts = sorted(po_df.loc[mask_date, "Department"].dropna().unique().tolist())
+    dept_sel = c2.multiselect("Filter Departments (optional)", dept_opts)
+    if dept_sel:
+        mask_dept = po_df["Department"].isin(dept_sel)
+    else:
+        mask_dept = pd.Series(True, index=po_df.index)
+
+    # Subcategory prefilter
+    sub_opts = sorted(po_df.loc[mask_date & mask_dept, "Subcategory"].dropna().unique().tolist())
+    sub_sel = c3.multiselect("Filter Subcategories (optional)", sub_opts)
+    if sub_sel:
+        mask_sub = po_df["Subcategory"].isin(sub_sel)
+    else:
+        mask_sub = pd.Series(True, index=po_df.index)
+
+    # Budget Code prefilter (optional)
+    if "Budget Code" in po_df.columns:
+        bc_opts = sorted(po_df.loc[mask_date & mask_dept & mask_sub, "Budget Code"].dropna().unique().tolist())
+        bc_sel = c4.multiselect("Filter Budget Codes (optional)", bc_opts)
+        if bc_sel:
+            mask_bc = po_df["Budget Code"].isin(bc_sel)
+        else:
+            mask_bc = pd.Series(True, index=po_df.index)
+    else:
+        bc_sel = []
+        mask_bc = pd.Series(True, index=po_df.index)
+
+flt_df = po_df[mask_date & mask_dept & mask_sub & mask_bc].copy()
+
+# ---------------------------------------------------------------------------------
+# 1) Department-wise Spend (Bar) + detail table
+# ---------------------------------------------------------------------------------
+st.subheader("Department-wise Spend")
+
+if flt_df.empty:
+    st.warning("No data after filters. Adjust the filters to see results.")
+else:
+    dept_sum = (
+        flt_df.groupby("Department", dropna=False, as_index=False)["Amount"].sum().sort_values("Amount", ascending=False)
+    )
+
+    chart_dept = (
+        alt.Chart(dept_sum)
+        .mark_bar()
+        .encode(
+            x=alt.X("Department:N", sort="-y", title="Department"),
+            y=alt.Y("Amount:Q", title="Spend"),
+            tooltip=[alt.Tooltip("Department:N"), alt.Tooltip("Amount:Q", format=",.0f", title="Spend")],
+        )
+        .properties(height=360)
+    )
+    st.altair_chart(chart_dept, use_container_width=True)
+
+    # department multiselect to show detail table
+    sel_depts = st.multiselect("Select department(s) to view PO details", dept_sum["Department"].tolist(), default=dept_sel or None, key="dept_detail")
+
+    if sel_depts:
+        detail_dept_df = flt_df[flt_df["Department"].isin(sel_depts)][[
+            "Department", "PO Number", "Vendor", "Item", "Subcategory", "Amount"
+        ]].sort_values(["Department", "Amount"], ascending=[True, False])
+        st.caption(f"{len(detail_dept_df):,} lines selected")
+        st.dataframe(detail_dept_df)
+        # download button
+        buff = io.BytesIO()
+        detail_dept_df.to_csv(buff, index=False)
+        st.download_button(
+            label="Download selected Department PO details (CSV)",
+            data=buff.getvalue(),
+            file_name="department_po_details.csv",
+            mime="text/csv",
+        )
+
+# ---------------------------------------------------------------------------------
+# 2) Subcategory-wise Spend (Bar) + detail table
+# ---------------------------------------------------------------------------------
+st.subheader("Subcategory-wise Spend")
+
+if not flt_df.empty:
+    sub_sum = (
+        flt_df.groupby(["Subcategory"], dropna=False, as_index=False)["Amount"].sum().sort_values("Amount", ascending=False)
+    )
+
+    chart_sub = (
+        alt.Chart(sub_sum)
+        .mark_bar()
+        .encode(
+            x=alt.X("Subcategory:N", sort="-y", title="Subcategory"),
+            y=alt.Y("Amount:Q", title="Spend"),
+            tooltip=[alt.Tooltip("Subcategory:N"), alt.Tooltip("Amount:Q", format=",.0f", title="Spend")],
+        )
+        .properties(height=360)
+    )
+    st.altair_chart(chart_sub, use_container_width=True)
+
+    sel_subs = st.multiselect(
+        "Select subcategory(ies) to view PO details",
+        sub_sum["Subcategory"].tolist(),
+        default=sub_sel or None,
+        key="sub_detail",
+    )
+
+    if sel_subs:
+        detail_sub_df = flt_df[flt_df["Subcategory"].isin(sel_subs)][[
+            "Subcategory", "PO Number", "Vendor", "Item", "Department", "Amount"
+        ]].sort_values(["Subcategory", "Amount"], ascending=[True, False])
+        st.caption(f"{len(detail_sub_df):,} lines selected")
+        st.dataframe(detail_sub_df)
+        buff2 = io.BytesIO()
+        detail_sub_df.to_csv(buff2, index=False)
+        st.download_button(
+            label="Download selected Subcategory PO details (CSV)",
+            data=buff2.getvalue(),
+            file_name="subcategory_po_details.csv",
+            mime="text/csv",
+        )
+
+# ---------------------------------------------------------------------------------
+# 3) Optional: Budget Code rollup similar to PR/PO style
+# ---------------------------------------------------------------------------------
+with st.expander("Budget Code analysis (optional)"):
+    if "Budget Code" not in flt_df.columns:
+        st.info("No Budget Code column found. If you include one, you'll see a roll-up here similar to PR/PO.")
+    else:
+        bc_sum = (
+            flt_df.groupby(["Department", "Subcategory", "Budget Code"], dropna=False, as_index=False)["Amount"].sum()
+            .sort_values(["Department", "Subcategory", "Amount"], ascending=[True, True, False])
+        )
+        st.dataframe(bc_sum)
+        buff3 = io.BytesIO()
+        bc_sum.to_csv(buff3, index=False)
+        st.download_button(
+            label="Download Budget Code rollup (CSV)",
+            data=buff3.getvalue(),
+            file_name="budget_code_rollup.csv",
+            mime="text/csv",
+        )
+
+# ---------------------------------------------------------------------------------
+# Summary tiles
+# ---------------------------------------------------------------------------------
+st.divider()
+st.subheader("Quick Summary")
+metric_cols = st.columns(4)
+metric_cols[0].metric("Total Spend", money(flt_df["Amount"].sum()))
+metric_cols[1].metric("Departments", f"{flt_df['Department'].nunique():,}")
+metric_cols[2].metric("Subcategories", f"{flt_df['Subcategory'].nunique():,}")
+metric_cols[3].metric("PO Lines", f"{len(flt_df):,}")
+
+st.caption("Tip: Use the filters above to focus on specific departments, subcategories, or budget codes. Click the download buttons to export the exact table you see.")
+
