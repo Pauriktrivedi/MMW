@@ -498,42 +498,6 @@ if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df
 else:
     st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
 
-# ------------------------------------
-# 11) PR → PO Lead Time by Buyer Type & Buyer
-# ------------------------------------
-st.subheader("⏱️ PR to PO Lead Time by Buyer Type & by Buyer")
-lead_avg_by_type = (
-    lead_df.groupby("Buyer.Type")["Lead Time (Days)"]
-    .mean()
-    .round(0)
-    .reset_index()
-)
-lead_avg_by_buyer = (
-    lead_df.groupby("PO.Creator")["Lead Time (Days)"]
-    .mean()
-    .round(0)
-    .reset_index()
-)
-c1, c2 = st.columns(2)
-c1.dataframe(lead_avg_by_type, use_container_width=True)
-c2.dataframe(lead_avg_by_buyer, use_container_width=True)
-
-# ------------------------------------
-# 12) Monthly PR & PO Trends
-# ------------------------------------
-st.subheader("📅 Monthly PR & PO Trends")
-filtered_df["PR Month"] = pd.to_datetime(filtered_df["PR Date Submitted"]).dt.to_period("M")
-filtered_df["PO Month"] = pd.to_datetime(filtered_df["Po create Date"]).dt.to_period("M")
-
-monthly_summary = (
-    filtered_df.groupby("PR Month")
-    .agg({"PR Number": "count", "Purchase Doc": "count"})
-    .reset_index()
-)
-monthly_summary.columns = ["Month", "PR Count", "PO Count"]
-monthly_summary["Month"] = monthly_summary["Month"].astype(str)
-
-st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
 # ------------------------------------
 # 13) Procurement Category Spend (Top 15, Descending, Excluding <0)
@@ -645,6 +609,44 @@ if "PR Budget description" in filtered_df.columns and "Net Amount" in filtered_d
     st.plotly_chart(fig_budget_desc, use_container_width=True)
 else:
     st.info("ℹ️ No 'PR Budget description' or 'Net Amount' column found.")
+
+# ------------------------------------
+# 11) PR → PO Lead Time by Buyer Type & Buyer
+# ------------------------------------
+st.subheader("⏱️ PR to PO Lead Time by Buyer Type & by Buyer")
+lead_avg_by_type = (
+    lead_df.groupby("Buyer.Type")["Lead Time (Days)"]
+    .mean()
+    .round(0)
+    .reset_index()
+)
+lead_avg_by_buyer = (
+    lead_df.groupby("PO.Creator")["Lead Time (Days)"]
+    .mean()
+    .round(0)
+    .reset_index()
+)
+c1, c2 = st.columns(2)
+c1.dataframe(lead_avg_by_type, use_container_width=True)
+c2.dataframe(lead_avg_by_buyer, use_container_width=True)
+
+# ------------------------------------
+# 12) Monthly PR & PO Trends
+# ------------------------------------
+st.subheader("📅 Monthly PR & PO Trends")
+filtered_df["PR Month"] = pd.to_datetime(filtered_df["PR Date Submitted"]).dt.to_period("M")
+filtered_df["PO Month"] = pd.to_datetime(filtered_df["Po create Date"]).dt.to_period("M")
+
+monthly_summary = (
+    filtered_df.groupby("PR Month")
+    .agg({"PR Number": "count", "Purchase Doc": "count"})
+    .reset_index()
+)
+monthly_summary.columns = ["Month", "PR Count", "PO Count"]
+monthly_summary["Month"] = monthly_summary["Month"].astype(str)
+
+st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
+
 
 # ------------------------------------
 # 14) PR → PO Aging Buckets
