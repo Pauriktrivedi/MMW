@@ -1052,148 +1052,184 @@ fig_monthly_po = px.bar(
 fig_monthly_po.update_traces(textposition="outside")
 st.plotly_chart(fig_monthly_po, use_container_width=True)
 
-# ---------- Department-wise Spend (bar + detail list) ----------
+# -------------------------
+# Parse mapping text -> DataFrame
+# -------------------------
+import re
 import io
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import streamlit as st
 
-def plot_department_spend(df: pd.DataFrame, mapping_df: pd.DataFrame = None, top_n: int = 15, code_col: str = "PR Budget Code"):
+RAW_MAPPING_TEXT = r"""
+# Paste your mapping text here (the big block you provided).
+# Example lines (actual content below) should be tab- or multi-space-separated:
+# Main Department	Sub Category	Budget Code
+AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHADM
+AMD - Regional Sales Office	Admin, Housekeeping and Security	MMW.SELL.HR.OTHMPW
+...
+"""
+
+# If you already have the mapping in a variable, assign to RAW_MAPPING_TEXT above.
+# Otherwise, replace the block between the triple-quotes with the mapping you shared.
+
+def parse_mapping_text_to_df(raw_text: str) -> pd.DataFrame:
     """
-    Plot department-wise spend and show underlying rows when department selected.
-
-    Parameters:
-      - df: DataFrame containing at least 'Net Amount' and budget code column.
-      - mapping_df: DataFrame with columns ['Main Department', 'Sub Category', 'Budget Code'].
-                    If mapping_df is None, function will try to use global _mapping_df.
-      - top_n: number of top departments to show.
-      - code_col: name of budget code column in df (defaults to 'PR Budget Code').
+    Robust parser for lines that contain: Main Department [tab/space] Sub Category [tab/space] Budget Code
+    Returns DataFrame with columns: ['Main Department', 'Sub Category', 'Budget Code']
     """
-    # Validate inputs
-    if mapping_df is None:
-        try:
-            mapping_df = _mapping_df
-        except NameError:
-            st.error("Department mapping (_mapping_df) not found. Pass mapping_df or create a global _mapping_df.")
-            return
+    lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    rows = []
+    for ln in lines:
+        # First try splitting on tab
+        parts = [p.strip() for p in ln.split("\t") if p.strip()]
+        if len(parts) < 3:
+            # fallback: split by 2+ spaces
+            parts = [p.strip() for p in re.split(r"\s{2,}", ln) if p.strip()]
+        # If still not 3, try splitting on single tab/space sequence and keep last token as code
+        if len(parts) < 3:
+            tokens = ln.split()
+            if len(tokens) >= 3:
+                # last token is budget code, first token(s) form department/subcategory (heuristic)
+                budget_code = tokens[-1].strip()
+                # try to separate department and subcategory by first occurrence of two spaces or a hyphen
+                rest = ln[:ln.rfind(budget_code)].strip()
+                # if rest contains tab or double spaces, split; else put rest in Main Department and Sub Category empty
+                parts2 = [p.strip() for p in re.split(r"\t|\s{2,}", rest) if p.strip()]
+                if len(parts2) >= 2:
+                    parts = [parts2[0], parts2[1], budget_code]
+                else:
+                    parts = [rest, "", budget_code]
+            else:
+                # cannot parse - skip
+                continue
+        # final normalization: ensure exactly 3 columns
+        main_dept = parts[0]
+        sub_cat = parts[1] if len(parts) >= 2 else ""
+        budget_code = parts[2] if len(parts) >= 3 else ""
+        if budget_code:
+            rows.append((main_dept, sub_cat, budget_code))
+    df_map = pd.DataFrame(rows, columns=["Main Department", "Sub Category", "Budget Code"])
+    # Normalize whitespace
+    df_map["Main Department"] = df_map["Main Department"].astype(str).str.strip()
+    df_map["Sub Category"] = df_map["Sub Category"].astype(str).str.strip()
+    df_map["Budget Code"] = df_map["Budget Code"].astype(str).str.strip()
+    # Drop obvious header-like rows if accidentally parsed
+    df_map = df_map[~df_map["Budget Code"].str.lower().isin(["budget code", "code", "budget"])]
+    df_map = df_map[~df_map["Main Department"].str.lower().isin(["main department", "department"])]
+    df_map = df_map.drop_duplicates().reset_index(drop=True)
+    return df_map
 
-    if code_col not in df.columns and code_col.lower() not in (c.lower() for c in df.columns):
+# Build mapping DataFrame (replace RAW_MAPPING_TEXT contents with your mapping block)
+_mapping_df = parse_mapping_text_to_df(RAW_MAPPING_TEXT)
+
+if _mapping_df.empty:
+    st.warning("Warning: parsed mapping DataFrame is empty. Please paste your mapping text into RAW_MAPPING_TEXT.")
+else:
+    st.write(f"Loaded {_mapping_df.shape[0]} mapping rows (sample):")
+    st.dataframe(_mapping_df.head(10), use_container_width=True)
+
+# -------------------------
+# Department-wise Spend plot + details (reusable function)
+# -------------------------
+def plot_department_spend(df: pd.DataFrame, mapping_df: pd.DataFrame, top_n: int = 15, code_col: str = "PR Budget Code"):
+    import plotly.express as px
+    import streamlit as st
+    import io
+
+    # find actual code column in df (allow case variations)
+    df_cols_lower = {c.lower(): c for c in df.columns}
+    actual_code_col = df_cols_lower.get(code_col.lower(), None)
+    if actual_code_col is None:
         st.error(f"Budget code column '{code_col}' not found in data.")
         return
     if "Net Amount" not in df.columns:
         st.error("Column 'Net Amount' not found in data.")
         return
 
-    # Normalize column names: find exact match if case differs
-    # get actual code column name in df
-    df_cols_lower = {c.lower(): c for c in df.columns}
-    actual_code_col = df_cols_lower.get(code_col.lower(), None)
-    if actual_code_col is None:
-        st.error(f"Budget code column '{code_col}' not found in data columns: {list(df.columns)}")
-        return
-
-    # Prepare data
     tmp = df.copy()
+    tmp[actual_code_col] = tmp[actual_code_col].astype(str).str.strip()
+    mapping_df2 = mapping_df.copy()
+    mapping_df2["Budget Code"] = mapping_df2["Budget Code"].astype(str).str.strip()
+    mapping_df2["Main Department"] = mapping_df2["Main Department"].astype(str).fillna("Unmapped")
 
-    # Normalize budget codes in both frames to allow matching
-    tmp['PR_Budget_Code_norm'] = tmp[actual_code_col].astype(str).str.strip()
-    mapping_df = mapping_df.copy()
-    if 'Budget Code' not in mapping_df.columns:
-        st.error("mapping_df must contain a 'Budget Code' column (and 'Main Department').")
-        return
-    mapping_df['Budget Code'] = mapping_df['Budget Code'].astype(str).str.strip()
-    mapping_df['Main Department'] = mapping_df['Main Department'].astype(str).fillna('Unmapped')
+    merged = tmp.merge(mapping_df2[["Main Department", "Budget Code"]], left_on=actual_code_col, right_on="Budget Code", how="left")
+    merged["Main Department"] = merged["Main Department"].fillna("Unmapped")
 
-    # Merge mapping
-    merged = tmp.merge(mapping_df[['Main Department', 'Budget Code']], left_on='PR_Budget_Code_norm', right_on='Budget Code', how='left')
-    merged['Main Department'] = merged['Main Department'].fillna('Unmapped')
-
-    # Keep only rows with numeric positive Net Amount
-    merged = merged[merged['Net Amount'].notna()]
-    # Try coercing non-numeric Net Amount if present
-    merged['Net Amount'] = pd.to_numeric(merged['Net Amount'], errors='coerce')
-    merged = merged[merged['Net Amount'] > 0]
+    # ensure numeric Net Amount and positive only
+    merged["Net Amount"] = pd.to_numeric(merged["Net Amount"], errors="coerce")
+    merged = merged[merged["Net Amount"].notna()]
+    merged = merged[merged["Net Amount"] > 0]
 
     if merged.empty:
-        st.info("No positive Net Amount rows available after filtering/mapping.")
+        st.info("No positive Net Amount rows available after mapping/filtering.")
         return
 
-    # Aggregate per department
-    dept_totals = merged.groupby('Main Department', as_index=False)['Net Amount'].sum()
-    dept_totals = dept_totals.sort_values('Net Amount', ascending=False).reset_index(drop=True)
-    dept_totals['Spend (Cr ₹)'] = dept_totals['Net Amount'] / 1e7
+    dept_totals = merged.groupby("Main Department", as_index=False)["Net Amount"].sum()
+    dept_totals = dept_totals.sort_values("Net Amount", ascending=False).reset_index(drop=True)
+    dept_totals["Spend (Cr ₹)"] = dept_totals["Net Amount"] / 1e7
 
-    # Keep top N
     top_df = dept_totals.head(top_n).copy()
+    st.markdown(f"### Top {len(top_df)} Departments by Spend")
+    st.dataframe(top_df[["Main Department", "Spend (Cr ₹)"]].assign(**{"Spend (Cr ₹)": top_df["Spend (Cr ₹)"].map("{:,.2f}".format)}), use_container_width=True)
 
-    st.markdown(f"### Top {len(top_df)} Departments by Spend (positive Net Amount only)")
-    st.dataframe(top_df[['Main Department', 'Spend (Cr ₹)']].assign(**{"Spend (Cr ₹)": top_df['Spend (Cr ₹)'].map("{:,.2f}".format)}), use_container_width=True)
-
-    # Plot bar chart
     fig = px.bar(
         top_df,
-        x='Main Department',
-        y='Spend (Cr ₹)',
+        x="Main Department",
+        y="Spend (Cr ₹)",
         title=f"Top {len(top_df)} Departments by Spend (Cr ₹)",
-        text='Spend (Cr ₹)'
+        text="Spend (Cr ₹)"
     )
-    fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-    fig.update_layout(xaxis_tickangle=-45, yaxis_title='Spend (Cr ₹)', margin=dict(t=60, b=140))
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig.update_layout(xaxis_tickangle=-45, yaxis_title="Spend (Cr ₹)", margin=dict(t=60, b=140))
     st.plotly_chart(fig, use_container_width=True)
 
-    # interactive selection for details (unique key to avoid duplicate ID errors)
-    selectbox_key = f"dept_select_{abs(hash('dept_select')) % (10**8)}"
-    dept_options = ['(All Top Departments)'] + top_df['Main Department'].tolist()
-    sel = st.selectbox("Show rows for department (select to view details)", dept_options, key=selectbox_key)
+    # unique keys for widgets
+    sel_key = f"dept_select_{abs(hash('dept_select')) % (10**8)}"
+    download_key_prefix = f"download_{abs(hash('download')) % (10**8)}"
+
+    dept_list = ["(All Top Departments)"] + top_df["Main Department"].tolist()
+    sel = st.selectbox("Select Department to view underlying rows", dept_list, key=sel_key)
 
     if sel:
-        if sel == '(All Top Departments)':
-            detail_rows = merged[merged['Main Department'].isin(top_df['Main Department'])]
+        if sel == "(All Top Departments)":
+            detail_rows = merged[merged["Main Department"].isin(top_df["Main Department"])]
             subtitle = "All top departments"
         else:
-            detail_rows = merged[merged['Main Department'] == sel]
+            detail_rows = merged[merged["Main Department"] == sel]
             subtitle = f"Department: {sel}"
 
         st.markdown(f"#### Details — {subtitle} (rows: {len(detail_rows)})")
-
-        # columns to display (only those present)
-        desired_cols = ['PR Number', 'Purchase Doc', 'PR Date Submitted', 'Po create Date',
-                        actual_code_col, 'PO Vendor', 'Product Name', 'Net Amount', 'Main Department']
-        show_cols = [c for c in desired_cols if c in detail_rows.columns]
-        if 'Net Amount' in show_cols:
-            # format Net Amount column for readability
-            detail_rows = detail_rows.assign(**{'Net Amount (₹)': detail_rows['Net Amount'].map(lambda v: f"₹{v:,.2f}")})
-            # prefer showing formatted version instead of raw Net Amount
-            if 'Net Amount' in show_cols:
-                show_cols = [c for c in show_cols if c != 'Net Amount']
-            show_cols.append('Net Amount (₹)')
-
         if detail_rows.empty:
-            st.info("No rows to display for selection.")
+            st.info("No rows for selection.")
         else:
+            # show only relevant columns if present
+            desired = ["PR Number", "Purchase Doc", "PR Date Submitted", "Po create Date", actual_code_col, "PO Vendor", "Product Name", "Net Amount", "Main Department"]
+            show_cols = [c for c in desired if c in detail_rows.columns]
+            # formatted Net Amount column for display
+            if "Net Amount" in show_cols:
+                detail_rows = detail_rows.assign(**{"Net Amount (₹)": detail_rows["Net Amount"].map(lambda v: f"₹{v:,.2f}")})
+                show_cols = [c for c in show_cols if c != "Net Amount"] + ["Net Amount (₹)"]
+
             st.dataframe(detail_rows[show_cols], use_container_width=True)
 
-            # Download CSV
+            # CSV download (original numeric net amount included)
             csv_buf = io.StringIO()
-            # write original numeric Net Amount for export (not formatted)
-            export_cols = [c for c in detail_rows.columns if c != 'Net Amount (₹)']
-            detail_rows.to_csv(csv_buf, index=False, columns=export_cols)
+            detail_rows.to_csv(csv_buf, index=False)
             st.download_button(
-                label=f"⬇️ Download {sel.replace(' ', '_')}_details.csv",
+                label=f"⬇️ Download {sel.replace(' ','_')}_details.csv",
                 data=csv_buf.getvalue(),
-                file_name=f"{sel.replace(' ', '_')}_details.csv",
-                mime='text/csv',
-                key=f"download_{abs(hash(sel)) % (10**8)}"
+                file_name=f"{sel.replace(' ','_')}_details.csv",
+                mime="text/csv",
+                key=f"{download_key_prefix}_{abs(hash(sel)) % (10**8)}"
             )
 
-# Example usage (call this where appropriate in your app):
-# - If you already have a mapping DataFrame called `_mapping_df` with columns
-#   ['Main Department', 'Sub Category', 'Budget Code'] then:
-#
-# plot_department_spend(filtered_df, mapping_df=_mapping_df, top_n=15)
-#
-# - Or if your budget-code column is named 'PR Budget code' (lowercase variation), pass code_col="PR Budget code"
+# -------------------------
+# Call the function using your filtered_df and the parsed mapping
+# -------------------------
+# Replace filtered_df variable name if your filtered dataframe has different name
+if "_mapping_df" in globals() and not _mapping_df.empty:
+    plot_department_spend(filtered_df, mapping_df=_mapping_df, top_n=20)
+else:
+    st.warning("Mapping DataFrame not available — cannot render department chart.")
+
 
 
 
