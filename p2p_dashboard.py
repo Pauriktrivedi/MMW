@@ -475,6 +475,30 @@ st.plotly_chart(fig_spend, use_container_width=True)
 
 
 # ------------------------------------
+#  Category Spend Chart Sorted Descending
+# ------------------------------------
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    cat_spend = (
+        filtered_df.groupby("Procurement Category")["Net Amount"]
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
+
+    fig_cat = px.bar(
+        cat_spend,
+        x="Procurement Category",
+        y="Spend (Cr ₹)",
+        title="Spend by Category (Descending)",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+    )
+    fig_cat.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig_cat, use_container_width=True)
+else:
+    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
+
+# ------------------------------------
 # 11) PR → PO Lead Time by Buyer Type & Buyer
 # ------------------------------------
 st.subheader("⏱️ PR to PO Lead Time by Buyer Type & by Buyer")
