@@ -1055,5 +1055,37 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 
 
 
+The error you’re seeing is because Streamlit thinks there are **duplicate selectbox IDs** (when you call two `st.selectbox` or `st.sidebar.selectbox` with the same label and no unique `key`).
+
+To fix this, we’ll add unique `key` arguments to every `selectbox` so that they’re distinct. I’ll update the code for your **Financial Year filter** and the **Department details selectbox** at the bottom.
+
+Here’s the corrected version of those parts of your file:
+
+```python
+# --- Financial Year Selectbox (with unique key) ---
+selected_fy = st.sidebar.selectbox(
+    "Select Financial Year",
+    options=list(fy_options.keys()),
+    index=0,
+    key="fy_selectbox"  # unique key
+)
+pr_start, pr_end = fy_options[selected_fy]
+
+...
+
+# --- Department details selectbox (with unique key) ---
+dept_list = ['(All shown)'] + plot_df['Main Department'].tolist()
+sel = st.selectbox(
+    'Show rows for department',
+    dept_list,
+    key="dept_selectbox"  # unique key
+)
+```
+
+---
+
+✅ This ensures Streamlit doesn’t confuse them. You should add a `key` to any other selectbox you introduce in future too.
+
+Do you want me to go ahead and scan your whole script to systematically add **unique keys to all selectboxes and multiselects** (so you don’t run into this again)?
 
 
