@@ -537,6 +537,194 @@ else:
     st.info("ℹ️ 'Procurement Category' or 'Net Amount' column missing from data.")
 
 
+# ----- Department-wise Spend (mapped from PR Budget Code -> Department/SubCategory) -----
+import io
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+# ---------- 1) Prepare mapping DataFrame ----------
+# Option A: load from CSV file (preferred if you have mapping as a file)
+# mapping_df = pd.read_csv("budget_mapping.csv")  # expected columns: Main Department, Sub Category, Budget Code
+
+# Option B: parse from a multi-line string RAW_MAPPING (tab/commas). Replace RAW_MAPPING content with your full mapping text.
+RAW_MAPPING = """
+Main Department,Sub Category,Budget Code
+AMD - Regional Sales Office,Admin, Housekeeping and Security,MMW.SELL.HR.OTHADM
+AMD - Regional Sales Office,Admin, Housekeeping and Security,MMW.SELL.HR.OTHMPW
+Apparel,-Apparel Marketing campaign shoots,MMW.SELL.A&M.APPR.CAMPSHT
+Customer Success,- COCO Manpower Expense,MMW.SELL.CS.C&C
+# ... add the rest of your mapping rows here ...
+"""
+
+def parse_raw_mapping(raw_text: str) -> pd.DataFrame:
+    # Remove comment lines, normalize separators (commas or tabs)
+    lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    if not lines:
+        return pd.DataFrame(columns=["Main Department","Sub Category","Budget Code"])
+    header = [h.strip() for h in lines[0].split(",")]
+    rows = []
+    for ln in lines[1:]:
+        parts = [p.strip() for p in ln.split(",")]
+        # If the Budget Code contains commas, this simple parsing may break — prefer CSV file in that case.
+        if len(parts) >= 3:
+            rows.append(parts[:3])
+        else:
+            # try splitting by tab
+            parts = [p.strip() for p in ln.split("\t")]
+            if len(parts) >= 3:
+                rows.append(parts[:3])
+            else:
+                # fallback: skip malformed line
+                continue
+    df_map = pd.DataFrame(rows, columns=header[:3])
+    # normalize column names
+    df_map.columns = ["Main Department","Sub Category","Budget Code"]
+    df_map["Budget Code"] = df_map["Budget Code"].astype(str).str.strip()
+    df_map["Main Department"] = df_map["Main Department"].astype(str).str.strip()
+    df_map["Sub Category"] = df_map["Sub Category"].astype(str).str.strip()
+    return df_map
+
+# Try to load mapping_df: change this to read your actual CSV if you have it
+try:
+    # prefer CSV if file present
+    mapping_df = pd.read_csv("budget_mapping.csv")
+    mapping_df.columns = [c.strip() for c in mapping_df.columns]
+    # ensure correct columns
+    if not set(["Main Department","Sub Category","Budget Code"]).issubset(set(mapping_df.columns)):
+        # attempt to rename if different casing
+        mapping_df = mapping_df.rename(columns={mapping_df.columns[0]:"Main Department",
+                                                mapping_df.columns[1]:"Sub Category",
+                                                mapping_df.columns[2]:"Budget Code"})
+except FileNotFoundError:
+    mapping_df = parse_raw_mapping(RAW_MAPPING)
+
+# if mapping_df empty, show message and stop
+if mapping_df.empty:
+    st.warning("Department mapping not found or empty. Provide 'budget_mapping.csv' or fill RAW_MAPPING.")
+else:
+    # ---------- 2) Normalize and Merge mapping into main df ----------
+    # Ensure the data DataFrame exists (your main data variable 'filtered_df' or 'df')
+    data_df = filtered_df.copy() if 'filtered_df' in globals() else (df.copy() if 'df' in globals() else None)
+    if data_df is None:
+        st.error("Main data 'filtered_df' or 'df' not found in this scope. Make sure this code runs after you load data.")
+    else:
+        # column name of PR budget code: adapt to your actual column name
+        budget_col = None
+        for c in ["PR Budget Code", "PR Budget code", "PR Budget", "PR Budget Code "]:
+            if c in data_df.columns:
+                budget_col = c
+                break
+        if budget_col is None:
+            st.error("PR Budget Code column not found in data (expected 'PR Budget Code'). Update the variable 'budget_col' accordingly.")
+        else:
+            # normalize codes
+            data_df["_PR_Budget_Code_norm"] = data_df[budget_col].astype(str).str.strip()
+            mapping_df["_Budget_Code_norm"] = mapping_df["Budget Code"].astype(str).str.strip()
+
+            # Merge (left join to preserve all rows)
+            merged = data_df.merge(mapping_df[["Main Department","Sub Category","_Budget_Code_norm"]],
+                                   left_on="_PR_Budget_Code_norm", right_on="_Budget_Code_norm", how="left")
+
+            # fill unmapped
+            merged["Main Department"] = merged["Main Department"].fillna("Unmapped")
+            merged["Sub Category"] = merged["Sub Category"].fillna("Unspecified")
+
+            # Ensure Net Amount numeric
+            merged["Net Amount"] = pd.to_numeric(merged["Net Amount"], errors="coerce").fillna(0.0)
+
+            # Keep only positive spend rows for aggregation
+            positive = merged[merged["Net Amount"] > 0].copy()
+            if positive.empty:
+                st.info("No positive Net Amount rows available after mapping.")
+            else:
+                # ---------- 3) Aggregate by Department ----------
+                dept_totals = positive.groupby("Main Department", as_index=False)["Net Amount"].sum()
+                dept_totals = dept_totals.sort_values("Net Amount", ascending=False).reset_index(drop=True)
+                dept_totals["Spend (Cr ₹)"] = dept_totals["Net Amount"] / 1e7
+
+                st.subheader("🏢 Department-wise Spend (Top departments)")
+                # Show top N controls
+                top_n = st.sidebar.number_input("Show top N departments", min_value=5, max_value=100, value=20, step=5, key="dept_top_n_01")
+
+                plot_df = dept_totals.head(int(top_n)).copy()
+                if plot_df.empty:
+                    st.info("No departments to show.")
+                else:
+                    # ---------- 4) Plot bar chart ----------
+                    fig_dept = px.bar(
+                        plot_df,
+                        x="Main Department",
+                        y="Spend (Cr ₹)",
+                        text="Spend (Cr ₹)",
+                        title=f"Top {len(plot_df)} Departments by Spend",
+                    )
+                    fig_dept.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+                    fig_dept.update_layout(xaxis_tickangle=-45, margin=dict(t=60, b=120), height=520)
+
+                    # Try to capture clicks using streamlit-plotly-events if available
+                    use_plotly_events = False
+                    try:
+                        from streamlit_plotly_events import plotly_events
+                        use_plotly_events = True
+                    except Exception:
+                        use_plotly_events = False
+
+                    if use_plotly_events:
+                        # streamlit-plotly-events will return clicked points
+                        selected_points = plotly_events(fig_dept, click_event=True, hover_event=False, key="dept_plot_events_01")
+                        # selected_points is list of point dicts: [{... 'x': 'DeptName', 'y': value, ...}, ...]
+                        if selected_points:
+                            clicked = selected_points[0].get("x")
+                        else:
+                            clicked = None
+                        st.plotly_chart(fig_dept, use_container_width=True)
+                    else:
+                        # fallback: render chart and provide a selectbox (user can pick dept)
+                        st.plotly_chart(fig_dept, use_container_width=True)
+                        dept_options = ["(Select department)"] + plot_df["Main Department"].tolist()
+                        clicked = st.selectbox("Or select a department to view details", options=dept_options, key="dept_select_01")
+                        if clicked == "(Select department)":
+                            clicked = None
+
+                    # ---------- 5) When a department is selected show details ----------
+                    if clicked:
+                        sel_dept = clicked
+                        st.markdown(f"### 🔍 Details for Department: **{sel_dept}**")
+                        rows = positive[positive["Main Department"] == sel_dept].copy()
+
+                        # columns to present (adjust or extend as needed)
+                        preferred_cols = [
+                            "PR Number", "Purchase Doc", "PO Vendor", "Product Name", "Item Description",
+                            "PR Date Submitted", "Po create Date", budget_col, "Net Amount"
+                        ]
+                        present_cols = [c for c in preferred_cols if c in rows.columns]
+
+                        # format Net Amount column for visibility
+                        if "Net Amount" in rows.columns:
+                            rows["Net Amount (₹)"] = rows["Net Amount"].map(lambda v: f"₹{v:,.2f}")
+
+                        if rows.empty:
+                            st.info("No rows available for this department.")
+                        else:
+                            st.dataframe(rows[present_cols + (["Net Amount (₹)"] if "Net Amount (₹)" in rows.columns else [])],
+                                         use_container_width=True)
+
+                            # Download CSV of selected rows
+                            csv_buffer = io.StringIO()
+                            rows.to_csv(csv_buffer, index=False)
+                            st.download_button(
+                                label=f"⬇️ Download {sel_dept} details (CSV)",
+                                data=csv_buffer.getvalue(),
+                                file_name=f"{sel_dept.replace(' ','_')}_details.csv",
+                                mime="text/csv",
+                                key="download_dept_csv_01"
+                            )
+                    else:
+                        st.info("Click a bar (or select a department) to see detailed rows below.")
+
+
 # ------------------------------------
 # 11) PR → PO Lead Time by Buyer Type & Buyer
 # ------------------------------------
