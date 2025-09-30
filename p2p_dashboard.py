@@ -23,19 +23,19 @@ st.set_page_config(
 def load_and_combine_data():
     """
    Reads the four Excel files from the current directory:
-      - MEPL.xlsx
-      - MLPL.xlsx
-      - mmw.xlsx
-      - mmpl.xlsx
+      - MEPL1.xlsx
+      - MLPL1.xlsx
+      - mmw1.xlsx
+      - mmpl1.xlsx
 
     Tags each with an "Entity" column, concatenates them, and
     normalizes column names by stripping whitespace.
     """
     # NOTE: Filenames must match exactly (case-sensitive on some platforms).
-    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
+    mepl_df = pd.read_excel("MEPL1.xlsx", skiprows=1)
+    mlpl_df = pd.read_excel("MLPL1.xlsx", skiprows=1)
+    mmw_df  = pd.read_excel("mmw1.xlsx",  skiprows=1)
+    mmpl_df = pd.read_excel("mmpl1.xlsx", skiprows=1)
 
     # Tag each sheet with an "Entity" column
     mepl_df["Entity"] = "MEPL"
@@ -144,9 +144,34 @@ all_suggestions = list(dict.fromkeys(all_suggestions))
 # ------------------------------------
 #  7) Sidebar Filters (FY-Based)
 # ------------------------------------
-st.sidebar.header("🔍 Filters")
+# ---------------------------
+# Sidebar Filters (robust)
+# ---------------------------
+st.sidebar.header("🔍 Filters (robust)")
 
-# Define financial years and their corresponding PR date ranges
+# Ensure key columns exist and normalize dtype/strings to avoid mismatches
+def safe_unique_vals(series):
+    if series is None:
+        return []
+    # cast to string, strip, drop null-like values, give sorted unique
+    return sorted([str(x).strip() for x in series.dropna().unique()])
+
+# Make sure these columns exist (create dummy empty columns if missing)
+for col in ["Buyer.Type", "Entity", "PO.Creator", "PO.BuyerType", "PR Date Submitted"]:
+    if col not in df.columns:
+        df[col] = pd.NA
+
+# Convert important string-like columns to stripped strings to avoid whitespace mismatches
+for col in ["Buyer.Type", "Entity", "PO.Creator", "PO.BuyerType"]:
+    df[col] = df[col].astype(str).fillna("").apply(lambda x: x.strip() if x is not None else "")
+
+# Prepare options
+buyer_options = safe_unique_vals(df["Buyer.Type"]) if "Buyer.Type" in df.columns else []
+entity_options = safe_unique_vals(df["Entity"]) if "Entity" in df.columns else []
+orderer_options = safe_unique_vals(df["PO.Creator"]) if "PO.Creator" in df.columns else []
+po_buyer_type_options = safe_unique_vals(df["PO.BuyerType"]) if "PO.BuyerType" in df.columns else []
+
+# Financial Year select (same as before)
 fy_options = {
     "All Years": (pd.to_datetime("2023-04-01"), pd.to_datetime("2026-03-31")),
     "2023": (pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
@@ -154,51 +179,61 @@ fy_options = {
     "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
     "2026": (pd.to_datetime("2026-04-01"), pd.to_datetime("2027-03-31")),
 }
-
 selected_fy = st.sidebar.selectbox("Select Financial Year", options=list(fy_options.keys()), index=0)
 pr_start, pr_end = fy_options[selected_fy]
 
-# Other Filters
-buyer_filter = st.sidebar.multiselect(
-    "Buyer Type",
-    options=df["Buyer.Type"].dropna().unique(),
-    default=list(df["Buyer.Type"].dropna().unique()),
-    key="buyer_filter"
-)
+# Multiselects with safe defaults
+buyer_filter = st.sidebar.multiselect("Buyer Type", options=buyer_options, default=buyer_options)
+entity_filter = st.sidebar.multiselect("Entity", options=entity_options, default=entity_options)
+orderer_filter = st.sidebar.multiselect("PO Ordered By", options=orderer_options, default=orderer_options)
+po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", options=po_buyer_type_options, default=po_buyer_type_options)
 
-entity_filter = st.sidebar.multiselect(
-    "Entity",
-    options=df["Entity"].dropna().unique(),
-    default=list(df["Entity"].dropna().unique()),
-    key="entity_filter"
-)
+# Date range filter: use PR Date Submitted if available, else use Po create Date
+date_col_for_filter = "PR Date Submitted" if "PR Date Submitted" in df.columns else ("Po create Date" if "Po create Date" in df.columns else None)
+if date_col_for_filter:
+    # ensure datetime dtype
+    df[date_col_for_filter] = pd.to_datetime(df[date_col_for_filter], errors="coerce")
+    min_date = df[date_col_for_filter].min().date() if pd.notna(df[date_col_for_filter].min()) else date.today()
+    max_date = df[date_col_for_filter].max().date() if pd.notna(df[date_col_for_filter].max()) else date.today()
+    date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
+else:
+    date_range = None
 
-orderer_filter = st.sidebar.multiselect(
-    "PO Ordered By",
-    options=df["PO.Creator"].dropna().unique(),
-    default=list(df["PO.Creator"].dropna().unique()),
-    key="orderer_filter"
-)
-
-po_buyer_type_filter = st.sidebar.multiselect(
-    "PO Buyer Type",
-    options=df["PO.BuyerType"].dropna().unique(),
-    default=list(df["PO.BuyerType"].dropna().unique()),
-    key="po_buyer_type_filter"
-)
-# ------------------------------------
-#  8a) Filter by PR Date Submitted
-# ------------------------------------
+# ---------------------------
+# Apply filters (all safe)
+# ---------------------------
 filtered_df = df.copy()
 
-if "PR Date Submitted" in df.columns:
-    df["PR Date Submitted"] = pd.to_datetime(df["PR Date Submitted"], errors="coerce")
-    pr_range = fy_options.get(selected_fy, fy_options["All Years"])
-    filtered_df = df[
-        (df["PR Date Submitted"] >= pr_range[0]) & (df["PR Date Submitted"] <= pr_range[1])
-    ]
-else:
-    st.error("❌ 'PR Date Submitted' column not found in dataset.")
+# Apply FY filter using PR Date Submitted if present
+if "PR Date Submitted" in filtered_df.columns:
+    filtered_df["PR Date Submitted"] = pd.to_datetime(filtered_df["PR Date Submitted"], errors="coerce")
+    # pr_start, pr_end are Timestamps; compare accordingly
+    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_start) & (filtered_df["PR Date Submitted"] <= pr_end)]
+
+# Apply date_range if chosen
+if date_range and date_col_for_filter:
+    # date_range may be (start, end) or a single date on some UI states
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+        filtered_df = filtered_df[(filtered_df[date_col_for_filter] >= s_dt) & (filtered_df[date_col_for_filter] <= e_dt)]
+
+# Apply string-based multiselect filters (coerce to str before matching)
+if buyer_filter:
+    filtered_df = filtered_df[filtered_df["Buyer.Type"].astype(str).str.strip().isin(buyer_filter)]
+if entity_filter:
+    filtered_df = filtered_df[filtered_df["Entity"].astype(str).str.strip().isin(entity_filter)]
+if orderer_filter:
+    filtered_df = filtered_df[filtered_df["PO.Creator"].astype(str).str.strip().isin(orderer_filter)]
+if po_buyer_type_filter:
+    filtered_df = filtered_df[filtered_df["PO.BuyerType"].astype(str).str.strip().isin(po_buyer_type_filter)]
+
+# Debug: show applied filters & counts
+st.sidebar.markdown("----")
+st.sidebar.write("Selected FY:", selected_fy)
+st.sidebar.write("Selected Buyer Types:", buyer_filter if buyer_filter else "ALL")
+st.sidebar.write("Selected Entities:", entity_filter if entity_filter else "ALL")
+st.sidebar.write("Row count after filters:", len(filtered_df))
+
 
 # ------------------------------------
 #  8b) Keyword Search with Chips and Autocomplete + Memory
@@ -324,6 +359,121 @@ gauge_fig = go.Figure(
 st.plotly_chart(gauge_fig, use_container_width=True)
 st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
+# ---------- Monthly Total Spend (bars) + Cumulative Spend line ----------
+from plotly.subplots import make_subplots
+
+st.subheader("📊 Monthly Total Spend (with Cumulative Value Line)")
+
+# pick date column
+date_col = "Po create Date" if "Po create Date" in filtered_df.columns else (
+    "PR Date Submitted" if "PR Date Submitted" in filtered_df.columns else None
+)
+
+if date_col is None:
+    st.info("No date column available ('Po create Date' or 'PR Date Submitted') to compute monthly spend.")
+else:
+    filtered_df[date_col] = pd.to_datetime(filtered_df[date_col], errors="coerce")
+    temp = filtered_df.dropna(subset=[date_col])
+    if "Net Amount" not in temp.columns:
+        st.info("No 'Net Amount' column found to compute spend.")
+    else:
+        temp = temp.copy()
+        temp["PO_Month"] = temp[date_col].dt.to_period("M").dt.to_timestamp()
+        temp["Month_Str"] = temp["PO_Month"].dt.strftime("%b-%Y")
+
+        monthly_total_spend = (
+            temp.groupby(["PO_Month", "Month_Str"], as_index=False)["Net Amount"].sum()
+        )
+
+        # convert to Cr
+        monthly_total_spend["Spend (Cr ₹)"] = monthly_total_spend["Net Amount"] / 1e7
+        monthly_total_spend = monthly_total_spend.sort_values("PO_Month").reset_index(drop=True)
+
+        # cumulative spend in Cr
+        monthly_total_spend["Cumulative Spend (Cr ₹)"] = monthly_total_spend["Spend (Cr ₹)"].cumsum()
+
+        # keep month order
+        month_order = monthly_total_spend["Month_Str"].tolist()
+        monthly_total_spend["Month_Str"] = pd.Categorical(monthly_total_spend["Month_Str"], categories=month_order, ordered=True)
+
+        # build figure with secondary y-axis
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        # bars: monthly spend (Cr)
+        fig.add_trace(
+            go.Bar(
+                x=monthly_total_spend["Month_Str"],
+                y=monthly_total_spend["Spend (Cr ₹)"],
+                name="Monthly Spend (Cr ₹)",
+                text=monthly_total_spend["Spend (Cr ₹)"].map("{:.2f}".format),
+                textposition="outside",
+                marker=dict(opacity=0.85)
+            ),
+            secondary_y=False,
+        )
+
+        # line: cumulative spend (Cr)
+        fig.add_trace(
+            go.Scatter(
+                x=monthly_total_spend["Month_Str"],
+                y=monthly_total_spend["Cumulative Spend (Cr ₹)"],
+                mode="lines+markers",
+                name="Cumulative Spend (Cr ₹)",
+                line=dict(width=3, color="darkblue"),
+                marker=dict(size=8),
+                hovertemplate="₹ %{y:.2f} Cr<br>%{x}<extra></extra>"
+            ),
+            secondary_y=True,
+        )
+
+        # layout and axis titles
+        fig.update_layout(
+            title="Monthly Total Spend with Cumulative Value",
+            xaxis=dict(tickangle=-45),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=70, b=120),
+        )
+
+        fig.update_yaxes(title_text="Monthly Spend (Cr ₹)", secondary_y=False)
+        fig.update_yaxes(title_text="Cumulative Spend (Cr ₹)", secondary_y=True)
+
+        st.plotly_chart(fig, use_container_width=True)
+
+
+
+# ------------------------------------
+# 26) Monthly Spend Trend by Entity
+# ------------------------------------
+st.subheader("💹 Monthly Spend Trend by Entity")
+spend_df = filtered_df.copy()
+spend_df["PO Month"] = (
+    pd.to_datetime(spend_df["Po create Date"], errors="coerce")
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+
+monthly_spend = (
+    spend_df.dropna(subset=["PO Month"])
+    .groupby(["PO Month", "Entity"], as_index=False)["Net Amount"]
+    .sum()
+)
+monthly_spend["Spend (Cr ₹)"] = monthly_spend["Net Amount"] / 1e7
+
+# Convert timestamp to string like "Apr-2023", "May-2023", etc.
+monthly_spend["Month_Str"] = monthly_spend["PO Month"].dt.strftime("%b-%Y")
+
+fig_spend = px.line(
+    monthly_spend,
+    x="Month_Str",
+    y="Spend (Cr ₹)",
+    color="Entity",
+    markers=True,
+    title="Monthly Spend Trend by Entity",
+    labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"},
+)
+fig_spend.update_layout(xaxis_tickangle=-45)
+st.plotly_chart(fig_spend, use_container_width=True)
+
+
 # ------------------------------------
 # 11) PR → PO Lead Time by Buyer Type & Buyer
 # ------------------------------------
@@ -362,28 +512,115 @@ monthly_summary["Month"] = monthly_summary["Month"].astype(str)
 st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
 # ------------------------------------
-# 13) Procurement Category Spend
+# 13) Procurement Category Spend (Top 15, Descending, Excluding <0)
 # ------------------------------------
-st.subheader("📦 Procurement Category Spend")
-if "Procurement Category" in filtered_df.columns:
+st.subheader("📦 Top 15 Procurement Categories by Spend (Descending)")
+
+if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
     cat_spend = (
         filtered_df.groupby("Procurement Category")["Net Amount"]
         .sum()
         .reset_index()
     )
+
+    # Exclude negative spend
+    cat_spend = cat_spend[cat_spend["Net Amount"] > 0]
+
+    # Sort descending and keep Top 15
+    cat_spend = cat_spend.sort_values(by="Net Amount", ascending=False).head(15)
+
+    # Add Spend in Cr ₹
     cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
 
+    # Plot
     fig_cat = px.bar(
         cat_spend,
         x="Procurement Category",
         y="Spend (Cr ₹)",
-        title="Spend by Category",
+        title="Top 15 Procurement Categories by Spend",
         labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
+        text="Spend (Cr ₹)"
     )
+    fig_cat.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig_cat.update_layout(xaxis_tickangle=-45)
+
     st.plotly_chart(fig_cat, use_container_width=True)
 else:
-    st.info("ℹ️ No 'Procurement Category' column found.")
+    st.info("ℹ️ No 'Procurement Category' or 'Net Amount' column found.")
+
+# ------------------------------------
+#  PR Budget Code Spend (Top 15, Descending, Excluding <0)
+# ------------------------------------
+st.subheader("🏷️ Top 15 PR Budget Codes by Spend (Descending)")
+
+if "PR Budget Code" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    budget_spend = (
+        filtered_df.groupby("PR Budget Code")["Net Amount"]
+        .sum()
+        .reset_index()
+    )
+
+    # Exclude negative/zero spend
+    budget_spend = budget_spend[budget_spend["Net Amount"] > 0]
+
+    # Sort descending and keep Top 15
+    budget_spend = budget_spend.sort_values(by="Net Amount", ascending=False).head(15)
+
+    # Add Spend in Cr ₹
+    budget_spend["Spend (Cr ₹)"] = budget_spend["Net Amount"] / 1e7
+
+    # Plot
+    fig_budget = px.bar(
+        budget_spend,
+        x="PR Budget Code",
+        y="Spend (Cr ₹)",
+        title="Top 15 PR Budget Codes by Spend",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PR Budget Code": "PR Budget Code"},
+        text="Spend (Cr ₹)"
+    )
+    fig_budget.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_budget.update_layout(xaxis_tickangle=-45)
+
+    st.plotly_chart(fig_budget, use_container_width=True)
+else:
+    st.info("ℹ️ No 'PR Budget Code' or 'Net Amount' column found.")
+
+# ------------------------------------
+#  PR Budget Description Spend (Top 15, Descending, Excluding <0)
+# ------------------------------------
+st.subheader("📝 Top 15 PR Budget Descriptions by Spend (Descending)")
+
+if "PR Budget description" in filtered_df.columns and "Net Amount" in filtered_df.columns:
+    budget_desc_spend = (
+        filtered_df.groupby("PR Budget description")["Net Amount"]
+        .sum()
+        .reset_index()
+    )
+
+    # Exclude negative/zero spend
+    budget_desc_spend = budget_desc_spend[budget_desc_spend["Net Amount"] > 0]
+
+    # Sort descending and keep Top 15
+    budget_desc_spend = budget_desc_spend.sort_values(by="Net Amount", ascending=False).head(15)
+
+    # Add Spend in Cr ₹
+    budget_desc_spend["Spend (Cr ₹)"] = budget_desc_spend["Net Amount"] / 1e7
+
+    # Plot
+    fig_budget_desc = px.bar(
+        budget_desc_spend,
+        x="PR Budget description",
+        y="Spend (Cr ₹)",
+        title="Top 15 PR Budget Descriptions by Spend",
+        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PR Budget description": "PR Budget Description"},
+        text="Spend (Cr ₹)"
+    )
+    fig_budget_desc.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_budget_desc.update_layout(xaxis_tickangle=-45)
+
+    st.plotly_chart(fig_budget_desc, use_container_width=True)
+else:
+    st.info("ℹ️ No 'PR Budget description' or 'Net Amount' column found.")
 
 # ------------------------------------
 # 14) PR → PO Aging Buckets
@@ -838,39 +1075,6 @@ fig_monthly_po.update_traces(textposition="outside")
 st.plotly_chart(fig_monthly_po, use_container_width=True)
 
 # ------------------------------------
-# 26) Monthly Spend Trend by Entity
-# ------------------------------------
-st.subheader("💹 Monthly Spend Trend by Entity")
-spend_df = filtered_df.copy()
-spend_df["PO Month"] = (
-    pd.to_datetime(spend_df["Po create Date"], errors="coerce")
-    .dt.to_period("M")
-    .dt.to_timestamp()
-)
-
-monthly_spend = (
-    spend_df.dropna(subset=["PO Month"])
-    .groupby(["PO Month", "Entity"], as_index=False)["Net Amount"]
-    .sum()
-)
-monthly_spend["Spend (Cr ₹)"] = monthly_spend["Net Amount"] / 1e7
-
-# Convert timestamp to string like "Apr-2023", "May-2023", etc.
-monthly_spend["Month_Str"] = monthly_spend["PO Month"].dt.strftime("%b-%Y")
-
-fig_spend = px.line(
-    monthly_spend,
-    x="Month_Str",
-    y="Spend (Cr ₹)",
-    color="Entity",
-    markers=True,
-    title="Monthly Spend Trend by Entity",
-    labels={"Month_Str": "Month", "Spend (Cr ₹)": "Spend (Cr ₹)"},
-)
-fig_spend.update_layout(xaxis_tickangle=-45)
-st.plotly_chart(fig_spend, use_container_width=True)
-
-# ------------------------------------
 # 27) Today’s Snapshot (KPIs)
 # ------------------------------------
 st.subheader("📅 Today’s Snapshot")
@@ -981,4 +1185,3 @@ else:
 # ------------------------------------
 # 31) End of Dashboard
 # ------------------------------------
-
