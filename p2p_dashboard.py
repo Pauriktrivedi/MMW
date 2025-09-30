@@ -473,142 +473,66 @@ fig_spend = px.line(
 fig_spend.update_layout(xaxis_tickangle=-45)
 st.plotly_chart(fig_spend, use_container_width=True)
 
-
-# ------------------------------------
-#  Category Spend Chart Sorted Descending
-# ------------------------------------
-if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
-    cat_spend = (
-        filtered_df.groupby("Procurement Category")["Net Amount"]
-        .sum()
-        .sort_values(ascending=False)
-        .reset_index()
-    )
-    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
-
-    fig_cat = px.bar(
-        cat_spend,
-        x="Procurement Category",
-        y="Spend (Cr ₹)",
-        title="Spend by Category (Descending)",
-        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
-    )
-    fig_cat.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig_cat, use_container_width=True)
-else:
-    st.warning("'Procurement Category' or 'Net Amount' column missing from data.")
-
-
-# ------------------------------------
-# 13) Procurement Category Spend (Top 15, Descending, Excluding <0)
-# ------------------------------------
-st.subheader("📦 Top 15 Procurement Categories by Spend (Descending)")
+# -----------------------------
+# Procurement Category Spend (single, deduped)
+# -----------------------------
+st.subheader("📦 Procurement Category Spend (Top 15 Descending, Excluding ≤ 0)")
 
 if "Procurement Category" in filtered_df.columns and "Net Amount" in filtered_df.columns:
-    cat_spend = (
-        filtered_df.groupby("Procurement Category")["Net Amount"]
+    # Aggregate
+    cat_tot = (
+        filtered_df
+        .groupby("Procurement Category", dropna=False)["Net Amount"]
         .sum()
         .reset_index()
     )
+    # Drop non-positive values
+    cat_tot = cat_tot[cat_tot["Net Amount"] > 0]
 
-    # Exclude negative spend
-    cat_spend = cat_spend[cat_spend["Net Amount"] > 0]
+    if cat_tot.empty:
+        st.info("No positive spend values found for Procurement Category.")
+    else:
+        # Top 15 descending
+        top15_cat = cat_tot.sort_values("Net Amount", ascending=False).head(15).copy()
+        top15_cat["Spend (Cr ₹)"] = top15_cat["Net Amount"] / 1e7
+        top15_cat = top15_cat.reset_index(drop=True)
 
-    # Sort descending and keep Top 15
-    cat_spend = cat_spend.sort_values(by="Net Amount", ascending=False).head(15)
+        # Format table for display
+        display_tbl = top15_cat[["Procurement Category", "Spend (Cr ₹)"]].copy()
+        display_tbl["Spend (Cr ₹)"] = display_tbl["Spend (Cr ₹)"].map("{:,.2f}".format)
+        st.markdown("### Top 15 Procurement Categories by Spend")
+        st.dataframe(display_tbl, use_container_width=True)
 
-    # Add Spend in Cr ₹
-    cat_spend["Spend (Cr ₹)"] = cat_spend["Net Amount"] / 1e7
+        # Plot Top 15
+        fig_cat_top15 = px.bar(
+            top15_cat,
+            x="Procurement Category",
+            y="Spend (Cr ₹)",
+            title="Top 15 Procurement Categories by Spend (Descending)",
+            text="Spend (Cr ₹)"
+        )
+        fig_cat_top15.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig_cat_top15.update_layout(xaxis_tickangle=-45, margin=dict(t=60, b=140))
+        st.plotly_chart(fig_cat_top15, use_container_width=True)
 
-    # Plot
-    fig_cat = px.bar(
-        cat_spend,
-        x="Procurement Category",
-        y="Spend (Cr ₹)",
-        title="Top 15 Procurement Categories by Spend",
-        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "Procurement Category": "Category"},
-        text="Spend (Cr ₹)"
-    )
-    fig_cat.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig_cat.update_layout(xaxis_tickangle=-45)
-
-    st.plotly_chart(fig_cat, use_container_width=True)
+        # Optional: full descending chart (first 100) — comment out if not required
+        full_desc = cat_tot.sort_values("Net Amount", ascending=False).copy()
+        full_desc["Spend (Cr ₹)"] = full_desc["Net Amount"] / 1e7
+        if len(full_desc) > 15:
+            st.markdown("### Full Procurement Category Spend (Descending)")
+            fig_cat_full = px.bar(
+                full_desc.head(100),
+                x="Procurement Category",
+                y="Spend (Cr ₹)",
+                title="Spend by Procurement Category (Descending, top 100)",
+                text="Spend (Cr ₹)"
+            )
+            fig_cat_full.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+            fig_cat_full.update_layout(xaxis_tickangle=-45, margin=dict(t=60, b=140))
+            st.plotly_chart(fig_cat_full, use_container_width=True)
 else:
-    st.info("ℹ️ No 'Procurement Category' or 'Net Amount' column found.")
+    st.info("ℹ️ 'Procurement Category' or 'Net Amount' column missing from data.")
 
-# ------------------------------------
-#  PR Budget Code Spend (Top 15, Descending, Excluding <0)
-# ------------------------------------
-st.subheader("🏷️ Top 15 PR Budget Codes by Spend (Descending)")
-
-if "PR Budget Code" in filtered_df.columns and "Net Amount" in filtered_df.columns:
-    budget_spend = (
-        filtered_df.groupby("PR Budget Code")["Net Amount"]
-        .sum()
-        .reset_index()
-    )
-
-    # Exclude negative/zero spend
-    budget_spend = budget_spend[budget_spend["Net Amount"] > 0]
-
-    # Sort descending and keep Top 15
-    budget_spend = budget_spend.sort_values(by="Net Amount", ascending=False).head(15)
-
-    # Add Spend in Cr ₹
-    budget_spend["Spend (Cr ₹)"] = budget_spend["Net Amount"] / 1e7
-
-    # Plot
-    fig_budget = px.bar(
-        budget_spend,
-        x="PR Budget Code",
-        y="Spend (Cr ₹)",
-        title="Top 15 PR Budget Codes by Spend",
-        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PR Budget Code": "PR Budget Code"},
-        text="Spend (Cr ₹)"
-    )
-    fig_budget.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig_budget.update_layout(xaxis_tickangle=-45)
-
-    st.plotly_chart(fig_budget, use_container_width=True)
-else:
-    st.info("ℹ️ No 'PR Budget Code' or 'Net Amount' column found.")
-
-# ------------------------------------
-#  PR Budget Description Spend (Top 15, Descending, Excluding <0)
-# ------------------------------------
-st.subheader("📝 Top 15 PR Budget Descriptions by Spend (Descending)")
-
-if "PR Budget description" in filtered_df.columns and "Net Amount" in filtered_df.columns:
-    budget_desc_spend = (
-        filtered_df.groupby("PR Budget description")["Net Amount"]
-        .sum()
-        .reset_index()
-    )
-
-    # Exclude negative/zero spend
-    budget_desc_spend = budget_desc_spend[budget_desc_spend["Net Amount"] > 0]
-
-    # Sort descending and keep Top 15
-    budget_desc_spend = budget_desc_spend.sort_values(by="Net Amount", ascending=False).head(15)
-
-    # Add Spend in Cr ₹
-    budget_desc_spend["Spend (Cr ₹)"] = budget_desc_spend["Net Amount"] / 1e7
-
-    # Plot
-    fig_budget_desc = px.bar(
-        budget_desc_spend,
-        x="PR Budget description",
-        y="Spend (Cr ₹)",
-        title="Top 15 PR Budget Descriptions by Spend",
-        labels={"Spend (Cr ₹)": "Spend (Cr ₹)", "PR Budget description": "PR Budget Description"},
-        text="Spend (Cr ₹)"
-    )
-    fig_budget_desc.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig_budget_desc.update_layout(xaxis_tickangle=-45)
-
-    st.plotly_chart(fig_budget_desc, use_container_width=True)
-else:
-    st.info("ℹ️ No 'PR Budget description' or 'Net Amount' column found.")
 
 # ------------------------------------
 # 11) PR → PO Lead Time by Buyer Type & Buyer
