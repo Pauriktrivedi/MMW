@@ -1054,32 +1054,3 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 
 
 
-    # interactive details: select a department to see rows
-    dept_list = ['(All shown)'] + plot_df['Main Department'].tolist()
-    sel = st.selectbox(
-        'Show rows for department',
-        dept_list,
-        key="dept_rows_select"
-    )
-    if sel:
-        if sel == '(All shown)':
-            rows = merged[merged['Main Department'].isin(plot_df['Main Department'])]
-        else:
-            rows = merged[merged['Main Department'] == sel]
-
-        if rows.empty:
-            st.info('No rows for selection.')
-        else:
-            show_cols = [c for c in [
-                'PR Number', 'Purchase Doc', 'PR Date Submitted', 'Po create Date',
-                'PR Budget Code', 'PO Vendor', 'Product Name', 'Net Amount', 'Main Department'
-            ] if c in rows.columns]
-            st.dataframe(rows[show_cols], use_container_width=True)
-            csv = rows.to_csv(index=False)
-            st.download_button(
-                '⬇️ Download rows (CSV)',
-                csv,
-                file_name=f"{sel.replace(' ', '_')}_rows.csv",
-                mime='text/csv'
-            )
-
