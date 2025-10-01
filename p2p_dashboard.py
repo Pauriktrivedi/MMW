@@ -1270,11 +1270,41 @@ if "Net Amount" in filtered_df.columns:
         st.plotly_chart(px.line(m/1e7, labels={'value':'Spend (Cr ₹)','index':'Month'}, title=f"{dept_pick} — Monthly Spend"), use_container_width=True)
 
     st.markdown("#### 📄 Line-level detail")
-    show_cols = [c for c in ["PR Number","Purchase Doc","PO Vendor","Procurement Category","Product Name","Item Description","PO Qty","PO Unit Rate","Net Amount","PO Create Date","PO Delivery Date","PR Date Submitted"] if c in detail.columns]
-    st.dataframe(detail[show_cols] if show_cols else detail, use_container_width=True)
+    # Build the exact columns the user wants, with robust fallbacks
+    dept_col = None
+    for cand in ["Dept.Chart", "Dept.Final", "PO Department", "PO Dept", "PR Department", "PR Dept", "Department"]:
+        if cand in detail.columns:
+            dept_col = cand
+            break
+    subcat_col = None
+    for cand in ["Subcat.Final", "Subcategory", "Sub Category", "Sub-Category"]:
+        if cand in detail.columns:
+            subcat_col = cand
+            break
+
+    desired_order = [
+        "PO Budget Code",
+        subcat_col if subcat_col else "",
+        dept_col if dept_col else "",
+        "Purchase Doc",
+        "PR Number",
+        "Procurement Category",
+        "Product Name",
+        "Item Description",
+    ]
+    # Keep only columns that actually exist
+    show_cols = [c for c in desired_order if c and c in detail.columns]
+
+    # Pretty rename for display
+    disp = detail[show_cols].rename(columns={
+        subcat_col: "Subcategory" if subcat_col else "Subcategory",
+        dept_col: "Department" if dept_col else "Department",
+    }) if show_cols else detail
+
+    st.dataframe(disp, use_container_width=True)
     st.download_button(
         "⬇️ Download Department Lines (CSV)",
-        (detail[show_cols] if show_cols else detail).to_csv(index=False),
+        disp.to_csv(index=False),
         file_name=f"dept_drilldown_{str(dept_pick).replace(' ','_')}.csv",
         mime="text/csv",
         key=f"dl_dept_lines_{str(dept_pick)}",
@@ -1302,3 +1332,4 @@ else:
 # 34) End of Dashboard
 # ------------------------------------
 # ------------------------------------
+
