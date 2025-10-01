@@ -1,5 +1,6 @@
 # p2p_dashboard.py
 
+from __future__ import annotations
 import pandas as pd
 import streamlit as st
 import plotly.express as px
