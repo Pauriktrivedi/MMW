@@ -983,99 +983,183 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # 31) End of Dashboard
 # ------------------------------------
 
-# ---------- INSERT THIS SNIPPET IMMEDIATELY AFTER LOADING + MAPPING ----------
+# dept_spend_only.py
+import re
+from io import BytesIO
+from typing import List, Optional
+
+import pandas as pd
 import numpy as np
+import streamlit as st
+import plotly.express as px
 
-# 1) Ensure Net Amount numeric & present
-if "Net Amount" in df.columns:
-    df["Net Amount"] = pd.to_numeric(df["Net Amount"], errors="coerce").fillna(0.0)
-else:
-    # fallback patterns found earlier: "PR Value" exists — use that if Net Amount missing
-    if "PR Value" in df.columns:
-        df["Net Amount"] = pd.to_numeric(df["PR Value"], errors="coerce").fillna(0.0)
+st.set_page_config(page_title="Department Spend (Simple)", layout="wide")
+
+# -------------------------
+# Helpers
+# -------------------------
+def normalize_amount_col_name(name: str) -> str:
+    return str(name).strip()
+
+def detect_amount_col(df: pd.DataFrame) -> Optional[str]:
+    patterns = [r"\bnet\s*amount\b", r"\bnetamount\b", r"\bnet\s*value\b", r"\bpr\s*value\b",
+                r"\btotal\s*amount\b", r"\bamount\b", r"\bvalue\b"]
+    for pat in patterns:
+        for c in df.columns:
+            if re.search(pat, str(c), flags=re.I):
+                return c
+    # fallback: any numeric-looking column
+    for c in df.columns:
+        try:
+            s = pd.to_numeric(df[c].astype(str).str.replace(r"[^\d\.\-]", "", regex=True), errors="coerce")
+            if s.notna().sum() > 0 and s.mean() != 0:
+                return c
+        except Exception:
+            continue
+    return None
+
+def detect_dept_col(df: pd.DataFrame) -> Optional[str]:
+    patterns = [r"\bdepartment\b", r"\bdept\b", r"\bpo\s*department\b", r"\bpr\s*department\b"]
+    for pat in patterns:
+        for c in df.columns:
+            if re.search(pat, str(c), flags=re.I):
+                return c
+    # fallback: any column that looks like department (few unique short strings)
+    for c in df.columns:
+        vals = df[c].dropna().astype(str)
+        if 2 < vals.nunique() < 200 and vals.str.len().median() < 40 and any(re.search(r"[A-Za-z]", v) for v in vals.sample(min(20, len(vals))).astype(str)):
+            return c
+    return None
+
+def read_any(path_or_buffer):
+    if hasattr(path_or_buffer, "read"):
+        # uploaded file-like
+        try:
+            return pd.read_excel(path_or_buffer)
+        except Exception:
+            path_or_buffer.seek(0)
+            return pd.read_csv(path_or_buffer)
     else:
-        df["Net Amount"] = 0.0
-        st.warning("Net Amount not found — created zero column. Check source headers.")
+        # local path
+        try:
+            return pd.read_excel(path_or_buffer)
+        except Exception:
+            return pd.read_csv(path_or_buffer)
 
-# 2) Build canonical BudgetCode column: prefer PO Budget Code → PR Budget Code → Item Code
-budget_candidates_preferred = ["PO Budget Code", "PR Budget Code", "Item Code", "PR BudgetCode", "PO BudgetCode"]
-found_budget_col = None
-for cand in budget_candidates_preferred:
-    if cand in df.columns:
-        found_budget_col = cand
-        break
+def download_bytes(df: pd.DataFrame) -> bytes:
+    buf = BytesIO()
+    df.to_csv(buf, index=False)
+    return buf.getvalue()
 
-if found_budget_col:
-    df["BudgetCode"] = df[found_budget_col].map(lambda x: normalize_code(x) if pd.notna(x) else None)
+# -------------------------
+# Data load UI
+# -------------------------
+st.sidebar.header("Data source")
+use_local = st.sidebar.checkbox("Use local files (MEPL1/MLPL1/mmw1/mmpl1)", value=True)
+uploads = None
+if not use_local:
+    uploads = st.sidebar.file_uploader("Upload files (xlsx/csv) - multiple", accept_multiple_files=True, type=["xlsx","xls","csv"])
+
+# load files
+frames: List[pd.DataFrame] = []
+if use_local:
+    local_files = [("MEPL1.xlsx","MEPL"), ("MLPL1.xlsx","MLPL"), ("mmw1.xlsx","MMW"), ("mmpl1.xlsx","MMPL")]
+    for path, tag in local_files:
+        try:
+            tmp = read_any(path)
+            tmp["Entity"] = tag
+            frames.append(tmp)
+        except Exception as e:
+            st.sidebar.info(f"Could not read {path}: {e}")
 else:
-    # last-resort: search any column name containing 'budget' or 'code' or 'item'
-    fallback = next((c for c in df.columns if re.search(r"budget|code|item", str(c), flags=re.I)), None)
-    if fallback:
-        df["BudgetCode"] = df[fallback].map(lambda x: normalize_code(x) if pd.notna(x) else None)
-    else:
-        df["BudgetCode"] = None
-        st.warning("No budget-like column found. Budget mapping will be empty.")
+    if uploads:
+        for up in uploads:
+            try:
+                tmp = read_any(up)
+                tag = re.sub(r"\W+","", up.name.split(".")[0]).upper()[:6]
+                tmp["Entity"] = tag
+                frames.append(tmp)
+            except Exception as e:
+                st.sidebar.info(f"Could not read upload {getattr(up,'name',str(up))}: {e}")
 
-# 3) If you have a mapping DataFrame (mapping with columns BudgetCode, Department, Subcategory),
-#    ensure BudgetCode normalized in mapping too (so merges match)
-if 'mapping' in globals() and mapping is not None:
-    mapping["BudgetCode"] = mapping["BudgetCode"].map(lambda x: normalize_code(x) if pd.notna(x) else None)
-    mapping = mapping.drop_duplicates(subset=["BudgetCode"])
-    # merge mapping into df (if not already merged)
-    if "Department" not in df.columns or "Subcategory" not in df.columns:
-        df = df.merge(mapping, on="BudgetCode", how="left", suffixes=("", "_map"))
+if not frames:
+    st.warning("No data loaded yet. Upload files or enable local files in the sidebar.")
+    st.stop()
 
-# 4) Build canonical Department/Subcategory columns (mapping first, then PO/PR Department)
-# prefer mapping Department if present, else PO Department, else PR Department
-def first_non_null(*vals):
-    for v in vals:
-        if pd.notna(v) and str(v).strip() != "":
-            return v
-    return np.nan
+df = pd.concat(frames, ignore_index=True)
+# normalize columns
+df.columns = [str(c).strip() for c in df.columns]
 
-# If mapping merged created columns like 'Department' & 'Subcategory' already, use them; otherwise build
-if "Department" not in df.columns:
-    # fallback column names
-    df["Department"] = df.apply(lambda r: first_non_null(r.get("PO Department"), r.get("PR Department")), axis=1)
+# -------------------------
+# Auto-detect amount and department columns
+# -------------------------
+amt_col = detect_amount_col(df)
+dept_col = detect_dept_col(df)
+
+st.sidebar.write("Detected columns:")
+st.sidebar.write(f"Amount-like column: {amt_col}")
+st.sidebar.write(f"Department-like column: {dept_col}")
+
+if not amt_col:
+    st.error("Could not detect any numeric amount column. Open a sample of your file and check headers.")
+    st.stop()
+
+if not dept_col:
+    st.error("Could not detect any department column. Open a sample of your file and check headers.")
+    st.stop()
+
+# canonicalize
+df["Net Amount"] = pd.to_numeric(df[amt_col], errors="coerce").fillna(0.0)
+df["Department_Canon"] = df[dept_col].astype(str).replace({"nan": np.nan})
+
+# optional useful columns to show in drill-down
+possible_purchase_col = next((c for c in df.columns if re.search(r"purchase\s*doc|purchasedoc|purchase doc|po\s*no|purchase", c, flags=re.I)), None)
+possible_vendor_col = next((c for c in df.columns if re.search(r"vendor|supplier", c, flags=re.I)), None)
+possible_item_col = next((c for c in df.columns if re.search(r"product|item\s*name|item", c, flags=re.I)), None)
+
+# -------------------------
+# Department spend computation
+# -------------------------
+agg = (
+    df.dropna(subset=["Department_Canon"])
+      .groupby("Department_Canon", dropna=False)["Net Amount"]
+      .sum()
+      .reset_index()
+      .sort_values("Net Amount", ascending=False)
+)
+agg["Spend (Cr ₹)"] = agg["Net Amount"] / 1e7
+
+st.title("🏢 Department-wise Spend")
+st.markdown("Bar chart shows total spend by Department. Select departments to see underlying POs/lines below.")
+
+fig = px.bar(agg, x="Department_Canon", y="Spend (Cr ₹)", text="Spend (Cr ₹)", title="Spend by Department (sorted desc)")
+fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+fig.update_layout(xaxis_tickangle=-45, height=500, margin=dict(b=200))
+st.plotly_chart(fig, use_container_width=True)
+
+# allow user to pick departments for drilldown
+dept_list = agg["Department_Canon"].dropna().tolist()
+selected = st.multiselect("Select Department(s) to drill down", options=dept_list, default=[] , key="dept_sel")
+
+if selected:
+    cols_to_show = []
+    if possible_purchase_col: cols_to_show.append(possible_purchase_col)
+    if possible_vendor_col: cols_to_show.append(possible_vendor_col)
+    if possible_item_col: cols_to_show.append(possible_item_col)
+    cols_to_show += ["Net Amount", "Department_Canon"]
+    # ensure unique & present
+    cols_to_show = [c for c in cols_to_show if c in df.columns or c in ["Net Amount","Department_Canon"]]
+    detail = df[df["Department_Canon"].isin(selected)][cols_to_show].copy()
+    # present amounts in Cr for readability
+    detail["Net Amount (Cr)"] = detail["Net Amount"] / 1e7
+    st.markdown(f"### Detail rows: {len(detail)}")
+    st.dataframe(detail, use_container_width=True)
+    st.download_button("⬇️ Download detail CSV", download_bytes(detail), file_name="dept_details.csv", mime="text/csv")
 else:
-    # if mapping created Department_map, prefer it
-    if "Department_map" in df.columns:
-        df["Department"] = df.apply(lambda r: first_non_null(r.get("Department_map"), r.get("PO Department"), r.get("PR Department"), r.get("Department")), axis=1)
+    st.info("Select one or more departments from the selector above to view drill-down rows.")
 
-# Subcategory: prefer mapping subcategory (if exists), else keep existing 'Subcategory' or NaN
-if "Subcategory" not in df.columns:
-    if "Subcategory_map" in df.columns:
-        df["Subcategory"] = df["Subcategory_map"]
-    else:
-        df["Subcategory"] = np.nan
-else:
-    if "Subcategory_map" in df.columns:
-        df["Subcategory"] = df.apply(lambda r: first_non_null(r.get("Subcategory_map"), r.get("Subcategory")), axis=1)
-
-# 5) Safe % Received calculation to avoid inf
-# normalize delivery columns names if present
-if "ReceivedQTY" in df.columns and "PO Quantity" in df.columns:
-    df["Received Qty"] = pd.to_numeric(df["ReceivedQTY"], errors="coerce").fillna(0.0)
-    df["PO Qty"] = pd.to_numeric(df["PO Quantity"], errors="coerce").fillna(0.0)
-    # avoid divide-by-zero
-    df["% Received"] = np.where(df["PO Qty"] > 0, (df["Received Qty"] / df["PO Qty"]) * 100, np.nan)
-    # replace inf/nan with 0 if you'd rather
-    df["% Received"] = df["% Received"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-else:
-    # if not present, create columns to avoid downstream errors
-    if "Received Qty" not in df.columns:
-        df["Received Qty"] = 0.0
-    if "PO Qty" not in df.columns:
-        df["PO Qty"] = 0.0
-    if "% Received" not in df.columns:
-        df["% Received"] = 0.0
-
-# 6) Final quick sanity log (visible in app) so you can confirm before charts render
-st.sidebar.write("Sanity checks:")
-st.sidebar.write(f"Net Amount col used: {'Net Amount' if 'Net Amount' in df.columns else 'None'}")
-st.sidebar.write(f"Budget code source: {found_budget_col if found_budget_col else 'None found (fallback used)'}")
-st.sidebar.write(f"Department column in use: {'Department' if 'Department' in df.columns else 'None'}")
-st.sidebar.write(f"Subcategory column in use: {'Subcategory' if 'Subcategory' in df.columns else 'None'}")
-# ---------- END SNIPPET ----------
-
+# quick sample of raw columns for debugging (collapsible)
+with st.expander("Show raw column names and sample rows"):
+    st.write(df.columns.tolist())
+    st.dataframe(df.head(5))
 
