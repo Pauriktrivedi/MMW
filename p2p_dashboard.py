@@ -1277,6 +1277,7 @@ if "Net Amount" in filtered_df.columns:
         (detail[show_cols] if show_cols else detail).to_csv(index=False),
         file_name=f"dept_drilldown_{str(dept_pick).replace(' ','_')}.csv",
         mime="text/csv",
+        key=f"dl_dept_lines_{str(dept_pick)}",
     )
 
     with st.expander("View table / download"):
@@ -1286,6 +1287,7 @@ if "Net Amount" in filtered_df.columns:
             dept_spend.to_csv(index=False),
             "department_spend.csv",
             "text/csv",
+            key="dl_dept_spend_csv",
         )
         st.download_button(
             "⬇️ Download Department Spend (CSV)",
