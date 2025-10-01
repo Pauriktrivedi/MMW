@@ -1186,39 +1186,41 @@ else:
 # ------------------------------------
 # 33) Department-wise Spend — robust (mapped if possible)
 # ------------------------------------
-# --- Department-wise Spend: robust mapping (exact + unique suffix) ---
-st.subheader("🏢 Department-wise Spend")
-
-filtered_df = filtered_df.copy()
-filtered_df["Dept.Chart"], filtered_df["Subcat.Chart"] = pd.NA, pd.NA
-
-# Normalizer for hierarchical codes (handles &, dots, spaces)
 def _norm_code_series(s: pd.Series) -> pd.Series:
     s = s.astype(str).str.strip().str.upper()
     s = s.str.replace("\xa0", " ", regex=False)
     s = s.str.replace("&", "AND", regex=False)
     s = s.str.replace(r"\s+", " ", regex=True)
-    s = s.str.replace(r"\.+$", "", regex=True)    # remove trailing dots
-    s = s.str.replace(r"\.{2,}", ".", regex=True) # collapse multiple dots
-    s = s.str.replace(" ", "")                    # remove internal spaces
+    s = s.str.replace(r"\.+$", "", regex=True)  # remove trailing dots
+    s = s.str.replace(r"\.{2,}", ".", regex=True)  # collapse multiple dots
+    s = s.str.replace(" ", "")  # remove stray internal spaces
     return s
 
-# 1) Try mapping via master file
+
+# ------------------------------------
+# 33) Department-wise Spend — robust (mapped if possible) + Mapping QA
+# ------------------------------------
+st.subheader("🏢 Department-wise Spend")
+
+# Always create a working column inside filtered_df
+filtered_df = filtered_df.copy()
+filtered_df["Dept.Chart"], filtered_df["Subcat.Chart"] = pd.NA, pd.NA
+filtered_df["__Dept.MapSrc"] = "UNMAPPED"  # EXACT | SUF2 | FALLBACK | UNMAPPED
+
+# Try mapping via Budget Code → Department/Subcategory from the mapping file
 try:
     bm = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
     bm.columns = bm.columns.astype(str).str.strip()
-
     if ("Budget Code" in bm.columns) and ("PO Budget Code" in filtered_df.columns or "PR Budget Code" in filtered_df.columns):
         bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first").copy()
-
-        # pick Department & Subcategory columns
+        # pick likely department & subcategory columns
         dept_cols = [c for c in bm_u.columns if ("dept" in c.lower()) or ("department" in c.lower())]
         subc_cols = [c for c in bm_u.columns if ("subcat" in c.lower()) or ("sub category" in c.lower()) or ("subcategory" in c.lower())]
         dept_col = dept_cols[0] if dept_cols else None
         subc_col = subc_cols[0] if subc_cols else None
 
-        # normalize mapping keys
-        bm_u["__code_norm"] = _norm_code_series(bm_u["Budget Code"])
+        # normalized key for mapping dataframe
+        bm_u["__code_norm"] = _norm_code_series(bm_u["Budget Code"]) if "Budget Code" in bm_u.columns else pd.Series(pd.NA, index=bm_u.index)
         if dept_col:
             bm_u["__dept"] = bm_u[dept_col].astype(str).str.strip()
         if subc_col:
@@ -1228,11 +1230,10 @@ try:
         dept_map_exact = dict(zip(bm_u["__code_norm"], bm_u["__dept"])) if dept_col else {}
         subc_map_exact = dict(zip(bm_u["__code_norm"], bm_u["__subc"])) if subc_col else {}
 
-        # unique last-2 segment suffix maps (cross-entity reuse)
+        # unique last-2-segment suffix maps (for cross-entity reuse)
         def _last2(code: str) -> str:
-            parts = str(code).split(".")
-            return ".".join(parts[-2:]) if len(parts) >= 2 else str(code)
-
+            parts = str(code).split('.')
+            return '.'.join(parts[-2:]) if len(parts) >= 2 else str(code)
         if dept_col:
             bm_u["__suf2"] = bm_u["__code_norm"].apply(_last2)
             suf2_counts = bm_u["__suf2"].value_counts()
@@ -1240,44 +1241,77 @@ try:
             dept_map_suf2 = dict(zip(suf2_unique["__suf2"], suf2_unique["__dept"]))
         else:
             dept_map_suf2 = {}
-        if subc_col and "suf2_unique" in locals():
+        if subc_col and 'suf2_unique' in locals():
             subc_map_suf2 = dict(zip(suf2_unique["__suf2"], suf2_unique["__subc"]))
         else:
             subc_map_suf2 = {}
 
-        # normalize codes from filtered_df (PO first, then PR)
+        # normalize codes from filtered_df
         if "PO Budget Code" in filtered_df.columns:
-            code_ser = _norm_code_series(filtered_df["PO Budget Code"])
+            code_ser = _norm_code_series(filtered_df["PO Budget Code"])  # type: ignore
         else:
             code_ser = pd.Series([pd.NA] * len(filtered_df), index=filtered_df.index)
         if code_ser.isna().all() and "PR Budget Code" in filtered_df.columns:
-            code_ser = _norm_code_series(filtered_df["PR Budget Code"])
+            code_ser = _norm_code_series(filtered_df["PR Budget Code"])  # type: ignore
 
-        # exact
+        # try exact first
         dept_exact = code_ser.map(dept_map_exact) if dept_map_exact else pd.Series(pd.NA, index=filtered_df.index)
         subc_exact = code_ser.map(subc_map_exact) if subc_map_exact else pd.Series(pd.NA, index=filtered_df.index)
 
-        # suffix-2 (only if unique in master)
+        # then unique suffix-2
         code_suf2 = code_ser.fillna("").apply(_last2)
         dept_suf2 = code_suf2.map(dept_map_suf2) if dept_map_suf2 else pd.Series(pd.NA, index=filtered_df.index)
         subc_suf2 = code_suf2.map(subc_map_suf2) if subc_map_suf2 else pd.Series(pd.NA, index=filtered_df.index)
 
-        # assign Dept & Subcat (exact first, then suffix)
-        if dept_col:
-            filtered_df["Dept.Chart"] = filtered_df["Dept.Chart"].combine_first(dept_exact).combine_first(dept_suf2)
-        if subc_col:
-            filtered_df["Subcat.Chart"] = filtered_df["Subcat.Chart"].combine_first(subc_exact).combine_first(subc_suf2)
+        # assign Dept & Subcat + source tags
+        exact_mask = dept_exact.notna()
+        filtered_df.loc[exact_mask, "Dept.Chart"] = dept_exact[exact_mask]
+        filtered_df.loc[exact_mask & subc_exact.notna(), "Subcat.Chart"] = subc_exact[exact_mask]
+        filtered_df.loc[exact_mask, "__Dept.MapSrc"] = "EXACT"
+
+        suf2_mask = (~exact_mask) & dept_suf2.notna()
+        filtered_df.loc[suf2_mask, "Dept.Chart"] = dept_suf2[suf2_mask]
+        filtered_df.loc[suf2_mask & subc_suf2.notna(), "Subcat.Chart"] = subc_suf2[suf2_mask]
+        filtered_df.loc[suf2_mask, "__Dept.MapSrc"] = "SUF2"
 except Exception:
     pass
 
-# 2) Fallback chain from in-file columns if still NA
-if filtered_df["Dept.Chart"].isna().all():
+# Fallback chain from in-file columns if still NA
+pre_fallback_na = filtered_df["Dept.Chart"].isna()
+if pre_fallback_na.all():
     for cand in ["PO Department", "PO Dept", "PR Department", "PR Dept", "Dept.Final", "Department"]:
         if cand in filtered_df.columns:
             filtered_df["Dept.Chart"] = filtered_df["Dept.Chart"].combine_first(filtered_df[cand])
+# mark fallback fills
+fallback_filled = pre_fallback_na & filtered_df["Dept.Chart"].notna() & (filtered_df["__Dept.MapSrc"] == "UNMAPPED")
+filtered_df.loc[fallback_filled, "__Dept.MapSrc"] = "FALLBACK"
 
-# 3) Final fill for display
+# Final safety: if still all NA, label as "Unmapped / Missing"
 filtered_df["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+
+# --- Mapping QA ---
+with st.expander("🧪 Mapping QA (exact vs suffix vs fallback)", expanded=False):
+    src_counts = filtered_df["__Dept.MapSrc"].value_counts(dropna=False).to_dict()
+    st.write({"counts": src_counts})
+
+    # Unmapped list with sample budget codes (normalized) and frequency
+    code_cols_avail = [c for c in ["PO Budget Code", "PR Budget Code"] if c in filtered_df.columns]
+    if code_cols_avail:
+        base_code = filtered_df[code_cols_avail[0]].copy()
+        unm = filtered_df[filtered_df["__Dept.MapSrc"] == "UNMAPPED"].copy()
+        unm["Budget Code (normalized)"] = _norm_code_series(unm[code_cols_avail[0]])
+        summary_unm = unm["Budget Code (normalized)"].value_counts().reset_index()
+        summary_unm.columns = ["Budget Code (normalized)", "Lines"]
+        st.dataframe(summary_unm.head(100), use_container_width=True)
+        st.download_button(
+            "⬇️ Download Unmapped Budget Codes",
+            summary_unm.to_csv(index=False),
+            "unmapped_budget_codes.csv",
+            "text/csv",
+            key="dl_unmapped_codes",
+        )
+    else:
+        st.caption("No Budget Code column present to summarize unmapped.")
 
 # Build chart
 if "Net Amount" in filtered_df.columns:
@@ -1291,8 +1325,100 @@ if "Net Amount" in filtered_df.columns:
         .update_layout(xaxis_tickangle=-45),
         use_container_width=True,
     )
+
+    # --- Drilldown selector ---
+    dd_col1, dd_col2 = st.columns([2,1])
+    with dd_col1:
+        dept_pick = st.selectbox("Drill down: choose a department", dept_spend["Dept.Chart"].tolist())
+    with dd_col2:
+        topn = st.number_input("Show top N vendors/items", min_value=5, max_value=100, value=20, step=5)
+
+    detail = filtered_df[filtered_df["Dept.Chart"].astype(str) == str(dept_pick)].copy()
+    st.markdown(f"### 🔎 Details for **{dept_pick}**")
+
+    # KPIs
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric("Lines", len(detail))
+    k2.metric("PRs", int(detail["PR Number"].nunique()) if "PR Number" in detail.columns else 0)
+    k3.metric("POs", int(detail["Purchase Doc"].nunique()) if "Purchase Doc" in detail.columns else 0)
+    k4.metric("Spend (Cr ₹)", f"{(detail.get('Net Amount', pd.Series(0)).sum()/1e7):,.2f}")
+
+    # Top vendors & items
+    c1,c2 = st.columns(2)
+    if {"PO Vendor","Net Amount"}.issubset(detail.columns):
+        top_v = (
+            detail.groupby("PO Vendor", dropna=False)["Net Amount"].sum().sort_values(ascending=False).head(int(topn)).reset_index()
+        )
+        top_v["Spend (Cr ₹)"] = top_v["Net Amount"]/1e7
+        c1.plotly_chart(px.bar(top_v, x="PO Vendor", y="Spend (Cr ₹)", title="Top Vendors (Cr ₹)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+    if {"Product Name","Net Amount"}.issubset(detail.columns):
+        top_i = (
+            detail.groupby("Product Name", dropna=False)["Net Amount"].sum().sort_values(ascending=False).head(int(topn)).reset_index()
+        )
+        top_i["Spend (Cr ₹)"] = top_i["Net Amount"]/1e7
+        c2.plotly_chart(px.bar(top_i, x="Product Name", y="Spend (Cr ₹)", title="Top Items (Cr ₹)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+
+    # Optional time trend for the picked department
+    dcol = "Po create Date" if "Po create Date" in detail.columns else ("PR Date Submitted" if "PR Date Submitted" in detail.columns else None)
+    if dcol and "Net Amount" in detail.columns:
+        detail[dcol] = pd.to_datetime(detail[dcol], errors="coerce")
+        m = detail.dropna(subset=[dcol]).groupby(detail[dcol].dt.to_period('M'))['Net Amount'].sum().to_timestamp()
+        st.plotly_chart(px.line(m/1e7, labels={'value':'Spend (Cr ₹)','index':'Month'}, title=f"{dept_pick} — Monthly Spend"), use_container_width=True)
+
+    # Line-level detail with mapped Subcategory/Department if available
+    st.markdown("#### 📄 Line-level detail")
+    dept_col = None
+    for cand in ["Dept.Chart", "Dept.Final", "PO Department", "PO Dept", "PR Department", "PR Dept", "Department"]:
+        if cand in detail.columns:
+            dept_col = cand
+            break
+    subcat_col = None
+    for cand in ["Subcat.Chart", "Subcat.Final", "Subcategory", "Sub Category", "Sub-Category"]:
+        if cand in detail.columns:
+            subcat_col = cand
+            break
+
+    desired_order = [
+        "PO Budget Code",
+        subcat_col if subcat_col else "",
+        dept_col if dept_col else "",
+        "Purchase Doc",
+        "PR Number",
+        "Procurement Category",
+        "Product Name",
+        "Item Description",
+    ]
+    show_cols = [c for c in desired_order if c and c in detail.columns]
+    disp = detail[show_cols].rename(columns={
+        subcat_col: "Subcategory" if subcat_col else "Subcategory",
+        dept_col: "Department" if dept_col else "Department",
+    }) if show_cols else detail
+
+    st.dataframe(disp, use_container_width=True)
+    st.download_button(
+        "⬇️ Download Department Lines (CSV)",
+        disp.to_csv(index=False),
+        file_name=f"dept_drilldown_{str(dept_pick).replace(' ','_')}.csv",
+        mime="text/csv",
+        key=f"dl_dept_lines_{str(dept_pick)}",
+    )
+
+    with st.expander("View table / download"):
+        st.dataframe(dept_spend, use_container_width=True)
+        st.download_button(
+            "⬇️ Download Department Spend (CSV)",
+            dept_spend.to_csv(index=False),
+            "department_spend.csv",
+            "text/csv",
+            key="dl_dept_spend_csv",
+        )
 else:
     st.info("Net Amount column not present, cannot compute department spend.")
+
+# ------------------------------------
+# 34) End of Dashboard
+# ------------------------------------
+
 
 
 # ------------------------------------
