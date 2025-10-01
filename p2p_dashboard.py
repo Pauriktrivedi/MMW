@@ -982,7 +982,6 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # ------------------------------------
 # 31) End of Dashboard
 # ------------------------------------
-from __future__ import annotations
 
 import re
 from io import BytesIO
