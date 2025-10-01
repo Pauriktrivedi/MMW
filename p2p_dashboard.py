@@ -1229,8 +1229,64 @@ if "Net Amount" in filtered_df.columns:
         .update_layout(xaxis_tickangle=-45),
         use_container_width=True,
     )
+
+    # --- Drilldown selector ---
+    dd_col1, dd_col2 = st.columns([2,1])
+    with dd_col1:
+        dept_pick = st.selectbox("Drill down: choose a department", dept_spend["Dept.Chart"].tolist())
+    with dd_col2:
+        topn = st.number_input("Show top N vendors/items", min_value=5, max_value=100, value=20, step=5)
+
+    detail = filtered_df[filtered_df["Dept.Chart"].astype(str) == str(dept_pick)].copy()
+    st.markdown(f"### 🔎 Details for **{dept_pick}**")
+
+    # KPIs
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric("Lines", len(detail))
+    k2.metric("PRs", int(detail["PR Number"].nunique()) if "PR Number" in detail.columns else 0)
+    k3.metric("POs", int(detail["Purchase Doc"].nunique()) if "Purchase Doc" in detail.columns else 0)
+    k4.metric("Spend (Cr ₹)", f"{(detail.get('Net Amount', pd.Series(0)).sum()/1e7):,.2f}")
+
+    # Top vendors & items
+    c1,c2 = st.columns(2)
+    if {"PO Vendor","Net Amount"}.issubset(detail.columns):
+        top_v = (
+            detail.groupby("PO Vendor", dropna=False)["Net Amount"].sum().sort_values(ascending=False).head(int(topn)).reset_index()
+        )
+        top_v["Spend (Cr ₹)"] = top_v["Net Amount"]/1e7
+        c1.plotly_chart(px.bar(top_v, x="PO Vendor", y="Spend (Cr ₹)", title="Top Vendors (Cr ₹)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+    if {"Product Name","Net Amount"}.issubset(detail.columns):
+        top_i = (
+            detail.groupby("Product Name", dropna=False)["Net Amount"].sum().sort_values(ascending=False).head(int(topn)).reset_index()
+        )
+        top_i["Spend (Cr ₹)"] = top_i["Net Amount"]/1e7
+        c2.plotly_chart(px.bar(top_i, x="Product Name", y="Spend (Cr ₹)", title="Top Items (Cr ₹)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+
+    # Optional time trend for the picked department
+    dcol = "Po create Date" if "Po create Date" in detail.columns else ("PR Date Submitted" if "PR Date Submitted" in detail.columns else None)
+    if dcol and "Net Amount" in detail.columns:
+        detail[dcol] = pd.to_datetime(detail[dcol], errors="coerce")
+        m = detail.dropna(subset=[dcol]).groupby(detail[dcol].dt.to_period('M'))['Net Amount'].sum().to_timestamp()
+        st.plotly_chart(px.line(m/1e7, labels={'value':'Spend (Cr ₹)','index':'Month'}, title=f"{dept_pick} — Monthly Spend"), use_container_width=True)
+
+    st.markdown("#### 📄 Line-level detail")
+    show_cols = [c for c in ["PR Number","Purchase Doc","PO Vendor","Procurement Category","Product Name","Item Description","PO Qty","PO Unit Rate","Net Amount","PO Create Date","PO Delivery Date","PR Date Submitted"] if c in detail.columns]
+    st.dataframe(detail[show_cols] if show_cols else detail, use_container_width=True)
+    st.download_button(
+        "⬇️ Download Department Lines (CSV)",
+        (detail[show_cols] if show_cols else detail).to_csv(index=False),
+        file_name=f"dept_drilldown_{str(dept_pick).replace(' ','_')}.csv",
+        mime="text/csv",
+    )
+
     with st.expander("View table / download"):
         st.dataframe(dept_spend, use_container_width=True)
+        st.download_button(
+            "⬇️ Download Department Spend (CSV)",
+            dept_spend.to_csv(index=False),
+            "department_spend.csv",
+            "text/csv",
+        )
         st.download_button(
             "⬇️ Download Department Spend (CSV)",
             dept_spend.to_csv(index=False),
