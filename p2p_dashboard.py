@@ -1127,4 +1127,102 @@ if forecast_date_col and "Net Amount" in filtered_df.columns:
         st.plotly_chart(figf, use_container_width=True)
         c1,c2,c3 = st.columns(3)
         c1.metric('Forecast (Cr ₹)', f"{fcst:,.2f}")
-        c2.metric('Lower
+        c2.metric('Lower 95% CI', f"{lower:,.2f}")
+        c3.metric('Upper 95% CI', f"{upper:,.2f}")
+    else:
+        st.info("Not enough dated rows to forecast.")
+else:
+    st.info("Need date and Net Amount columns for forecasting.")
+
+# ------------------------------------
+# 32) Drillable Vendor Scorecards
+# ------------------------------------
+st.subheader("📒 Vendor Scorecard — Drilldown")
+if 'PO Vendor' in filtered_df.columns:
+    vendor_order = (
+        filtered_df.groupby('PO Vendor')['Net Amount'].sum().sort_values(ascending=False)
+        if 'Net Amount' in filtered_df.columns else filtered_df['PO Vendor'].value_counts()
+    )
+    vendors = vendor_order.index.tolist()
+    if vendors:
+        vsel = st.selectbox('Pick a vendor', vendors)
+        vdf = filtered_df[filtered_df['PO Vendor'] == vsel].copy()
+        spend_cr = vdf['Net Amount'].sum()/1e7 if 'Net Amount' in vdf.columns else 0
+        po_count = vdf['Purchase Doc'].nunique() if 'Purchase Doc' in vdf.columns else len(vdf)
+        pending_qty = vdf.get('Pending Qty', pd.Series(0)).fillna(0).sum()
+        # late calc
+        if 'PO Delivery Date' in vdf.columns:
+            today = pd.Timestamp.today().normalize()
+            vdf['PO Delivery Date'] = pd.to_datetime(vdf['PO Delivery Date'], errors='coerce')
+            vdf['PendingFilled'] = vdf.get('Pending Qty', pd.Series(0)).fillna(0)
+            vdf['Is_Late'] = vdf['PO Delivery Date'].notna() & (vdf['PO Delivery Date'] < today) & (vdf['PendingFilled'] > 0)
+            late_pct = (vdf['Is_Late'].sum()/len(vdf)*100) if len(vdf) else 0
+        else:
+            late_pct = None
+        k1,k2,k3,k4 = st.columns(4)
+        k1.metric('POs', po_count)
+        k2.metric('Spend (Cr ₹)', f"{spend_cr:,.2f}")
+        k3.metric('Pending Qty', f"{pending_qty:,.0f}")
+        k4.metric('% Late Lines', f"{late_pct:.1f}%" if late_pct is not None else '—')
+        # trend
+        dcol = 'Po create Date' if 'Po create Date' in vdf.columns else ('PR Date Submitted' if 'PR Date Submitted' in vdf.columns else None)
+        if dcol and 'Net Amount' in vdf.columns:
+            vdf[dcol] = pd.to_datetime(vdf[dcol], errors='coerce')
+            vm = vdf.dropna(subset=[dcol]).groupby(vdf[dcol].dt.to_period('M'))['Net Amount'].sum().to_timestamp()
+            st.plotly_chart(px.line(vm / 1e7, labels={'value':'Spend (Cr ₹)','index':'Month'}, title=f"{vsel} — Spend Trend"), use_container_width=True)
+        # price variance
+        if key_item_col and 'PO Unit Rate' in vdf.columns:
+            pv = (
+                vdf.dropna(subset=['PO Unit Rate']).groupby(key_item_col)['PO Unit Rate']
+                .agg(['count','mean','std']).reset_index()
+            )
+            pv = pv[pv['count']>=3]
+            if not pv.empty:
+                pv['CoV %'] = (pv['std']/pv['mean']*100).round(1)
+                st.dataframe(pv.sort_values('CoV %', ascending=False).head(30), use_container_width=True)
+else:
+    st.info('No vendor column present for scorecards.')
+
+# ------------------------------------
+# 33) Department-wise Spend Bar (Mapped if possible)
+# ------------------------------------
+st.subheader("🏢 Department-wise Spend")
+# Try to map using Final_Budget_Mapping file; fallback to in-file dept columns
+try:
+    bm = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
+    bm.columns = bm.columns.astype(str).str.strip()
+    if "Budget Code" in bm.columns and "PO Budget Code" in filtered_df.columns:
+        bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first")
+        # pick the first column that looks like department
+        dept_cols = [c for c in bm_u.columns if c.lower().startswith('department') or c.lower().endswith('department') or 'dept' in c.lower()]
+        dept_col = dept_cols[0] if dept_cols else None
+        dept_map = bm_u.set_index("Budget Code")[dept_col].to_dict() if dept_col else {}
+        df_dept = filtered_df.copy()
+        df_dept['Dept.Mapped'] = df_dept['PO Budget Code'].map(dept_map) if dept_map else None
+        source_col = 'Dept.Mapped' if dept_map else None
+    else:
+        source_col = None
+except Exception:
+    source_col = None
+
+if not source_col:
+    # fallbacks
+    if 'PO Department' in filtered_df.columns:
+        source_col = 'PO Department'
+    elif 'PO Dept' in filtered_df.columns:
+        source_col = 'PO Dept'
+    elif 'PR Department' in filtered_df.columns:
+        source_col = 'PR Department'
+    elif 'PR Dept' in filtered_df.columns:
+        source_col = 'PR Dept'
+
+if source_col and 'Net Amount' in filtered_df.columns:
+    dept_spend = filtered_df.groupby(source_col, dropna=False)['Net Amount'].sum().reset_index().sort_values('Net Amount', ascending=False)
+    dept_spend['Spend (Cr ₹)'] = dept_spend['Net Amount']/1e7
+    st.plotly_chart(px.bar(dept_spend.head(30), x=source_col, y='Spend (Cr ₹)', title='Department-wise Spend (Top 30)').update_layout(xaxis_tickangle=-45), use_container_width=True)
+else:
+    st.info("Could not determine department mapping/column for bar chart.")
+
+# ------------------------------------
+# 34) End of Dashboard
+# ------------------------------------
