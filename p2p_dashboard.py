@@ -1190,22 +1190,43 @@ st.subheader("🏢 Department-wise Spend")
 
 # Always create a working column inside filtered_df
 filtered_df = filtered_df.copy()
-filtered_df["Dept.Chart"] = pd.NA
+filtered_df["Dept.Chart"], filtered_df["Subcat.Chart"] = pd.NA, pd.NA
 
-# Try mapping via Budget Code → Department from the mapping file
-_dept_map = None
+# Helper to normalize budget codes across Excel types (e.g., 1101 vs 1101.0)
+import re
+
+def _norm_code_series(s: pd.Series) -> pd.Series:
+    s = s.astype(str).str.replace("\xa0", " ", regex=False).str.strip()
+    # remove trailing .0 or .000… from float-like strings
+    s = s.str.replace(r"\.0+$", "", regex=True)
+    # collapse internal multiple spaces
+    s = s.str.replace(r" +", " ", regex=True)
+    return s.str.upper()
+
+# Try mapping via Budget Code → Department/Subcategory from the mapping file
 try:
     bm = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
     bm.columns = bm.columns.astype(str).str.strip()
-    if "Budget Code" in bm.columns and "PO Budget Code" in filtered_df.columns:
-        bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first")
+    if "Budget Code" in bm.columns and ("PO Budget Code" in filtered_df.columns or "PR Budget Code" in filtered_df.columns):
+        bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first").copy()
         dept_cols = [c for c in bm_u.columns if ("dept" in c.lower()) or ("department" in c.lower())]
+        subc_cols = [c for c in bm_u.columns if ("subcat" in c.lower()) or ("sub category" in c.lower()) or ("subcategory" in c.lower())]
         dept_col = dept_cols[0] if dept_cols else None
-        if dept_col:
-            _dept_map = bm_u.set_index("Budget Code")[dept_col].to_dict()
-            mapped = filtered_df["PO Budget Code"].map(_dept_map)
-            if mapped.notna().any():
-                filtered_df["Dept.Chart"] = mapped
+        subc_col = subc_cols[0] if subc_cols else None
+        # Build normalized key on mapping
+        bm_u["__code_norm"] = _norm_code_series(bm_u["Budget Code"])
+        dept_map = dict(zip(bm_u["__code_norm"], bm_u[dept_col].astype(str).str.strip())) if dept_col else {}
+        subc_map = dict(zip(bm_u["__code_norm"], bm_u[subc_col].astype(str).str.strip())) if subc_col else {}
+        # Normalize codes in filtered_df (PO first, then PR fallback)
+        code_ser = None
+        if "PO Budget Code" in filtered_df.columns:
+            code_ser = _norm_code_series(filtered_df["PO Budget Code"])  # type: ignore
+        if (code_ser is None or code_ser.isna().all()) and "PR Budget Code" in filtered_df.columns:
+            code_ser = _norm_code_series(filtered_df["PR Budget Code"])  # type: ignore
+        if code_ser is not None:
+            filtered_df["Dept.Chart"] = code_ser.map(dept_map)
+            if subc_map:
+                filtered_df["Subcat.Chart"] = code_ser.map(subc_map)
 except Exception:
     pass
 
@@ -1215,7 +1236,7 @@ if filtered_df["Dept.Chart"].isna().all():
         if cand in filtered_df.columns:
             filtered_df["Dept.Chart"] = filtered_df["Dept.Chart"].combine_first(filtered_df[cand])
 
-# Final safety: if still all NA, label as "Unmapped"
+# Final safety: if still all NA, label as "Unmapped / Missing"
 filtered_df["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
 
 if "Net Amount" in filtered_df.columns:
@@ -1269,15 +1290,15 @@ if "Net Amount" in filtered_df.columns:
         m = detail.dropna(subset=[dcol]).groupby(detail[dcol].dt.to_period('M'))['Net Amount'].sum().to_timestamp()
         st.plotly_chart(px.line(m/1e7, labels={'value':'Spend (Cr ₹)','index':'Month'}, title=f"{dept_pick} — Monthly Spend"), use_container_width=True)
 
+    # Line-level detail with mapped Subcategory/Department if available
     st.markdown("#### 📄 Line-level detail")
-    # Build the exact columns the user wants, with robust fallbacks
     dept_col = None
     for cand in ["Dept.Chart", "Dept.Final", "PO Department", "PO Dept", "PR Department", "PR Dept", "Department"]:
         if cand in detail.columns:
             dept_col = cand
             break
     subcat_col = None
-    for cand in ["Subcat.Final", "Subcategory", "Sub Category", "Sub-Category"]:
+    for cand in ["Subcat.Chart", "Subcat.Final", "Subcategory", "Sub Category", "Sub-Category"]:
         if cand in detail.columns:
             subcat_col = cand
             break
@@ -1292,10 +1313,7 @@ if "Net Amount" in filtered_df.columns:
         "Product Name",
         "Item Description",
     ]
-    # Keep only columns that actually exist
     show_cols = [c for c in desired_order if c and c in detail.columns]
-
-    # Pretty rename for display
     disp = detail[show_cols].rename(columns={
         subcat_col: "Subcategory" if subcat_col else "Subcategory",
         dept_col: "Department" if dept_col else "Department",
@@ -1319,12 +1337,6 @@ if "Net Amount" in filtered_df.columns:
             "text/csv",
             key="dl_dept_spend_csv",
         )
-        st.download_button(
-            "⬇️ Download Department Spend (CSV)",
-            dept_spend.to_csv(index=False),
-            "department_spend.csv",
-            "text/csv",
-        )
 else:
     st.info("Net Amount column not present, cannot compute department spend.")
 
@@ -1332,4 +1344,4 @@ else:
 # 34) End of Dashboard
 # ------------------------------------
 # ------------------------------------
-
+# ------------------------------------
