@@ -1,5 +1,4 @@
-# p2p_dashboard_final.py — full modules kept + optimizations + new insights
-# Ready for Streamlit Cloud. Uses repo files by default, with optional upload override.
+# p2p_dashboard.py — final, hardened, and aligned with your original totals
 
 from __future__ import annotations
 
@@ -90,18 +89,24 @@ def load_budget_mapping(path: str) -> pd.DataFrame:
     keep = [c for c in ["Budget Code", "Department", "Subcategory"] if c in bm.columns]
     return bm[keep].drop_duplicates() if keep else bm
 
-# dtype coercers
-
-def coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
 def coerce_datetime(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+def coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    for c in cols:
+        if c in df.columns:
+            # strip ₹, commas, and spaces before numeric coercion
+            df[c] = (
+                df[c]
+                .astype(str)
+                .str.replace("₹", "", regex=False)
+                .str.replace(",", "", regex=False)
+                .str.strip()
+            )
+            df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
 # ---------------------------------
@@ -180,38 +185,35 @@ else:
 INDIRECT = {"Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip", "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh"}
 _df["PO.BuyerType"] = _df["PO.Creator"].apply(lambda x: "Indirect" if x in INDIRECT else "Direct")
 
-# Budget mapping merges (PR and PO)
-# Use dictionary .map to prevent row multiplication and double counting.
+# ---------------------------------
+# Budget mapping (map-based; no row multiplication)
+# ---------------------------------
 if not bm.empty and "Budget Code" in bm.columns:
-    bm_unique = bm.copy()
-    bm_unique = bm_unique.dropna(subset=["Budget Code"]) if "Budget Code" in bm_unique.columns else bm_unique
-    # one row per Budget Code (first occurrence wins)
-    if "Budget Code" in bm_unique.columns:
-        bm_unique = bm_unique.drop_duplicates(subset=["Budget Code"], keep="first")
+    bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first")
+    dept_map = bm_u.set_index("Budget Code")["Department"].to_dict() if "Department" in bm_u.columns else {}
+    subc_map = bm_u.set_index("Budget Code")["Subcategory"].to_dict() if "Subcategory" in bm_u.columns else {}
 
-    dept_map = bm_unique.set_index("Budget Code")["Department"].to_dict() if "Department" in bm_unique.columns else {}
-    subc_map = bm_unique.set_index("Budget Code")["Subcategory"].to_dict() if "Subcategory" in bm_unique.columns else {}
+    def _ser(name, src_col, m):
+        if src_col in _df.columns:
+            return _df[src_col].map(m)
+        return pd.Series(pd.NA, index=_df.index, name=name)
 
-    # Map (no merges) on PO and PR sides
-    _df["Dept.from.POCode"] = _df.get("PO Budget Code").map(dept_map) if "PO Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
-    _df["Subcat.from.POCode"] = _df.get("PO Budget Code").map(subc_map) if "PO Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
-    _df["Dept.from.PRCode"] = _df.get("PR Budget Code").map(dept_map) if "PR Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
-    _df["Subcat.from.PRCode"] = _df.get("PR Budget Code").map(subc_map) if "PR Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
-
-    def _ser(col: str) -> pd.Series:
-        return _df[col] if col in _df.columns else pd.Series(pd.NA, index=_df.index)
+    _df["Dept.from.POCode"]  = _ser("Dept.from.POCode",  "PO Budget Code", dept_map)
+    _df["Subcat.from.POCode"]= _ser("Subcat.from.POCode","PO Budget Code", subc_map)
+    _df["Dept.from.PRCode"]  = _ser("Dept.from.PRCode",  "PR Budget Code", dept_map)
+    _df["Subcat.from.PRCode"]= _ser("Subcat.from.PRCode","PR Budget Code", subc_map)
 
     _df["Dept.Final"] = (
-        _ser("Dept.from.POCode")
-        .combine_first(_ser("PO Dept"))
-        .combine_first(_ser("Dept.from.PRCode"))
-        .combine_first(_ser("PR Dept"))
+        _df["Dept.from.POCode"]
+        .combine_first(_df.get("PO Dept", pd.Series(pd.NA, index=_df.index)))
+        .combine_first(_df["Dept.from.PRCode"])
+        .combine_first(_df.get("PR Dept", pd.Series(pd.NA, index=_df.index)))
     )
-
-    _df["Subcat.Final"] = _ser("Subcat.from.POCode").combine_first(_ser("Subcat.from.PRCode"))
+    _df["Subcat.Final"] = _df["Subcat.from.POCode"].combine_first(_df["Subcat.from.PRCode"])
 else:
-    # No mapping file: fallback to in-file departments
-    _df["Dept.Final"] = _df["PO Dept"] if "PO Dept" in _df.columns else (_df["PR Dept"] if "PR Dept" in _df.columns else pd.Series(pd.NA, index=_df.index))
+    _df["Dept.Final"] = _df.get("PO Dept", pd.Series(pd.NA, index=_df.index)).combine_first(
+        _df.get("PR Dept", pd.Series(pd.NA, index=_df.index))
+    )
     _df["Subcat.Final"] = pd.Series(pd.NA, index=_df.index)
 
 # ---------------------------------
@@ -225,34 +227,28 @@ FY = {
     "2025": (pd.Timestamp("2025-04-01"), pd.Timestamp("2026-03-31")),
     "2026": (pd.Timestamp("2026-04-01"), pd.Timestamp("2027-03-31")),
 }
-# Default FY selector — unchanged but leaving hook for future persistence
 fy_key = st.sidebar.selectbox("Financial Year", list(FY.keys()), index=0)
 pr_start, pr_end = FY[fy_key]
 
 sel = lambda s: sorted(pd.Series(s).dropna().astype(str).str.strip().unique().tolist())
 
-buyer_opts = sel(_df.get("PO.BuyerType", []))
+buyer_opts  = sel(_df.get("PO.BuyerType", []))
 entity_opts = sel(_df.get("Entity", []))
-creator_opts = sel(_df.get("PO.Creator", []))
-dept_opts = sel(_df.get("Dept.Final", []))
+creator_opts= sel(_df.get("PO.Creator", []))
+dept_opts   = sel(_df.get("Dept.Final", []))
 
-buyer_sel = st.sidebar.multiselect("PO Buyer Type", buyer_opts, default=buyer_opts)
-entity_sel = st.sidebar.multiselect("Entity", entity_opts, default=entity_opts)
+buyer_sel   = st.sidebar.multiselect("PO Buyer Type", buyer_opts, default=buyer_opts)
+entity_sel  = st.sidebar.multiselect("Entity", entity_opts, default=entity_opts)
 creator_sel = st.sidebar.multiselect("PO Creator", creator_opts, default=creator_opts)
-dept_sel = st.sidebar.multiselect("Department", dept_opts, default=dept_opts)
+dept_sel    = st.sidebar.multiselect("Department", dept_opts, default=dept_opts)
 
-# choose date column for explicit range
-# Date basis selector for consistent filtering — default to PR date to match your original app
+# Date basis selector — default to PR Date to mirror the working app
 _date_basis_opts = []
 if "PR Date Submitted" in _df.columns:
     _date_basis_opts.append("PR Date Submitted")
 if "PO Create Date" in _df.columns:
     _date_basis_opts.append("PO Create Date")
-_date_col = st.sidebar.radio(
-    "Filter by date",
-    options=_date_basis_opts,
-    index=0  # PR Date Submitted first to mirror p2p_dashboard
-) if _date_basis_opts else None
+_date_col = st.sidebar.radio("Filter by date", options=_date_basis_opts, index=0) if _date_basis_opts else None
 
 if _date_col:
     col_non_null = _df[_date_col].dropna()
@@ -266,10 +262,9 @@ if _date_col:
 else:
     date_range = None
 
-# Apply filters
+# Apply filters (NaT-safe on chosen date column)
 f = _df.copy()
 if _date_col and _date_col in f.columns:
-    # Include rows where the chosen date is missing, to match legacy totals
     f = f[(f[_date_col].isna()) | ((f[_date_col] >= pr_start) & (f[_date_col] <= pr_end))]
 if date_range and _date_col:
     s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -283,18 +278,18 @@ if creator_sel:
 if dept_sel:
     f = f[f["Dept.Final"].astype(str).isin(dept_sel)]
 
-# Quick sanity: totals vs raw
-total_rows = len(_df)
+# Sidebar sanity
+total_rows  = len(_df)
 filtered_rows = len(f)
-raw_spend = (_df.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in _df.columns else 0
-fil_spend = (f.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in f.columns else 0
+raw_spend_cr = (_df.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in _df.columns else 0
+fil_spend_cr = (f.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in f.columns else 0
 st.sidebar.caption(f"Rows after filters: {filtered_rows:,} / {total_rows:,}")
-st.sidebar.caption(f"Spend (Cr) — raw: {raw_spend:,.2f} • filtered: {fil_spend:,.2f}")
+st.sidebar.caption(f"Spend (Cr) — raw: {raw_spend_cr:,.2f} • filtered: {fil_spend_cr:,.2f}")
 
 # ---------------------------------
 # Title + KPIs
 # ---------------------------------
-st.title("📊 Procure‑to‑Pay Dashboard")
+st.title("📊 Procure-to-Pay Dashboard")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total PRs", int(f["PR Number"].nunique()) if "PR Number" in f.columns else 0)
@@ -305,7 +300,7 @@ spend_cr = (f.get("Net Amount", pd.Series(dtype=float)).sum() / 1e7) if "Net Amo
 c5.metric("Spend (Cr ₹)", f"{spend_cr:,.2f}")
 
 # ---------------------------------
-# Keyword Search (kept)
+# Keyword Search
 # ---------------------------------
 st.markdown("## 🔍 Keyword Search")
 valid_cols = [c for c in ["PR Number", "Purchase Doc", "Product Name", "PO Vendor"] if c in f.columns]
@@ -321,11 +316,9 @@ if valid_cols:
         st.write(f"Found {len(results):,} rows")
         st.dataframe(results, use_container_width=True)
         st.download_button("⬇️ Download Search Results (CSV)", results.to_csv(index=False), "search_results.csv", "text/csv")
-else:
-    st.info("Columns needed for search not found.")
 
 # ---------------------------------
-# SLA Gauge PR→PO (kept)
+# SLA Gauge PR→PO
 # ---------------------------------
 st.subheader("🎯 SLA Compliance (PR → PO ≤ 7 days)")
 lead_df = f.dropna(subset=["PO Create Date"]).copy() if "PO Create Date" in f.columns else pd.DataFrame()
@@ -353,7 +346,7 @@ else:
     st.info("Not enough data to compute PR→PO lead time.")
 
 # ---------------------------------
-# Monthly Spend (bars + cumulative) (kept)
+# Monthly Spend (bars + cumulative)
 # ---------------------------------
 st.subheader("📊 Monthly Total Spend (with Cumulative Line)")
 _date_for_spend = "PO Create Date" if "PO Create Date" in f.columns else ("PR Date Submitted" if "PR Date Submitted" in f.columns else None)
@@ -367,7 +360,8 @@ if _date_for_spend and "Net Amount" in f.columns:
     monthly["Month_Str"] = monthly["PO_Month"].dt.strftime("%b-%Y")
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_bar(x=monthly["Month_Str"], y=monthly["Spend (Cr ₹)"], name="Monthly Spend (Cr ₹)", text=[f"{x:.2f}" for x in monthly["Spend (Cr ₹)"]], textposition="outside")
+    fig.add_bar(x=monthly["Month_Str"], y=monthly["Spend (Cr ₹)"], name="Monthly Spend (Cr ₹)",
+                text=[f"{x:.2f}" for x in monthly["Spend (Cr ₹)"]], textposition="outside")
     fig.add_scatter(x=monthly["Month_Str"], y=monthly["Cumulative (Cr ₹)"], name="Cumulative (Cr ₹)", mode="lines+markers")
     fig.update_layout(margin=dict(t=60, b=110), xaxis_tickangle=-45)
     fig.update_yaxes(title_text="Monthly Spend (Cr ₹)", secondary_y=False)
@@ -377,7 +371,7 @@ else:
     st.info("Need date & Net Amount columns to chart monthly spend.")
 
 # ---------------------------------
-# Monthly Spend Trend by Entity (kept)
+# Monthly Spend Trend by Entity
 # ---------------------------------
 st.subheader("💹 Monthly Spend Trend by Entity")
 if {"PO Create Date", "Entity", "Net Amount"}.issubset(f.columns):
@@ -389,11 +383,9 @@ if {"PO Create Date", "Entity", "Net Amount"}.issubset(f.columns):
     fig_spend = px.line(ms, x="Month_Str", y="Spend (Cr ₹)", color="Entity", markers=True)
     fig_spend.update_layout(xaxis_tickangle=-45)
     st.plotly_chart(fig_spend, use_container_width=True)
-else:
-    st.info("Need PO Create Date, Entity, Net Amount for this chart.")
 
 # ---------------------------------
-# Lead time tables (kept)
+# Lead time tables
 # ---------------------------------
 st.subheader("⏱️ PR→PO Lead Time by Buyer Type & by Buyer")
 if not lead_df.empty:
@@ -404,20 +396,20 @@ if not lead_df.empty:
     c2.dataframe(t2, use_container_width=True)
 
 # ---------------------------------
-# Monthly PR & PO trends (kept)
+# Monthly PR & PO trends
 # ---------------------------------
 st.subheader("📅 Monthly PR & PO Trends")
 if {"PR Date Submitted", "Purchase Doc"}.issubset(f.columns):
     g = f.copy()
     g["PR Month"] = g["PR Date Submitted"].dt.to_period("M")
-    g["PO Month"] = (g["PO Create Date"].dt.to_period("M") if "PO Create Date" in g.columns else g["PR Month"])  # fallback
+    g["PO Month"] = (g["PO Create Date"].dt.to_period("M") if "PO Create Date" in g.columns else g["PR Month"])
     monthly_summary = g.groupby("PR Month").agg({"PR Number": "count", "Purchase Doc": "count"}).reset_index()
     monthly_summary.columns = ["Month", "PR Count", "PO Count"]
     monthly_summary["Month"] = monthly_summary["Month"].astype(str)
     st.line_chart(monthly_summary.set_index("Month"), use_container_width=True)
 
 # ---------------------------------
-# Aging buckets (kept)
+# Aging buckets
 # ---------------------------------
 st.subheader("🧮 PR→PO Aging Buckets")
 if not lead_df.empty:
@@ -432,10 +424,10 @@ if not lead_df.empty:
     st.plotly_chart(fig_aging, use_container_width=True)
 
 # ---------------------------------
-# Weekday PR & PO (kept)
+# Weekday PR & PO
 # ---------------------------------
 st.subheader("📆 PRs & POs by Weekday")
-if {"PR Date Submitted"}.issubset(f.columns):
+if "PR Date Submitted" in f.columns:
     wd = f.copy()
     wd["PR Weekday"] = wd["PR Date Submitted"].dt.day_name()
     if "PO Create Date" in wd.columns:
@@ -447,7 +439,7 @@ if {"PR Date Submitted"}.issubset(f.columns):
         st.bar_chart(po_counts, use_container_width=True)
 
 # ---------------------------------
-# Open PRs (kept)
+# Open PRs
 # ---------------------------------
 st.subheader("⚠️ Open PRs (Approved/InReview)")
 if {"PR Status", "PR Date Submitted"}.issubset(f.columns):
@@ -476,7 +468,7 @@ if {"PR Status", "PR Date Submitted"}.issubset(f.columns):
         st.dataframe(open_summary.sort_values("Pending_Age", ascending=False), use_container_width=True)
 
 # ---------------------------------
-# Daily PR trend (kept)
+# Daily PR trend
 # ---------------------------------
 st.subheader("📅 Daily PR Trends")
 if "PR Date Submitted" in f.columns:
@@ -486,7 +478,7 @@ if "PR Date Submitted" in f.columns:
     st.line_chart(daily.set_index("PR Date"), use_container_width=True)
 
 # ---------------------------------
-# Buyer-wise Spend (kept)
+# Buyer-wise Spend
 # ---------------------------------
 st.subheader("💰 Buyer-wise Spend (Cr ₹)")
 if {"PO.Creator", "Net Amount"}.issubset(f.columns):
@@ -497,7 +489,7 @@ if {"PO.Creator", "Net Amount"}.issubset(f.columns):
     st.plotly_chart(fig_buyer, use_container_width=True)
 
 # ---------------------------------
-# Category Spend (kept)
+# Category Spend
 # ---------------------------------
 st.subheader("🗂️ Spend by Procurement Category")
 if {"Procurement Category", "Net Amount"}.issubset(f.columns):
@@ -508,7 +500,7 @@ if {"Procurement Category", "Net Amount"}.issubset(f.columns):
     st.plotly_chart(fig_cat, use_container_width=True)
 
 # ---------------------------------
-# PO Approval Summary (kept)
+# PO Approval Summary
 # ---------------------------------
 if "PO Approved Date" in f.columns and "PO Create Date" in f.columns:
     st.subheader("📋 PO Approval Summary")
@@ -527,7 +519,7 @@ if "PO Approved Date" in f.columns and "PO Create Date" in f.columns:
         st.dataframe(po_app[keep_cols].sort_values(by="PO Approval Lead Time", ascending=False), use_container_width=True)
 
 # ---------------------------------
-# PO Status Pie (kept)
+# PO Status Pie
 # ---------------------------------
 st.subheader("📊 PO Status Breakdown")
 if "PO Status" in f.columns:
@@ -538,11 +530,11 @@ if "PO Status" in f.columns:
     c2.plotly_chart(px.pie(pstat, names="PO Status", values="Count", hole=0.35), use_container_width=True)
 
 # ---------------------------------
-# Delivery Summary + Pending Top 20 (kept)
+# Delivery Summary + Pending Top 20
 # ---------------------------------
 st.subheader("🚚 PO Delivery Summary & Top Pending")
 if {"Purchase Doc", "PO Vendor", "Product Name", "Item Description"}.issubset(f.columns):
-    d = f.rename(columns={"PO Qty": "PO Qty"}).copy()
+    d = f.copy()
     if "PO Qty" in d.columns and "Received Qty" in d.columns:
         d["% Received"] = (d["Received Qty"] / d["PO Qty"]).replace([pd.NA, pd.NaT], 0)*100
     d["% Received"] = d.get("% Received", pd.Series(0)).fillna(0).round(1)
@@ -557,7 +549,7 @@ if {"Purchase Doc", "PO Vendor", "Product Name", "Item Description"}.issubset(f.
         st.plotly_chart(px.bar(grp.sort_values(by="Pending Qty", ascending=False).head(20), x="Purchase Doc", y="Pending Qty", color="PO Vendor", text="Pending Qty"), use_container_width=True)
 
 # ---------------------------------
-# NEW: Top 50 Pending Lines by Value (restored)
+# Top 50 Pending Lines by Value
 # ---------------------------------
 st.subheader("📋 Top 50 Pending Lines (by Value)")
 if {"Pending Qty", "PO Unit Rate"}.issubset(f.columns):
@@ -569,7 +561,7 @@ if {"Pending Qty", "PO Unit Rate"}.issubset(f.columns):
         st.dataframe(top50.style.format({"Pending Qty": "{:,.0f}", "Pending Value": "₹ {:,.2f}"}), use_container_width=True)
 
 # ---------------------------------
-# Top 10 Vendors by Spend (restored)
+# Top 10 Vendors by Spend
 # ---------------------------------
 st.subheader("🏆 Top 10 Vendors by Spend (Cr ₹)")
 if {"PO Vendor", "Purchase Doc", "Net Amount"}.issubset(f.columns):
@@ -584,7 +576,7 @@ if {"PO Vendor", "Purchase Doc", "Net Amount"}.issubset(f.columns):
     st.plotly_chart(px.bar(top10, x="PO Vendor", y="Total_Spend_Cr", text="Total_Spend_Cr", title="Top 10 Vendors by Spend (Cr ₹)").update_traces(texttemplate="%{text:.2f}", textposition="outside"), use_container_width=True)
 
 # ---------------------------------
-# Budget Code Analysis (kept)
+# Budget Code Analysis (PO)
 # ---------------------------------
 st.subheader("🧾 Budget Code Analysis (PO)")
 if {"PO Budget Code", "Net Amount"}.issubset(f.columns):
@@ -597,12 +589,11 @@ if {"PO Budget Code", "Net Amount"}.issubset(f.columns):
         st.download_button("⬇️ Download Budget Code Spend (mapped)", bc_map.to_csv(index=False), "budget_code_spend_mapped.csv", "text/csv")
 
 # ---------------------------------
-# NEW: Entity-wise Procurement Scorecards
+# Entity-wise Procurement Scorecards
 # ---------------------------------
 st.subheader("🏷️ Entity-wise Procurement Scorecards")
 if {"Entity"}.issubset(f.columns):
     sc = f.copy()
-    # compute metrics per entity
     ent = sc.groupby("Entity").agg(
         PRs=("PR Number", "nunique"),
         POs=("Purchase Doc", "nunique"),
@@ -616,7 +607,7 @@ if {"Entity"}.issubset(f.columns):
     st.dataframe(ent[["Entity","PRs","POs","Spend (Cr ₹)","Avg Lead Days"]], use_container_width=True)
 
 # ---------------------------------
-# NEW: Vendor Concentration Risk (HHI)
+# Vendor Concentration Risk (HHI)
 # ---------------------------------
 st.subheader("⚖️ Vendor Concentration Risk (HHI)")
 if {"PO Vendor", "Net Amount"}.issubset(f.columns):
@@ -629,10 +620,10 @@ if {"PO Vendor", "Net Amount"}.issubset(f.columns):
         st.caption("Closer to 1 = highly concentrated. Under 0.15 = unconcentrated; 0.15–0.25 = moderate; >0.25 = high.")
 
 # ---------------------------------
-# NEW: On‑Time Delivery & Overdue Analysis
+# Delivery Timeliness — Overdue
 # ---------------------------------
 st.subheader("⏳ Delivery Timeliness — Overdue by Vendor")
-if {"PO Delivery Date"}.issubset(f.columns):
+if "PO Delivery Date" in f.columns:
     today = pd.Timestamp.today().normalize()
     d2 = f.copy()
     d2["Pending Qty Filled"] = d2.get("Pending Qty", pd.Series(0)).fillna(0)
@@ -649,12 +640,12 @@ if {"PO Delivery Date"}.issubset(f.columns):
         st.dataframe(over, use_container_width=True)
 
 # ---------------------------------
-# NEW: PR→PO Conversion Rate
+# PR→PO Conversion Rate
 # ---------------------------------
 st.subheader("🔁 PR→PO Conversion Rate")
 if {"PR Number","Purchase Doc"}.issubset(f.columns):
     pr_total = f["PR Number"].nunique()
-    pr_with_po = f[f["Purchase Doc"].notna()]["PR Number"].nunique()
+    pr_with_po = f[f["Purchase Doc"]].dropna()["PR Number"].nunique() if "Purchase Doc" in f.columns else 0
     rate = (pr_with_po/pr_total*100) if pr_total else 0
     st.metric("Conversion Rate", f"{rate:.1f}%")
 
