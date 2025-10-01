@@ -983,48 +983,99 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # 31) End of Dashboard
 # ------------------------------------
 
-# --- DIAGNOSTIC SNIPPET: paste immediately after df = load_and_combine(...) ---
-import streamlit as st
-import pandas as pd
-import re
+# ---------- INSERT THIS SNIPPET IMMEDIATELY AFTER LOADING + MAPPING ----------
+import numpy as np
 
-st.markdown("## 🔎 Debug: Detected columns & sample")
+# 1) Ensure Net Amount numeric & present
+if "Net Amount" in df.columns:
+    df["Net Amount"] = pd.to_numeric(df["Net Amount"], errors="coerce").fillna(0.0)
+else:
+    # fallback patterns found earlier: "PR Value" exists — use that if Net Amount missing
+    if "PR Value" in df.columns:
+        df["Net Amount"] = pd.to_numeric(df["PR Value"], errors="coerce").fillna(0.0)
+    else:
+        df["Net Amount"] = 0.0
+        st.warning("Net Amount not found — created zero column. Check source headers.")
 
-# show columns
-cols = list(df.columns)
-st.write("**Columns detected (exact names)**")
-st.code(cols)
+# 2) Build canonical BudgetCode column: prefer PO Budget Code → PR Budget Code → Item Code
+budget_candidates_preferred = ["PO Budget Code", "PR Budget Code", "Item Code", "PR BudgetCode", "PO BudgetCode"]
+found_budget_col = None
+for cand in budget_candidates_preferred:
+    if cand in df.columns:
+        found_budget_col = cand
+        break
 
-# show first 5 rows
-st.write("**First 5 rows (sample)**")
-try:
-    st.dataframe(df.head(5))
-except Exception:
-    st.write(df.head(5).to_dict(orient='records'))
+if found_budget_col:
+    df["BudgetCode"] = df[found_budget_col].map(lambda x: normalize_code(x) if pd.notna(x) else None)
+else:
+    # last-resort: search any column name containing 'budget' or 'code' or 'item'
+    fallback = next((c for c in df.columns if re.search(r"budget|code|item", str(c), flags=re.I)), None)
+    if fallback:
+        df["BudgetCode"] = df[fallback].map(lambda x: normalize_code(x) if pd.notna(x) else None)
+    else:
+        df["BudgetCode"] = None
+        st.warning("No budget-like column found. Budget mapping will be empty.")
 
-# candidates
-amount_candidates = [c for c in cols if re.search(r'amount|value|net', str(c), flags=re.I)]
-date_candidates   = [c for c in cols if re.search(r'date', str(c), flags=re.I)]
-budget_candidates = [c for c in cols if re.search(r'budget|code', str(c), flags=re.I)]
-dept_candidates   = [c for c in cols if re.search(r'depart|subcat|sub cat|subcategory', str(c), flags=re.I)]
+# 3) If you have a mapping DataFrame (mapping with columns BudgetCode, Department, Subcategory),
+#    ensure BudgetCode normalized in mapping too (so merges match)
+if 'mapping' in globals() and mapping is not None:
+    mapping["BudgetCode"] = mapping["BudgetCode"].map(lambda x: normalize_code(x) if pd.notna(x) else None)
+    mapping = mapping.drop_duplicates(subset=["BudgetCode"])
+    # merge mapping into df (if not already merged)
+    if "Department" not in df.columns or "Subcategory" not in df.columns:
+        df = df.merge(mapping, on="BudgetCode", how="left", suffixes=("", "_map"))
 
-st.write("Amount-like columns candidate(s):", amount_candidates)
-st.write("Date-like columns candidate(s):", date_candidates)
-st.write("Budget-code-like candidate(s):", budget_candidates)
-st.write("Department/Subcategory candidate(s):", dept_candidates)
+# 4) Build canonical Department/Subcategory columns (mapping first, then PO/PR Department)
+# prefer mapping Department if present, else PO Department, else PR Department
+def first_non_null(*vals):
+    for v in vals:
+        if pd.notna(v) and str(v).strip() != "":
+            return v
+    return np.nan
 
-# show counts for the top candidates
-for c in amount_candidates[:3]:
-    try:
-        non_nulls = df[c].notna().sum()
-        st.write(f"Column `{c}` non-null count: {non_nulls}  — sample values: {list(df[c].dropna().astype(str).unique()[:5])}")
-    except Exception as e:
-        st.write(c, "error:", e)
+# If mapping merged created columns like 'Department' & 'Subcategory' already, use them; otherwise build
+if "Department" not in df.columns:
+    # fallback column names
+    df["Department"] = df.apply(lambda r: first_non_null(r.get("PO Department"), r.get("PR Department")), axis=1)
+else:
+    # if mapping created Department_map, prefer it
+    if "Department_map" in df.columns:
+        df["Department"] = df.apply(lambda r: first_non_null(r.get("Department_map"), r.get("PO Department"), r.get("PR Department"), r.get("Department")), axis=1)
 
-for c in budget_candidates[:5]:
-    st.write(f"Budget col `{c}` sample values: {list(df[c].astype(str).dropna().unique()[:10])}")
+# Subcategory: prefer mapping subcategory (if exists), else keep existing 'Subcategory' or NaN
+if "Subcategory" not in df.columns:
+    if "Subcategory_map" in df.columns:
+        df["Subcategory"] = df["Subcategory_map"]
+    else:
+        df["Subcategory"] = np.nan
+else:
+    if "Subcategory_map" in df.columns:
+        df["Subcategory"] = df.apply(lambda r: first_non_null(r.get("Subcategory_map"), r.get("Subcategory")), axis=1)
 
-for c in dept_candidates[:5]:
-    st.write(f"Dept col `{c}` sample values: {list(df[c].astype(str).dropna().unique()[:10])}")
+# 5) Safe % Received calculation to avoid inf
+# normalize delivery columns names if present
+if "ReceivedQTY" in df.columns and "PO Quantity" in df.columns:
+    df["Received Qty"] = pd.to_numeric(df["ReceivedQTY"], errors="coerce").fillna(0.0)
+    df["PO Qty"] = pd.to_numeric(df["PO Quantity"], errors="coerce").fillna(0.0)
+    # avoid divide-by-zero
+    df["% Received"] = np.where(df["PO Qty"] > 0, (df["Received Qty"] / df["PO Qty"]) * 100, np.nan)
+    # replace inf/nan with 0 if you'd rather
+    df["% Received"] = df["% Received"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+else:
+    # if not present, create columns to avoid downstream errors
+    if "Received Qty" not in df.columns:
+        df["Received Qty"] = 0.0
+    if "PO Qty" not in df.columns:
+        df["PO Qty"] = 0.0
+    if "% Received" not in df.columns:
+        df["% Received"] = 0.0
+
+# 6) Final quick sanity log (visible in app) so you can confirm before charts render
+st.sidebar.write("Sanity checks:")
+st.sidebar.write(f"Net Amount col used: {'Net Amount' if 'Net Amount' in df.columns else 'None'}")
+st.sidebar.write(f"Budget code source: {found_budget_col if found_budget_col else 'None found (fallback used)'}")
+st.sidebar.write(f"Department column in use: {'Department' if 'Department' in df.columns else 'None'}")
+st.sidebar.write(f"Subcategory column in use: {'Subcategory' if 'Subcategory' in df.columns else 'None'}")
+# ---------- END SNIPPET ----------
 
 
