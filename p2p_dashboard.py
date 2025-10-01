@@ -1197,6 +1197,17 @@ def _norm_code_series(s: pd.Series) -> pd.Series:
     return s
 
 
+def _norm_code_series(s: pd.Series) -> pd.Series:
+    s = s.astype(str).str.strip().str.upper()
+    s = s.str.replace("\xa0", " ", regex=False)
+    s = s.str.replace("&", "AND", regex=False)
+    s = s.str.replace(r"\s+", " ", regex=True)
+    s = s.str.replace(r"\.+$", "", regex=True)  # remove trailing dots
+    s = s.str.replace(r"\.{2,}", ".", regex=True)  # collapse multiple dots
+    s = s.str.replace(" ", "")  # remove stray internal spaces
+    return s
+
+
 # ------------------------------------
 # 33) Department-wise Spend — robust (mapped if possible) + Mapping QA
 # ------------------------------------
@@ -1414,6 +1425,10 @@ if "Net Amount" in filtered_df.columns:
         )
 else:
     st.info("Net Amount column not present, cannot compute department spend.")
+
+# ------------------------------------
+# 34) End of Dashboard
+# ------------------------------------
 
 # ------------------------------------
 # 34) End of Dashboard
