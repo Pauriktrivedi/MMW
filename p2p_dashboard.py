@@ -225,6 +225,7 @@ FY = {
     "2025": (pd.Timestamp("2025-04-01"), pd.Timestamp("2026-03-31")),
     "2026": (pd.Timestamp("2026-04-01"), pd.Timestamp("2027-03-31")),
 }
+# Default FY selector — unchanged but leaving hook for future persistence
 fy_key = st.sidebar.selectbox("Financial Year", list(FY.keys()), index=0)
 pr_start, pr_end = FY[fy_key]
 
@@ -268,10 +269,11 @@ else:
 # Apply filters
 f = _df.copy()
 if _date_col and _date_col in f.columns:
-    f = f[(f[_date_col] >= pr_start) & (f[_date_col] <= pr_end)]
+    # Include rows where the chosen date is missing, to match legacy totals
+    f = f[(f[_date_col].isna()) | ((f[_date_col] >= pr_start) & (f[_date_col] <= pr_end))]
 if date_range and _date_col:
     s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-    f = f[(f[_date_col] >= s_dt) & (f[_date_col] <= e_dt)]
+    f = f[(f[_date_col].isna()) | ((f[_date_col] >= s_dt) & (f[_date_col] <= e_dt))]
 if buyer_sel:
     f = f[f["PO.BuyerType"].astype(str).isin(buyer_sel)]
 if entity_sel:
@@ -281,7 +283,13 @@ if creator_sel:
 if dept_sel:
     f = f[f["Dept.Final"].astype(str).isin(dept_sel)]
 
-st.sidebar.caption(f"Rows after filters: {len(f):,}")
+# Quick sanity: totals vs raw
+total_rows = len(_df)
+filtered_rows = len(f)
+raw_spend = (_df.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in _df.columns else 0
+fil_spend = (f.get("Net Amount", pd.Series(dtype=float)).sum() or 0) / 1e7 if "Net Amount" in f.columns else 0
+st.sidebar.caption(f"Rows after filters: {filtered_rows:,} / {total_rows:,}")
+st.sidebar.caption(f"Spend (Cr) — raw: {raw_spend:,.2f} • filtered: {fil_spend:,.2f}")
 
 # ---------------------------------
 # Title + KPIs
