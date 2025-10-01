@@ -70,6 +70,113 @@ def load_and_combine_data():
 df = load_and_combine_data()
 
 # ------------------------------------
+#  1b) Load Budget → Department/Subcategory mapping & merge
+# ------------------------------------
+@st.cache_data(show_spinner=False)
+def load_budget_mapping(github_url: str | None = None) -> pd.DataFrame | None:
+    """Loads the budget mapping file and returns a normalized mapping.
+    Tries (in order): user-uploaded file, local working dir, /mnt/data, and optional GitHub URL.
+    Expected columns (case-insensitive variants handled):
+      - Budget Code (or PO Budget Code)
+      - Department (or Dept)
+      - Subcategory (optional)
+    """
+    # 1) Uploader (user can override at runtime)
+    up = st.sidebar.file_uploader("📄 Upload Budget Mapping (.xlsx)", type=["xlsx"], key="budget_map")
+    if up is not None:
+        try:
+            m = pd.read_excel(up)
+            return m
+        except Exception as e:
+            st.sidebar.error(f"Failed to read uploaded mapping: {e}")
+
+    # 2) Local common paths
+    local_candidates = [
+        "Final_Budget_Mapping_Completed_Verified.xlsx",
+        "/mnt/data/Final_Budget_Mapping_Completed_Verified.xlsx",
+    ]
+    for p in local_candidates:
+        try:
+            return pd.read_excel(p)
+        except Exception:
+            pass
+
+    # 3) GitHub URL if provided (we'll auto-convert blob → raw)
+    if github_url:
+        try:
+            raw_url = github_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+            return pd.read_excel(raw_url)
+        except Exception as e:
+            st.sidebar.warning(f"Could not load mapping from GitHub: {e}")
+
+    return None
+
+
+def _norm_code(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+         .str.strip()
+         .str.replace(" ", " ", regex=False)
+         .str.replace(" ", "", regex=False)   # drop spaces
+         .str.upper()
+    )
+
+mapping_df = load_budget_mapping("https://github.com/Pauriktrivedi/MMW/blob/main/Final_Budget_Mapping_Completed_Verified.xlsx")
+
+if mapping_df is not None:
+    # Normalize column names
+    mapping_df.columns = (
+        mapping_df.columns.str.strip().str.replace(" ", " ", regex=False).str.replace(" +", " ", regex=True)
+    )
+    # Try to identify standard columns
+    col_map = {}
+    for c in mapping_df.columns:
+        lc = c.lower()
+        if lc in ["budget code", "po budget code", "budget_code", "code", "po budgetcode"]:
+            col_map[c] = "PO Budget Code"
+        elif lc in ["department", "dept", "department name", "budget department", "pr department"]:
+            col_map[c] = "Department"
+        elif lc in ["subcategory", "sub-category", "sub cat", "sub catg", "sub dept", "subdepartment"]:
+            col_map[c] = "Subcategory"
+    if col_map:
+        mapping_df = mapping_df.rename(columns=col_map)
+
+    if "PO Budget Code" in mapping_df.columns:
+        mapping_df["PO Budget Code Norm"] = _norm_code(mapping_df["PO Budget Code"]) 
+        # Prepare main df code
+        if "PO Budget Code" in df.columns:
+            df["PO Budget Code Norm"] = _norm_code(df["PO Budget Code"])
+            # Left merge
+            df = df.merge(
+                mapping_df[[c for c in ["PO Budget Code Norm", "Department", "Subcategory"] if c in mapping_df.columns]],
+                on="PO Budget Code Norm",
+                how="left",
+                suffixes=("", ".map"),
+            )
+            # Place mapped fields with clear names
+            if "Department" in df.columns:
+                df.rename(columns={"Department": "Department (Mapped)"}, inplace=True)
+            if "Subcategory" in df.columns:
+                df.rename(columns={"Subcategory": "Subcategory (Mapped)"}, inplace=True)
+
+            # If an in-file department already exists, fill missing from mapped
+            for dcol in ["Department", "PR Department", "Budget Department", "Department Name"]:
+                if dcol in df.columns and "Department (Mapped)" in df.columns:
+                    df[dcol] = df[dcol].fillna(df["Department (Mapped)"])
+
+            # Coverage metric in sidebar
+            matched = int(df["PO Budget Code Norm"].notna().sum())
+            mapped  = int(df.get("Department (Mapped)", pd.Series(dtype=object)).notna().sum())
+            pct = round(mapped * 100 / matched, 1) if matched else 0.0
+            st.sidebar.metric("🔗 Budget→Dept mapped", f"{pct}%")
+        else:
+            st.sidebar.warning("'PO Budget Code' column not found in transaction data. Mapping skipped.")
+    else:
+        st.sidebar.warning("Mapping file lacks a 'Budget Code' / 'PO Budget Code' column.")
+else:
+    st.sidebar.info("Upload or place 'Final_Budget_Mapping_Completed_Verified.xlsx' to enable Budget→Dept mapping.")
+
+# ------------------------------------
 #  2) Clean & Prepare Date Columns
 # ------------------------------------
 for date_col in ["PR Date Submitted", "Po create Date"]:
@@ -445,7 +552,7 @@ else:
 st.subheader("🏢 Department-wise Spend + Details")
 if all(c in filtered_df.columns for c in ["Net Amount"]):
     dept_col = None
-    for candidate in ["Department", "PR Department", "Budget Department", "Budget Dept", "Department Name"]:
+    for candidate in ["Department (Mapped)", "Department", "PR Department", "Budget Department", "Budget Dept", "Department Name"]:
         if candidate in filtered_df.columns:
             dept_col = candidate
             break
