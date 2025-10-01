@@ -1051,7 +1051,80 @@ if "PO.Creator" in filtered_df.columns:
     ).reset_index()
     score["Spend (Cr ₹)"] = score["Spend"] / 1e7
     # add avg lead time from lead_df if available
-    if 'lead_df' in globals() and not lead_df.empty:
+    if 'lead_df' in globals() and not lead_df.empty and "PO.Creator" in lead_df.columns:
         lt = lead_df.groupby("PO.Creator")["Lead Time (Days)"].mean().reset_index()
         score = score.merge(lt, on="PO.Creator", how="left").rename(columns={"Lead Time (Days)": "Avg Lead Days"})
-    st.d
+    else:
+        score["Avg Lead Days"] = None
+    st.dataframe(score.sort_values("Spend", ascending=False)[["PO.Creator", "POs", "Spend (Cr ₹)", "Avg Lead Days"]], use_container_width=True)
+else:
+    st.info("No PO.Creator column available for buyer scorecards.")
+
+# ------------------------------------
+# 30b) Unit-Rate Outliers vs Historical Median
+# ------------------------------------
+st.subheader("🚩 Unit-Rate Outliers vs Historical Median")
+key_item_col = "Product Name" if "Product Name" in filtered_df.columns else ("Item Description" if "Item Description" in filtered_df.columns else None)
+if key_item_col and "PO Unit Rate" in filtered_df.columns:
+    hist = filtered_df.dropna(subset=[key_item_col, "PO Unit Rate"]).copy()
+    # ensure numeric
+    hist["PO Unit Rate"] = pd.to_numeric(hist["PO Unit Rate"], errors="coerce")
+    grp = hist.groupby(key_item_col)
+    stats = grp["PO Unit Rate"].agg(['count','median']).rename(columns={'median':'Median'}).reset_index()
+    # MAD for robustness
+    def mad(x):
+        med = x.median()
+        return (x - med).abs().median()
+    mad_df = grp["PO Unit Rate"].apply(mad).reset_index(name='MAD')
+    stats = stats.merge(mad_df, on=key_item_col, how='left')
+    # keep only items with enough history
+    stats = stats[stats['count'] >= 5]
+    if not stats.empty:
+        hist = hist.merge(stats[[key_item_col,'Median','MAD']], on=key_item_col, how='inner')
+        # robust z-score using MAD: z = 0.6745*(x - median)/MAD ; flag |z|>3
+        hist['robust_z'] = 0.6745 * (hist['PO Unit Rate'] - hist['Median']) / hist['MAD'].replace(0, pd.NA)
+        outliers = hist[hist['robust_z'].abs() > 3].copy()
+        outliers['Deviation %'] = ((hist['PO Unit Rate'] - hist['Median']) / hist['Median'] * 100).round(1)
+        keep = [c for c in [key_item_col, 'PO Vendor', 'Purchase Doc', 'PO Unit Rate', 'Median', 'robust_z', 'Deviation %'] if c in outliers.columns]
+        if not outliers.empty and keep:
+            st.dataframe(outliers.sort_values('robust_z', key=lambda s: s.abs(), ascending=False)[keep].head(200), use_container_width=True)
+            st.caption("Rule: |robust z| > 3 using MAD. Focus on large absolute deviations.")
+        else:
+            st.info("No significant outliers found with current filters.")
+    else:
+        st.info("Need at least 5 historical PO lines per item to detect outliers.")
+else:
+    st.info("Need item column and 'PO Unit Rate' to compute price outliers.")
+
+# ------------------------------------
+# 31) Forecast Next Month's Spend (SMA with confidence band)
+# ------------------------------------
+st.subheader("📈 Forecast Next Month's Spend (SMA + CI)")
+forecast_date_col = "Po create Date" if "Po create Date" in filtered_df.columns else ("PR Date Submitted" if "PR Date Submitted" in filtered_df.columns else None)
+if forecast_date_col and "Net Amount" in filtered_df.columns:
+    fc = filtered_df.dropna(subset=[forecast_date_col]).copy()
+    fc[forecast_date_col] = pd.to_datetime(fc[forecast_date_col], errors='coerce')
+    fc = fc.dropna(subset=[forecast_date_col])
+    if not fc.empty:
+        m = fc.groupby(fc[forecast_date_col].dt.to_period('M'))['Net Amount'].sum().to_timestamp().sort_index()
+        m_cr = m / 1e7
+        # 3-month simple moving average
+        sma3 = m_cr.rolling(3).mean()
+        # residuals where SMA defined
+        resid = (m_cr - sma3).dropna()
+        sigma = resid.std() if len(resid) > 1 else 0
+        next_month = (m_cr.index.max() + pd.offsets.MonthBegin(1))
+        fcst = float(sma3.iloc[-1]) if not pd.isna(sma3.iloc[-1]) else float(m_cr.iloc[-1])
+        lower = fcst - 1.96 * sigma
+        upper = fcst + 1.96 * sigma
+        # Plot
+        figf = make_subplots(specs=[[{"secondary_y": False}]])
+        figf.add_bar(x=m_cr.index.strftime('%b-%Y'), y=m_cr.values, name='Actual Spend (Cr)')
+        figf.add_scatter(x=m_cr.index.strftime('%b-%Y'), y=sma3.values, mode='lines', name='SMA-3')
+        figf.add_scatter(x=[next_month.strftime('%b-%Y')], y=[fcst], mode='markers', name='Forecast')
+        figf.add_scatter(x=[next_month.strftime('%b-%Y'), next_month.strftime('%b-%Y')], y=[lower, upper], mode='lines', name='95% CI')
+        figf.update_layout(title='Monthly Spend with SMA-3 and Next-Month Forecast', xaxis_tickangle=-45)
+        st.plotly_chart(figf, use_container_width=True)
+        c1,c2,c3 = st.columns(3)
+        c1.metric('Forecast (Cr ₹)', f"{fcst:,.2f}")
+        c2.metric('Lower
