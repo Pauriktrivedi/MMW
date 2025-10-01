@@ -11,6 +11,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+
+from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 # ====================================
 #  Procure-to-Pay Dashboard (Streamlit)
 # ====================================
@@ -972,20 +982,6 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # ------------------------------------
 # 31) End of Dashboard
 # ------------------------------------
-
-from __future__ import annotations
-
-import re
-from io import BytesIO
-from datetime import date
-from typing import List, Optional
-
-import numpy as np
-import pandas as pd
-import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # -------------------------
 # Page config
