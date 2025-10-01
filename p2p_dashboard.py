@@ -973,14 +973,13 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # 31) End of Dashboard
 # ------------------------------------
 
-# p2p_dashboard.py — FINAL VERSION
-# Procure-to-Pay Dashboard with Budget-Code → Department/Subcategory mapping
-# Includes Department-wise & Subcategory-wise spend charts with drill-down lists & CSV downloads
-
 from __future__ import annotations
+
 import re
 from io import BytesIO
 from datetime import date
+from typing import List, Optional
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -996,15 +995,18 @@ st.set_page_config(page_title="Procure-to-Pay Dashboard (Final)", layout="wide",
 # -------------------------
 # Helpers
 # -------------------------
-def normalize_code(x):
+def normalize_code(x: object) -> Optional[str]:
+    """Normalize budget code: uppercase, remove punctuation/spaces/underscores/dots, '&' -> 'AND'."""
     if pd.isna(x):
         return None
     s = str(x).strip().upper()
     s = s.replace("&", "AND")
+    # remove any non-alphanumeric characters (including dots, slashes, spaces, hyphens, underscores)
     s = re.sub(r"[\s\W_]+", "", s)
     return s if s else None
 
-def pick_col(df: pd.DataFrame, patterns):
+def pick_col(df: pd.DataFrame, patterns: List[str]) -> Optional[str]:
+    """Return first column name that matches any regex pattern in patterns (case-insensitive)."""
     for col in df.columns:
         name = str(col).strip().lower().replace("\xa0", " ")
         for pat in patterns:
@@ -1012,36 +1014,38 @@ def pick_col(df: pd.DataFrame, patterns):
                 return col
     return None
 
-def to_datetime_safe(s):
+def to_datetime_safe(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce")
 
-def download_csv_bytes(df):
+def download_csv_bytes(df: pd.DataFrame) -> bytes:
     buf = BytesIO()
     df.to_csv(buf, index=False)
     return buf.getvalue()
 
-def download_df_button(df, label, filename):
+def download_df_button(df: pd.DataFrame, label: str, filename: str):
     st.download_button(label, download_csv_bytes(df), file_name=filename, mime="text/csv")
 
 # -------------------------
-# Load & combine data
+# Read helpers (local or uploaded)
 # -------------------------
 @st.cache_data(show_spinner=False)
-def read_excel_first_sheet(path_or_buffer):
+def read_excel_first_sheet(path_or_buffer) -> pd.DataFrame:
     if hasattr(path_or_buffer, "read"):
+        # uploaded file-like
         try:
             return pd.read_excel(path_or_buffer)
         except Exception:
             path_or_buffer.seek(0)
             return pd.read_csv(path_or_buffer)
     else:
+        # local path
         try:
             return pd.read_excel(path_or_buffer)
         except Exception:
             return pd.read_csv(path_or_buffer)
 
 @st.cache_data(show_spinner=False)
-def load_and_combine(use_local: bool, uploads):
+def load_and_combine(use_local: bool, uploads: List) -> pd.DataFrame:
     frames = []
     if use_local:
         local_files = [
@@ -1055,8 +1059,10 @@ def load_and_combine(use_local: bool, uploads):
                 df = read_excel_first_sheet(p)
                 df["Entity"] = tag
                 frames.append(df)
-            except Exception:
-                continue
+            except FileNotFoundError:
+                st.sidebar.warning(f"Local file not found: {p}")
+            except Exception as e:
+                st.sidebar.warning(f"Could not read {p}: {e}")
     else:
         if uploads:
             for up in uploads:
@@ -1065,8 +1071,9 @@ def load_and_combine(use_local: bool, uploads):
                     tag = re.sub(r"\W+", "", up.name.split(".")[0]).upper()[:6]
                     df["Entity"] = tag
                     frames.append(df)
-                except Exception:
-                    continue
+                except Exception as e:
+                    st.sidebar.warning(f"Couldn't read uploaded file {getattr(up,'name',str(up))}: {e}")
+
     if not frames:
         return pd.DataFrame()
     combined = pd.concat(frames, ignore_index=True)
@@ -1078,26 +1085,29 @@ def load_and_combine(use_local: bool, uploads):
     )
     return combined
 
+# -------------------------
+# Sidebar: data source
+# -------------------------
 st.sidebar.header("📥 Data Source")
 use_local = st.sidebar.checkbox("Use local repo files (MEPL1/MLPL1/mmw1/mmpl1)", value=True)
-uploads = []
+uploads: List = []
 if not use_local:
     uploads = st.sidebar.file_uploader("Upload company files (multi-select)", type=["xlsx","xls","csv"], accept_multiple_files=True)
 
 df = load_and_combine(use_local, uploads)
 if df.empty:
-    st.error("No data loaded.")
+    st.error("No data loaded. Upload files or enable local files and ensure filenames exist in the repo.")
     st.stop()
 
 # -------------------------
-# Budget mapping
+# Budget mapping (mapping workbook)
 # -------------------------
 st.sidebar.header("🧭 Budget Mapping")
-map_file = st.sidebar.file_uploader("Upload mapping workbook", type=["xlsx","xls","csv"])
-use_default_map = st.sidebar.checkbox("Use default mapping file", value=True)
+map_file = st.sidebar.file_uploader("Upload mapping workbook (Department/Subcategory ⇄ Budget Codes)", type=["xlsx","xls","csv"])
+use_default_map = st.sidebar.checkbox("Use default mapping (MainDept_SubCat_BudgetCodes_20250927_191809.xlsx)", value=True)
 
 @st.cache_data(show_spinner=False)
-def load_mapping_df(map_file, use_default: bool):
+def load_mapping_df(map_file, use_default: bool) -> Optional[pd.DataFrame]:
     try:
         if map_file is not None:
             raw = read_excel_first_sheet(map_file)
@@ -1105,69 +1115,286 @@ def load_mapping_df(map_file, use_default: bool):
             raw = read_excel_first_sheet("MainDept_SubCat_BudgetCodes_20250927_191809.xlsx")
         else:
             return None
-    except Exception:
+    except Exception as e:
+        st.sidebar.warning(f"Could not read mapping workbook: {e}")
         return None
-    dept_col = pick_col(raw, [r"department"])
-    subcat_col = pick_col(raw, [r"sub"])
-    code_cols = [c for c in raw.columns if "budget" in str(c).lower() or "code" in str(c).lower()]
-    id_cols = [c for c in [dept_col, subcat_col] if c]
-    tidy = raw.melt(id_vars=id_cols, value_vars=code_cols, value_name="BudgetCodeRaw")
+
+    raw.columns = [str(c).strip() for c in raw.columns]
+    dept_col = pick_col(raw, [r"\bdepartment\b", r"\bdept\b"])
+    subcat_col = pick_col(raw, [r"\bsub\s*cat\b", r"\bsub\s*category\b", r"\bsubcategory\b", r"\bsubcat\b"])
+    code_cols = [c for c in raw.columns if re.search(r"budget.*code|^code$|^budget$|^budget", str(c), flags=re.I)]
+    if not code_cols:
+        for c in raw.columns:
+            if c in [dept_col, subcat_col]:
+                continue
+            vals = raw[c].dropna().astype(str).str.len()
+            if len(vals) > 0 and (vals.median() <= 12 or vals.mean() <= 15):
+                code_cols.append(c)
+    id_cols = [c for c in [dept_col, subcat_col] if c in raw.columns]
+    if not id_cols and len(raw.columns) >= 3:
+        id_cols = [raw.columns[0], raw.columns[1]]
+    try:
+        tidy = raw.melt(id_vars=id_cols, value_vars=code_cols, var_name="_code_col", value_name="BudgetCodeRaw")
+    except Exception:
+        code_cols = [c for c in raw.columns if c not in id_cols]
+        tidy = raw.melt(id_vars=id_cols, value_vars=code_cols, var_name="_code_col", value_name="BudgetCodeRaw")
     tidy["BudgetCode"] = tidy["BudgetCodeRaw"].map(normalize_code)
-    tidy = tidy.dropna(subset=["BudgetCode"]).drop_duplicates("BudgetCode")
-    tidy = tidy.rename(columns={dept_col:"Department", subcat_col:"Subcategory"})
-    return tidy[["BudgetCode","Department","Subcategory"]]
+    tidy = tidy.dropna(subset=["BudgetCode"]).drop_duplicates(subset=["BudgetCode"]).copy()
+    rename_map = {}
+    if id_cols:
+        if id_cols[0] in tidy.columns:
+            rename_map[id_cols[0]] = "Department"
+        if len(id_cols) > 1 and id_cols[1] in tidy.columns:
+            rename_map[id_cols[1]] = "Subcategory"
+    tidy = tidy.rename(columns=rename_map)
+    for c in ["Department", "Subcategory"]:
+        if c not in tidy.columns:
+            tidy[c] = np.nan
+    tidy = tidy[["BudgetCode", "Department", "Subcategory"]]
+    return tidy
 
 mapping = load_mapping_df(map_file, use_default_map)
+if mapping is None:
+    st.sidebar.info("Provide a mapping workbook or enable default mapping to assign Department/Subcategory.")
+else:
+    st.sidebar.success(f"Loaded mapping with {len(mapping):,} unique budget codes.")
+
+# -------------------------
+# Prepare date columns and buyer types
+# -------------------------
+for date_col in ["PR Date Submitted", "Po create Date"]:
+    if date_col in df.columns:
+        df[date_col] = to_datetime_safe(df[date_col]).dt.date
+
+if "Buyer Group" in df.columns:
+    df["Buyer Group Code"] = df["Buyer Group"].astype(str).str.extract(r"(\d+)").astype(float)
+    def classify_buyer_group(row):
+        bg = row["Buyer Group"]
+        code = row["Buyer Group Code"]
+        if bg in ["ME_BG17", "MLBG16"]:
+            return "Direct"
+        if bg in ["Not Available"] or pd.isna(bg) or str(bg).strip() == "":
+            return "Indirect"
+        if pd.notna(code) and 1 <= code <= 9:
+            return "Direct"
+        if pd.notna(code) and 10 <= code <= 18:
+            return "Indirect"
+        return "Other"
+    df["Buyer.Type"] = df.apply(classify_buyer_group, axis=1)
+else:
+    df["Buyer.Type"] = "Unknown"
+
+o_created_by_map = {
+    "MMW2324030": "Dhruv", "MMW2324062": "Deepak", "MMW2425154": "Mukul",
+    "MMW2223104": "Paurik", "MMW2021181": "Nayan", "MMW2223014": "Aatish",
+    "MMW_EXT_002": "Deepakex", "MMW2425024": "Kamlesh", "MMW2021184": "Suresh", "N/A": "Dilip"
+}
+df["PO Orderer"] = df.get("PO Orderer", pd.Series(index=df.index)).fillna("N/A").astype(str).str.strip()
+df["PO.Creator"] = df["PO Orderer"].map(o_created_by_map).fillna(df["PO Orderer"]).replace({"N/A": "Dilip"})
+indirect_buyers = ["Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip", "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh"]
+df["PO.BuyerType"] = df["PO.Creator"].apply(lambda x: "Indirect" if x in indirect_buyers else "Direct")
+
+# -------------------------
+# Map BudgetCode on transaction data
+# -------------------------
+budget_col = pick_col(df, [r"\bpo\s*budget\s*code\b", r"\bpr\s*budget\s*code\b", r"\bbudget\s*code\b", r"\bpo\s*budget\b", r"\bbudget\b", r"\bcode\b"])
+if not budget_col:
+    fallback_candidates = [c for c in df.columns if "budget" in str(c).lower() or "budget code" in str(c).lower()]
+    budget_col = fallback_candidates[0] if fallback_candidates else None
+
+if budget_col:
+    df["BudgetCode"] = df[budget_col].map(normalize_code)
+else:
+    df["BudgetCode"] = None
+
 if mapping is not None:
-    df["BudgetCode"] = df[pick_col(df,["budget","code"])].map(normalize_code)
+    mapping["BudgetCode"] = mapping["BudgetCode"].astype("object")
+    df["BudgetCode"] = df["BudgetCode"].astype("object")
     df = df.merge(mapping, on="BudgetCode", how="left")
 
 # Ensure Net Amount numeric
 if "Net Amount" in df.columns:
     df["Net Amount"] = pd.to_numeric(df["Net Amount"], errors="coerce").fillna(0.0)
+else:
+    st.warning("Column 'Net Amount' not found. Spend charts will show zeros.")
 
 # -------------------------
-# Department-wise Spend
+# Sidebar filters
 # -------------------------
-st.subheader("🏢 Department-wise Spend")
-if "Department" in df.columns and "Net Amount" in df.columns:
-    dept_spend = df.groupby("Department", dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount", ascending=False)
+st.sidebar.header("🔍 Filters")
+fy_options = {
+    "All Years": (pd.to_datetime("2000-01-01"), pd.to_datetime("2100-01-01")),
+    "2023": (pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
+    "2024": (pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
+    "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
+}
+selected_fy = st.sidebar.selectbox("Financial Year", list(fy_options.keys()), index=0)
+pr_start, pr_end = fy_options[selected_fy]
+
+def _safe_unique(series):
+    return sorted([str(x).strip() for x in series.dropna().unique() if str(x).strip() != ""])
+
+buyer_options = _safe_unique(df["Buyer.Type"]) if "Buyer.Type" in df.columns else []
+entity_options = _safe_unique(df["Entity"]) if "Entity" in df.columns else []
+creator_options = _safe_unique(df["PO.Creator"]) if "PO.Creator" in df.columns else []
+po_buyer_type_options = _safe_unique(df["PO.BuyerType"]) if "PO.BuyerType" in df.columns else []
+
+buyer_filter = st.sidebar.multiselect("Buyer Type", options=buyer_options, default=buyer_options)
+entity_filter = st.sidebar.multiselect("Entity", options=entity_options, default=entity_options)
+creator_filter = st.sidebar.multiselect("PO Creator", options=creator_options, default=creator_options)
+po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", options=po_buyer_type_options, default=po_buyer_type_options)
+
+date_col_for_filter = "PR Date Submitted" if "PR Date Submitted" in df.columns else ("Po create Date" if "Po create Date" in df.columns else None)
+if date_col_for_filter:
+    df[date_col_for_filter] = to_datetime_safe(df[date_col_for_filter])
+    min_d = df[date_col_for_filter].min().date() if pd.notna(df[date_col_for_filter].min()) else date.today()
+    max_d = df[date_col_for_filter].max().date() if pd.notna(df[date_col_for_filter].max()) else date.today()
+    date_range = st.sidebar.date_input("Date Range", value=[min_d, max_d])
+else:
+    date_range = None
+
+filtered = df.copy()
+if "PR Date Submitted" in filtered.columns:
+    filtered["PR Date Submitted"] = to_datetime_safe(filtered["PR Date Submitted"])
+    filtered = filtered[(filtered["PR Date Submitted"] >= pr_start) & (filtered["PR Date Submitted"] <= pr_end)]
+if date_range and date_col_for_filter:
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+        filtered = filtered[(filtered[date_col_for_filter] >= s_dt) & (filtered[date_col_for_filter] <= e_dt)]
+if buyer_filter:
+    filtered = filtered[filtered["Buyer.Type"].astype(str).str.strip().isin(buyer_filter)]
+if entity_filter:
+    filtered = filtered[filtered["Entity"].astype(str).str.strip().isin(entity_filter)]
+if creator_filter:
+    filtered = filtered[filtered["PO.Creator"].astype(str).str.strip().isin(creator_filter)]
+if po_buyer_type_filter:
+    filtered = filtered[filtered["PO.BuyerType"].astype(str).str.strip().isin(po_buyer_type_filter)]
+
+st.sidebar.markdown("---")
+st.sidebar.write("Rows after filters:", len(filtered))
+
+# -------------------------
+# Top KPIs
+# -------------------------
+st.title("📊 Procure-to-Pay Dashboard — Final")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total PRs", filtered.get("PR Number", pd.Series(dtype=object)).nunique())
+c2.metric("Total POs", filtered.get("Purchase Doc", pd.Series(dtype=object)).nunique())
+c3.metric("Line Items", len(filtered))
+c4.metric("Entities", filtered.get("Entity", pd.Series(dtype=object)).nunique())
+c5.metric("Spend (Cr ₹)", f"{filtered.get('Net Amount', pd.Series(dtype=float)).sum() / 1e7:,.2f}")
+
+# -------------------------
+# Monthly Total Spend + Cumulative
+# -------------------------
+st.subheader("📊 Monthly Total Spend (with Cumulative)")
+if ("Po create Date" in filtered.columns or "PR Date Submitted" in filtered.columns) and "Net Amount" in filtered.columns:
+    date_col = "Po create Date" if "Po create Date" in filtered.columns else "PR Date Submitted"
+    temp = filtered.copy()
+    temp[date_col] = to_datetime_safe(temp[date_col])
+    temp = temp.dropna(subset=[date_col])
+    if not temp.empty:
+        temp["PO_Month"] = temp[date_col].dt.to_period("M").dt.to_timestamp()
+        temp["Month_Str"] = temp["PO_Month"].dt.strftime("%b-%Y")
+        monthly_total = temp.groupby(["PO_Month", "Month_Str"], as_index=False)["Net Amount"].sum().sort_values("PO_Month")
+        monthly_total["Spend (Cr ₹)"] = monthly_total["Net Amount"] / 1e7
+        monthly_total["Cumulative (Cr ₹)"] = monthly_total["Spend (Cr ₹)"].cumsum()
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(go.Bar(x=monthly_total["Month_Str"], y=monthly_total["Spend (Cr ₹)"], name="Monthly Spend (Cr ₹)"), secondary_y=False)
+        fig.add_trace(go.Scatter(x=monthly_total["Month_Str"], y=monthly_total["Cumulative (Cr ₹)"], name="Cumulative (Cr ₹)", mode="lines+markers"), secondary_y=True)
+        fig.update_layout(xaxis_tickangle=-45, height=450)
+        fig.update_yaxes(title_text="Monthly Spend (Cr ₹)", secondary_y=False)
+        fig.update_yaxes(title_text="Cumulative (Cr ₹)", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Need date and Net Amount for monthly spend chart.")
+
+# -------------------------
+# Department-wise & Subcategory-wise Spend + Drill-down
+# -------------------------
+st.markdown("---")
+st.subheader("🏢 Department-wise Spend (Drill-down)")
+
+if "Department" in filtered.columns and "Net Amount" in filtered.columns:
+    dept_spend = filtered.groupby("Department", dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount", ascending=False)
     dept_spend["Spend (Cr ₹)"] = dept_spend["Net Amount"] / 1e7
-    fig_dept = px.bar(dept_spend, x="Department", y="Spend (Cr ₹)", text="Spend (Cr ₹)", title="Spend by Department")
+    fig_dept = px.bar(dept_spend, x="Department", y="Spend (Cr ₹)", title="Spend by Department", text="Spend (Cr ₹)")
     fig_dept.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_dept.update_layout(xaxis_tickangle=-45, height=450)
     st.plotly_chart(fig_dept, use_container_width=True)
-    selected = st.multiselect("Select Department(s)", dept_spend["Department"].dropna().tolist())
-    if selected:
-        cols = [c for c in ["Purchase Doc","PO Vendor","Product Name","Net Amount","Department","Subcategory"] if c in df.columns]
-        detail = df[df["Department"].isin(selected)][cols]
-        detail["Net Amount (Cr)"] = detail["Net Amount"] / 1e7
-        st.dataframe(detail, use_container_width=True)
-        download_df_button(detail, "⬇️ Download Department details", "dept_details.csv")
 
-# -------------------------
-# Subcategory-wise Spend
-# -------------------------
-st.subheader("📂 Subcategory-wise Spend")
-if "Subcategory" in df.columns and "Net Amount" in df.columns:
-    sub_spend = df.groupby("Subcategory", dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount", ascending=False)
+    selected_departments = st.multiselect("Select Department(s) to show PO list", options=dept_spend["Department"].dropna().tolist())
+    if selected_departments:
+        detail_cols = [c for c in ["Purchase Doc", "PO Vendor", "Product Name", "Net Amount", "Department", "Subcategory", "PR Number"] if c in filtered.columns]
+        detail_df = filtered[filtered["Department"].isin(selected_departments)][detail_cols].copy()
+        if "Net Amount" in detail_df.columns:
+            detail_df["Net Amount (Cr)"] = detail_df["Net Amount"] / 1e7
+        st.markdown(f"#### 🔽 Detail rows: {len(detail_df)}")
+        st.dataframe(detail_df, use_container_width=True)
+        download_df_button(detail_df, "⬇️ Download selected department details (CSV)", "dept_details.csv")
+    else:
+        st.info("Select department(s) above to view PO-level details.")
+else:
+    st.info("Department or Net Amount column missing — cannot build department-wise spend chart.")
+
+st.markdown("---")
+st.subheader("📂 Subcategory-wise Spend (Drill-down)")
+
+if "Subcategory" in filtered.columns and "Net Amount" in filtered.columns:
+    sub_spend = filtered.groupby("Subcategory", dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount", ascending=False)
     sub_spend["Spend (Cr ₹)"] = sub_spend["Net Amount"] / 1e7
-    fig_sub = px.bar(sub_spend, x="Subcategory", y="Spend (Cr ₹)", text="Spend (Cr ₹)", title="Spend by Subcategory")
+    fig_sub = px.bar(sub_spend, x="Subcategory", y="Spend (Cr ₹)", title="Spend by Subcategory", text="Spend (Cr ₹)")
     fig_sub.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_sub.update_layout(xaxis_tickangle=-45, height=450)
     st.plotly_chart(fig_sub, use_container_width=True)
-    selected_sub = st.multiselect("Select Subcategory(ies)", sub_spend["Subcategory"].dropna().tolist())
-    if selected_sub:
-        cols = [c for c in ["Purchase Doc","PO Vendor","Product Name","Net Amount","Department","Subcategory"] if c in df.columns]
-        detail2 = df[df["Subcategory"].isin(selected_sub)][cols]
-        detail2["Net Amount (Cr)"] = detail2["Net Amount"] / 1e7
-        st.dataframe(detail2, use_container_width=True)
-        download_df_button(detail2, "⬇️ Download Subcategory details", "subcat_details.csv")
+
+    selected_subcats = st.multiselect("Select Subcategory(ies) to show PO list", options=sub_spend["Subcategory"].dropna().tolist())
+    if selected_subcats:
+        detail_cols = [c for c in ["Purchase Doc", "PO Vendor", "Product Name", "Net Amount", "Department", "Subcategory", "PR Number"] if c in filtered.columns]
+        detail_df2 = filtered[filtered["Subcategory"].isin(selected_subcats)][detail_cols].copy()
+        if "Net Amount" in detail_df2.columns:
+            detail_df2["Net Amount (Cr)"] = detail_df2["Net Amount"] / 1e7
+        st.markdown(f"#### 🔽 Detail rows: {len(detail_df2)}")
+        st.dataframe(detail_df2, use_container_width=True)
+        download_df_button(detail_df2, "⬇️ Download selected subcategory details (CSV)", "subcat_details.csv")
+    else:
+        st.info("Select subcategory(ies) above to view PO-level details.")
+else:
+    st.info("Subcategory or Net Amount column missing — cannot build subcategory-wise spend chart.")
 
 # -------------------------
-# Unmapped Codes
+# Mapping deliverables + downloads
 # -------------------------
-if mapping is not None:
-    unmapped = df[df["BudgetCode"].notna() & df["Department"].isna()]["BudgetCode"].drop_duplicates()
-    st.subheader("⚠️ Unmapped Budget Codes")
-    st.write(unmapped)
-    download_df_button(unmapped.to_frame(), "⬇️ Download Unmapped Codes", "unmapped_codes.csv")
+st.markdown("---")
+st.subheader("🧾 Mapping & Deliverables")
+
+col1, col2, col3 = st.columns([2, 1, 1])
+with col1:
+    st.markdown("**Sample of mapped transactions**")
+    st.dataframe(filtered.head(200), use_container_width=True)
+with col2:
+    if mapping is not None:
+        unmapped_codes = filtered[filtered["BudgetCode"].notna() & filtered["Department"].isna()]["BudgetCode"].dropna().drop_duplicates().to_frame("UnmappedBudgetCode")
+    else:
+        unmapped_codes = pd.DataFrame(columns=["UnmappedBudgetCode"])
+    st.metric("Unique unmapped codes", len(unmapped_codes))
+    st.dataframe(unmapped_codes, use_container_width=True, height=240)
+with col3:
+    if not unmapped_codes.empty:
+        by_entity = filtered[filtered["BudgetCode"].isin(unmapped_codes["UnmappedBudgetCode"])]
+        by_entity = by_entity.groupby(["Entity", "BudgetCode"]).size().reset_index(name="Count").sort_values(["Entity", "Count"], ascending=[True, False])
+    else:
+        by_entity = pd.DataFrame(columns=["Entity", "BudgetCode", "Count"])
+    st.markdown("Unmapped by Entity")
+    st.dataframe(by_entity, use_container_width=True, height=240)
+
+with st.expander("⬇️ Download mapping & extracts"):
+    if mapping is not None:
+        download_df_button(mapping, "⬇️ Master Mapping (CSV)", "Master_BudgetCode_Department_Subcategory_Mapping.csv")
+    download_df_button(filtered, "⬇️ All Transactions + Mapping (CSV)", "AllCompany_Transactions_WithMapping.csv")
+    download_df_button(unmapped_codes, "⬇️ Unmapped Budget Codes (CSV)", "Unmapped_BudgetCodes_List.csv")
+    download_df_button(by_entity, "⬇️ Unmapped by Entity (CSV)", "Unmapped_BudgetCodes_ByEntity.csv")
+
+st.success("Ready — use the department/subcategory charts above to drill down into PO-level data and export as CSV.")
+
 
