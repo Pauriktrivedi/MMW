@@ -1184,45 +1184,63 @@ else:
     st.info('No vendor column present for scorecards.')
 
 # ------------------------------------
-# 33) Department-wise Spend Bar (Mapped if possible)
+# 33) Department-wise Spend — robust (mapped if possible)
 # ------------------------------------
 st.subheader("🏢 Department-wise Spend")
-# Try to map using Final_Budget_Mapping file; fallback to in-file dept columns
+
+# Always create a working column inside filtered_df
+filtered_df = filtered_df.copy()
+filtered_df["Dept.Chart"] = pd.NA
+
+# Try mapping via Budget Code → Department from the mapping file
+_dept_map = None
 try:
     bm = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
     bm.columns = bm.columns.astype(str).str.strip()
     if "Budget Code" in bm.columns and "PO Budget Code" in filtered_df.columns:
         bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first")
-        # pick the first column that looks like department
-        dept_cols = [c for c in bm_u.columns if c.lower().startswith('department') or c.lower().endswith('department') or 'dept' in c.lower()]
+        dept_cols = [c for c in bm_u.columns if ("dept" in c.lower()) or ("department" in c.lower())]
         dept_col = dept_cols[0] if dept_cols else None
-        dept_map = bm_u.set_index("Budget Code")[dept_col].to_dict() if dept_col else {}
-        df_dept = filtered_df.copy()
-        df_dept['Dept.Mapped'] = df_dept['PO Budget Code'].map(dept_map) if dept_map else None
-        source_col = 'Dept.Mapped' if dept_map else None
-    else:
-        source_col = None
+        if dept_col:
+            _dept_map = bm_u.set_index("Budget Code")[dept_col].to_dict()
+            mapped = filtered_df["PO Budget Code"].map(_dept_map)
+            if mapped.notna().any():
+                filtered_df["Dept.Chart"] = mapped
 except Exception:
-    source_col = None
+    pass
 
-if not source_col:
-    # fallbacks
-    if 'PO Department' in filtered_df.columns:
-        source_col = 'PO Department'
-    elif 'PO Dept' in filtered_df.columns:
-        source_col = 'PO Dept'
-    elif 'PR Department' in filtered_df.columns:
-        source_col = 'PR Department'
-    elif 'PR Dept' in filtered_df.columns:
-        source_col = 'PR Dept'
+# Fallback chain from in-file columns if mapping is missing or empty
+if filtered_df["Dept.Chart"].isna().all():
+    for cand in ["PO Department", "PO Dept", "PR Department", "PR Dept", "Dept.Final", "Department"]:
+        if cand in filtered_df.columns:
+            filtered_df["Dept.Chart"] = filtered_df["Dept.Chart"].combine_first(filtered_df[cand])
 
-if source_col and 'Net Amount' in filtered_df.columns:
-    dept_spend = filtered_df.groupby(source_col, dropna=False)['Net Amount'].sum().reset_index().sort_values('Net Amount', ascending=False)
-    dept_spend['Spend (Cr ₹)'] = dept_spend['Net Amount']/1e7
-    st.plotly_chart(px.bar(dept_spend.head(30), x=source_col, y='Spend (Cr ₹)', title='Department-wise Spend (Top 30)').update_layout(xaxis_tickangle=-45), use_container_width=True)
+# Final safety: if still all NA, label as "Unmapped"
+filtered_df["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+
+if "Net Amount" in filtered_df.columns:
+    dept_spend = (
+        filtered_df.groupby("Dept.Chart", dropna=False)["Net Amount"].sum().reset_index()
+        .sort_values("Net Amount", ascending=False)
+    )
+    dept_spend["Spend (Cr ₹)"] = dept_spend["Net Amount"] / 1e7
+    st.plotly_chart(
+        px.bar(dept_spend.head(30), x="Dept.Chart", y="Spend (Cr ₹)", title="Department-wise Spend (Top 30)")
+        .update_layout(xaxis_tickangle=-45),
+        use_container_width=True,
+    )
+    with st.expander("View table / download"):
+        st.dataframe(dept_spend, use_container_width=True)
+        st.download_button(
+            "⬇️ Download Department Spend (CSV)",
+            dept_spend.to_csv(index=False),
+            "department_spend.csv",
+            "text/csv",
+        )
 else:
-    st.info("Could not determine department mapping/column for bar chart.")
+    st.info("Net Amount column not present, cannot compute department spend.")
 
 # ------------------------------------
 # 34) End of Dashboard
+# ------------------------------------
 # ------------------------------------
