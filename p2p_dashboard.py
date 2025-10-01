@@ -982,6 +982,19 @@ st.plotly_chart(fig_monthly_po, use_container_width=True)
 # ------------------------------------
 # 31) End of Dashboard
 # ------------------------------------
+from __future__ import annotations
+
+import re
+from io import BytesIO
+from datetime import date
+from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # -------------------------
 # Page config
@@ -1085,10 +1098,10 @@ def load_and_combine(use_local: bool, uploads: List) -> pd.DataFrame:
 # Sidebar: data source
 # -------------------------
 st.sidebar.header("📥 Data Source")
-use_local = st.sidebar.checkbox("Use local repo files (MEPL1/MLPL1/mmw1/mmpl1)", value=True)
+use_local = st.sidebar.checkbox("Use local repo files (MEPL1/MLPL1/mmw1/mmpl1)", value=True, key="use_local_toggle")
 uploads: List = []
 if not use_local:
-    uploads = st.sidebar.file_uploader("Upload company files (multi-select)", type=["xlsx","xls","csv"], accept_multiple_files=True)
+    uploads = st.sidebar.file_uploader("Upload company files (multi-select)", type=["xlsx","xls","csv"], accept_multiple_files=True, key="file_uploads")
 
 df = load_and_combine(use_local, uploads)
 if df.empty:
@@ -1099,8 +1112,8 @@ if df.empty:
 # Budget mapping (mapping workbook)
 # -------------------------
 st.sidebar.header("🧭 Budget Mapping")
-map_file = st.sidebar.file_uploader("Upload mapping workbook (Department/Subcategory ⇄ Budget Codes)", type=["xlsx","xls","csv"])
-use_default_map = st.sidebar.checkbox("Use default mapping (MainDept_SubCat_BudgetCodes_20250927_191809.xlsx)", value=True)
+map_file = st.sidebar.file_uploader("Upload mapping workbook (Department/Subcategory ⇄ Budget Codes)", type=["xlsx","xls","csv"], key="map_upload")
+use_default_map = st.sidebar.checkbox("Use default mapping (MainDept_SubCat_BudgetCodes_20250927_191809.xlsx)", value=True, key="use_default_map")
 
 @st.cache_data(show_spinner=False)
 def load_mapping_df(map_file, use_default: bool) -> Optional[pd.DataFrame]:
@@ -1191,6 +1204,51 @@ indirect_buyers = ["Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip", "Mukul", "N
 df["PO.BuyerType"] = df["PO.Creator"].apply(lambda x: "Indirect" if x in indirect_buyers else "Direct")
 
 # -------------------------
+# === Patch: Detect amount column, ensure numeric & unique widget keys ===
+# -------------------------
+
+def detect_amount_column(df: pd.DataFrame):
+    """Find the best column name for monetary amount in df and return it (or None)."""
+    patterns = [
+        r"\bnet\s*amount\b",
+        r"\bnetamount\b",
+        r"\bnet\s*value\b",
+        r"\btotal\s*amount\b",
+        r"\btotal\s*value\b",
+        r"\bamount\b",
+        r"\bvalue\b",
+        r"\bnet\b",
+    ]
+    for pat in patterns:
+        col = pick_col(df, [pat])
+        if col:
+            return col
+    for c in df.columns:
+        if "amount" in str(c).lower() or "value" in str(c).lower():
+            return c
+    # numeric heuristic fallback
+    numeric_cols = []
+    for c in df.columns:
+        try:
+            s = pd.to_numeric(df[c].dropna().astype(str).str.replace(r"[^\d\.\-]", "", regex=True), errors="coerce")
+            if s.notna().sum() > 0:
+                numeric_cols.append((c, s.median()))
+        except Exception:
+            continue
+    if numeric_cols:
+        numeric_cols.sort(key=lambda x: (x[1] if pd.notna(x[1]) else 0), reverse=True)
+        return numeric_cols[0][0]
+    return None
+
+amt_col_found = detect_amount_column(df)
+if amt_col_found:
+    df["Net Amount"] = pd.to_numeric(df[amt_col_found], errors="coerce").fillna(0.0)
+    st.sidebar.success(f"Detected amount column: '{amt_col_found}' → using as 'Net Amount'")
+else:
+    df["Net Amount"] = 0.0
+    st.sidebar.warning("Could not detect an amount column. 'Net Amount' created with zeros — update mapping if incorrect.")
+
+# -------------------------
 # Map BudgetCode on transaction data
 # -------------------------
 budget_col = pick_col(df, [r"\bpo\s*budget\s*code\b", r"\bpr\s*budget\s*code\b", r"\bbudget\s*code\b", r"\bpo\s*budget\b", r"\bbudget\b", r"\bcode\b"])
@@ -1208,14 +1266,8 @@ if mapping is not None:
     df["BudgetCode"] = df["BudgetCode"].astype("object")
     df = df.merge(mapping, on="BudgetCode", how="left")
 
-# Ensure Net Amount numeric
-if "Net Amount" in df.columns:
-    df["Net Amount"] = pd.to_numeric(df["Net Amount"], errors="coerce").fillna(0.0)
-else:
-    st.warning("Column 'Net Amount' not found. Spend charts will show zeros.")
-
 # -------------------------
-# Sidebar filters
+# Sidebar filters (with explicit keys)
 # -------------------------
 st.sidebar.header("🔍 Filters")
 fy_options = {
@@ -1224,7 +1276,7 @@ fy_options = {
     "2024": (pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
     "2025": (pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
 }
-selected_fy = st.sidebar.selectbox("Financial Year", list(fy_options.keys()), index=0)
+selected_fy = st.sidebar.selectbox("Financial Year", list(fy_options.keys()), index=0, key="fy_select")
 pr_start, pr_end = fy_options[selected_fy]
 
 def _safe_unique(series):
@@ -1235,20 +1287,23 @@ entity_options = _safe_unique(df["Entity"]) if "Entity" in df.columns else []
 creator_options = _safe_unique(df["PO.Creator"]) if "PO.Creator" in df.columns else []
 po_buyer_type_options = _safe_unique(df["PO.BuyerType"]) if "PO.BuyerType" in df.columns else []
 
-buyer_filter = st.sidebar.multiselect("Buyer Type", options=buyer_options, default=buyer_options)
-entity_filter = st.sidebar.multiselect("Entity", options=entity_options, default=entity_options)
-creator_filter = st.sidebar.multiselect("PO Creator", options=creator_options, default=creator_options)
-po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", options=po_buyer_type_options, default=po_buyer_type_options)
+buyer_filter = st.sidebar.multiselect("Buyer Type", options=buyer_options, default=buyer_options, key="ms_buyer_type")
+entity_filter = st.sidebar.multiselect("Entity", options=entity_options, default=entity_options, key="ms_entity")
+creator_filter = st.sidebar.multiselect("PO Creator", options=creator_options, default=creator_options, key="ms_po_creator")
+po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", options=po_buyer_type_options, default=po_buyer_type_options, key="ms_po_buyer_type")
 
 date_col_for_filter = "PR Date Submitted" if "PR Date Submitted" in df.columns else ("Po create Date" if "Po create Date" in df.columns else None)
 if date_col_for_filter:
     df[date_col_for_filter] = to_datetime_safe(df[date_col_for_filter])
     min_d = df[date_col_for_filter].min().date() if pd.notna(df[date_col_for_filter].min()) else date.today()
     max_d = df[date_col_for_filter].max().date() if pd.notna(df[date_col_for_filter].max()) else date.today()
-    date_range = st.sidebar.date_input("Date Range", value=[min_d, max_d])
+    date_range = st.sidebar.date_input("Date Range", value=[min_d, max_d], key="date_range_filter")
 else:
     date_range = None
 
+# -------------------------
+# Apply filters
+# -------------------------
 filtered = df.copy()
 if "PR Date Submitted" in filtered.columns:
     filtered["PR Date Submitted"] = to_datetime_safe(filtered["PR Date Submitted"])
@@ -1319,7 +1374,7 @@ if "Department" in filtered.columns and "Net Amount" in filtered.columns:
     fig_dept.update_layout(xaxis_tickangle=-45, height=450)
     st.plotly_chart(fig_dept, use_container_width=True)
 
-    selected_departments = st.multiselect("Select Department(s) to show PO list", options=dept_spend["Department"].dropna().tolist())
+    selected_departments = st.multiselect("Select Department(s) to show PO list", options=dept_spend["Department"].dropna().tolist(), key="sel_depts")
     if selected_departments:
         detail_cols = [c for c in ["Purchase Doc", "PO Vendor", "Product Name", "Net Amount", "Department", "Subcategory", "PR Number"] if c in filtered.columns]
         detail_df = filtered[filtered["Department"].isin(selected_departments)][detail_cols].copy()
@@ -1344,7 +1399,7 @@ if "Subcategory" in filtered.columns and "Net Amount" in filtered.columns:
     fig_sub.update_layout(xaxis_tickangle=-45, height=450)
     st.plotly_chart(fig_sub, use_container_width=True)
 
-    selected_subcats = st.multiselect("Select Subcategory(ies) to show PO list", options=sub_spend["Subcategory"].dropna().tolist())
+    selected_subcats = st.multiselect("Select Subcategory(ies) to show PO list", options=sub_spend["Subcategory"].dropna().tolist(), key="sel_subcats")
     if selected_subcats:
         detail_cols = [c for c in ["Purchase Doc", "PO Vendor", "Product Name", "Net Amount", "Department", "Subcategory", "PR Number"] if c in filtered.columns]
         detail_df2 = filtered[filtered["Subcategory"].isin(selected_subcats)][detail_cols].copy()
@@ -1392,5 +1447,4 @@ with st.expander("⬇️ Download mapping & extracts"):
     download_df_button(by_entity, "⬇️ Unmapped by Entity (CSV)", "Unmapped_BudgetCodes_ByEntity.csv")
 
 st.success("Ready — use the department/subcategory charts above to drill down into PO-level data and export as CSV.")
-
 
