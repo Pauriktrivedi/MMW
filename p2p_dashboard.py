@@ -180,24 +180,43 @@ else:
 INDIRECT = {"Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip", "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh"}
 _df["PO.BuyerType"] = _df["PO.Creator"].apply(lambda x: "Indirect" if x in INDIRECT else "Direct")
 
+# ---------------------------------
 # Budget mapping merges (PR and PO)
+# ---------------------------------
 if not bm.empty and "Budget Code" in bm.columns:
     if "PR Budget Code" in _df.columns:
-        _df = _df.merge(bm.add_suffix(" (PR)"), left_on="PR Budget Code", right_on="Budget Code (PR)", how="left")
+        _df = _df.merge(
+            bm.add_suffix(" (PR)"),
+            left_on="PR Budget Code",
+            right_on="Budget Code (PR)",
+            how="left"
+        )
     if "PO Budget Code" in _df.columns:
-        _df = _df.merge(bm.add_suffix(" (PO)"), left_on="PO Budget Code", right_on="Budget Code (PO)", how="left")
-    _make_series = lambda col: _df[col] if col in _df.columns else pd.Series(pd.NA, index=_df.index)
+        _df = _df.merge(
+            bm.add_suffix(" (PO)"),
+            left_on="PO Budget Code",
+            right_on="Budget Code (PO)",
+            how="left"
+        )
 
-_df["Dept.Final"] = (
-    _make_series("Department (PO)")
-    .combine_first(_make_series("PO Dept"))
-    .combine_first(_make_series("Department (PR)"))
-    .combine_first(_make_series("PR Dept"))
-)
+    # Safe column combine – avoids AttributeError on None
+    def _make_series(col: str) -> pd.Series:
+        return _df[col] if col in _df.columns else pd.Series(pd.NA, index=_df.index)
 
-_df["Subcat.Final"] = (else:
-    _df["Dept.Final"] = _df.get("PO Dept").fillna(_df.get("PR Dept"))
-    _df["Subcat.Final"] = None
+    _df["Dept.Final"] = (
+        _make_series("Department (PO)")
+        .combine_first(_make_series("PO Dept"))
+        .combine_first(_make_series("Department (PR)"))
+        .combine_first(_make_series("PR Dept"))
+    )
+
+    _df["Subcat.Final"] = (
+        _make_series("Subcategory (PO)")
+        .combine_first(_make_series("Subcategory (PR)"))
+    )
+else:
+    _df["Dept.Final"] = _df["PO Dept"] if "PO Dept" in _df.columns else pd.Series(pd.NA, index=_df.index)
+    _df["Subcat.Final"] = pd.Series(pd.NA, index=_df.index)
 
 # ---------------------------------
 # Filters
