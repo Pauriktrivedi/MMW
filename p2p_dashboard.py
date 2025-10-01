@@ -186,14 +186,16 @@ if not bm.empty and "Budget Code" in bm.columns:
         _df = _df.merge(bm.add_suffix(" (PR)"), left_on="PR Budget Code", right_on="Budget Code (PR)", how="left")
     if "PO Budget Code" in _df.columns:
         _df = _df.merge(bm.add_suffix(" (PO)"), left_on="PO Budget Code", right_on="Budget Code (PO)", how="left")
-    _df["Dept.Final"] = (
-        _df.get("Department (PO)")
-        .fillna(_df.get("PO Dept"))
-        .fillna(_df.get("Department (PR)"))
-        .fillna(_df.get("PR Dept"))
-    )
-    _df["Subcat.Final"] = _df.get("Subcategory (PO)").fillna(_df.get("Subcategory (PR)"))
-else:
+    _make_series = lambda col: _df[col] if col in _df.columns else pd.Series(pd.NA, index=_df.index)
+
+_df["Dept.Final"] = (
+    _make_series("Department (PO)")
+    .combine_first(_make_series("PO Dept"))
+    .combine_first(_make_series("Department (PR)"))
+    .combine_first(_make_series("PR Dept"))
+)
+
+_df["Subcat.Final"] = (else:
     _df["Dept.Final"] = _df.get("PO Dept").fillna(_df.get("PR Dept"))
     _df["Subcat.Final"] = None
 
