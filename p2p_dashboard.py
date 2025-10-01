@@ -966,5 +966,92 @@ fig_monthly_po.update_traces(textposition="outside")
 st.plotly_chart(fig_monthly_po, use_container_width=True)
 
 # ------------------------------------
-# 31) End of Dashboard
+# 26b) Sanity Checks (quick debug)
 # ------------------------------------
+with st.expander("🔎 Sanity Checks (debug)", expanded=False):
+    total_rows = len(df)
+    filtered_rows = len(filtered_df)
+    total_spend_cr = (df["Net Amount"].sum() / 1e7) if "Net Amount" in df.columns else 0
+    filt_spend_cr = (filtered_df["Net Amount"].sum() / 1e7) if "Net Amount" in filtered_df.columns else 0
+    st.write({
+        "Rows: filtered / total": f"{filtered_rows} / {total_rows}",
+        "Spend (Cr) raw": round(total_spend_cr, 2),
+        "Spend (Cr) filtered": round(filt_spend_cr, 2),
+    })
+
+# ------------------------------------
+# 27) PR → PO Conversion Rate
+# ------------------------------------
+st.subheader("🔁 PR → PO Conversion Rate")
+if all(c in filtered_df.columns for c in ["PR Number", "Purchase Doc"]):
+    pr_total = filtered_df["PR Number"].nunique()
+    pr_with_po = filtered_df[filtered_df["Purchase Doc"].notna()]["PR Number"].nunique()
+    rate = (pr_with_po / pr_total * 100) if pr_total else 0
+    st.metric("Conversion Rate", f"{rate:.1f}%")
+else:
+    st.info("Need PR Number and Purchase Doc columns for conversion rate.")
+
+# ------------------------------------
+# 28) Vendor Concentration Risk (HHI)
+# ------------------------------------
+st.subheader("⚖️ Vendor Concentration Risk (HHI)")
+if all(c in filtered_df.columns for c in ["PO Vendor", "Net Amount"]):
+    v = filtered_df.groupby("PO Vendor")["Net Amount"].sum()
+    tot = v.sum()
+    if tot > 0:
+        hhi = float(((v / tot) ** 2).sum())
+        st.metric("Herfindahl–Hirschman Index", f"{hhi:.3f}")
+        st.caption("Closer to 1 = highly concentrated. <0.15 unconcentrated, 0.15–0.25 moderate, >0.25 high.")
+
+# ------------------------------------
+# 29) Overdue Deliveries by Vendor
+# ------------------------------------
+st.subheader("⏳ Overdue Deliveries by Vendor")
+pending_col = None
+for cand in ["Pending Qty", "Pending QTY"]:
+    if cand in filtered_df.columns:
+        pending_col = cand
+        break
+if "PO Delivery Date" in filtered_df.columns and pending_col:
+    today = pd.Timestamp.today().normalize()
+    d2 = filtered_df.copy()
+    d2["PO Delivery Date"] = pd.to_datetime(d2["PO Delivery Date"], errors="coerce")
+    d2["PendingQtyFilled"] = d2[pending_col].fillna(0).astype(float)
+    d2["Overdue Days"] = (today - d2["PO Delivery Date"]).dt.days
+    d2["Is Overdue"] = d2["PO Delivery Date"].notna() & (d2["Overdue Days"] > 0) & (d2["PendingQtyFilled"] > 0)
+    od = d2[d2["Is Overdue"]]
+    if not od.empty and "PO Vendor" in od.columns:
+        over = (
+            od.groupby("PO Vendor")
+            .agg(
+                Overdue_Lines=("Purchase Doc", "count"),
+                Avg_Overdue_Days=("Overdue Days", "mean"),
+                Pending_Qty=("PendingQtyFilled", "sum"),
+                Pending_Value=("Net Amount", "sum"),
+            )
+            .reset_index()
+            .sort_values(["Overdue_Lines", "Avg_Overdue_Days"], ascending=[False, False])
+        )
+        st.dataframe(over, use_container_width=True)
+        st.plotly_chart(
+            px.bar(over.head(15), x="PO Vendor", y="Overdue_Lines", text="Overdue_Lines", title="Top Overdue Vendors (by lines)"),
+            use_container_width=True,
+        )
+else:
+    st.info("Need PO Delivery Date and Pending Qty columns for overdue analysis.")
+
+# ------------------------------------
+# 30) Buyer Scorecards (POs, Spend, Lead Time)
+# ------------------------------------
+st.subheader("🏷️ Buyer Scorecards")
+if "PO.Creator" in filtered_df.columns:
+    score = filtered_df.groupby("PO.Creator").agg(
+        POs=("Purchase Doc", "nunique"),
+        Spend=("Net Amount", "sum"),
+    ).reset_index()
+    score["Spend (Cr ₹)"] = score["Spend"] / 1e7
+    # add avg lead time from lead_df if available
+    if 'lead_df' in globals() and not lead_df.empty:
+        lt = lead_df.groupby("PO.Creator")["Lead Time (Days)"].mean().reset_index()
+        score = score.merge(lt, on="PO.Creator", how="left").rename(columns={"Lead Time (Days)": "Avg Lead Days"})
+    st.d
