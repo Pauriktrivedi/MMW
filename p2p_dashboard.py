@@ -180,42 +180,38 @@ else:
 INDIRECT = {"Aatish", "Deepak", "Deepakex", "Dhruv", "Dilip", "Mukul", "Nayan", "Paurik", "Kamlesh", "Suresh"}
 _df["PO.BuyerType"] = _df["PO.Creator"].apply(lambda x: "Indirect" if x in INDIRECT else "Direct")
 
-# ---------------------------------
 # Budget mapping merges (PR and PO)
-# ---------------------------------
+# Use dictionary .map to prevent row multiplication and double counting.
 if not bm.empty and "Budget Code" in bm.columns:
-    if "PR Budget Code" in _df.columns:
-        _df = _df.merge(
-            bm.add_suffix(" (PR)"),
-            left_on="PR Budget Code",
-            right_on="Budget Code (PR)",
-            how="left"
-        )
-    if "PO Budget Code" in _df.columns:
-        _df = _df.merge(
-            bm.add_suffix(" (PO)"),
-            left_on="PO Budget Code",
-            right_on="Budget Code (PO)",
-            how="left"
-        )
+    bm_unique = bm.copy()
+    bm_unique = bm_unique.dropna(subset=["Budget Code"]) if "Budget Code" in bm_unique.columns else bm_unique
+    # one row per Budget Code (first occurrence wins)
+    if "Budget Code" in bm_unique.columns:
+        bm_unique = bm_unique.drop_duplicates(subset=["Budget Code"], keep="first")
 
-    # Safe column combine – avoids AttributeError on None
-    def _make_series(col: str) -> pd.Series:
+    dept_map = bm_unique.set_index("Budget Code")["Department"].to_dict() if "Department" in bm_unique.columns else {}
+    subc_map = bm_unique.set_index("Budget Code")["Subcategory"].to_dict() if "Subcategory" in bm_unique.columns else {}
+
+    # Map (no merges) on PO and PR sides
+    _df["Dept.from.POCode"] = _df.get("PO Budget Code").map(dept_map) if "PO Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
+    _df["Subcat.from.POCode"] = _df.get("PO Budget Code").map(subc_map) if "PO Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
+    _df["Dept.from.PRCode"] = _df.get("PR Budget Code").map(dept_map) if "PR Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
+    _df["Subcat.from.PRCode"] = _df.get("PR Budget Code").map(subc_map) if "PR Budget Code" in _df.columns else pd.Series(pd.NA, index=_df.index)
+
+    def _ser(col: str) -> pd.Series:
         return _df[col] if col in _df.columns else pd.Series(pd.NA, index=_df.index)
 
     _df["Dept.Final"] = (
-        _make_series("Department (PO)")
-        .combine_first(_make_series("PO Dept"))
-        .combine_first(_make_series("Department (PR)"))
-        .combine_first(_make_series("PR Dept"))
+        _ser("Dept.from.POCode")
+        .combine_first(_ser("PO Dept"))
+        .combine_first(_ser("Dept.from.PRCode"))
+        .combine_first(_ser("PR Dept"))
     )
 
-    _df["Subcat.Final"] = (
-        _make_series("Subcategory (PO)")
-        .combine_first(_make_series("Subcategory (PR)"))
-    )
+    _df["Subcat.Final"] = _ser("Subcat.from.POCode").combine_first(_ser("Subcat.from.PRCode"))
 else:
-    _df["Dept.Final"] = _df["PO Dept"] if "PO Dept" in _df.columns else pd.Series(pd.NA, index=_df.index)
+    # No mapping file: fallback to in-file departments
+    _df["Dept.Final"] = _df["PO Dept"] if "PO Dept" in _df.columns else (_df["PR Dept"] if "PR Dept" in _df.columns else pd.Series(pd.NA, index=_df.index))
     _df["Subcat.Final"] = pd.Series(pd.NA, index=_df.index)
 
 # ---------------------------------
@@ -245,7 +241,14 @@ creator_sel = st.sidebar.multiselect("PO Creator", creator_opts, default=creator
 dept_sel = st.sidebar.multiselect("Department", dept_opts, default=dept_opts)
 
 # choose date column for explicit range
-_date_col = "PR Date Submitted" if "PR Date Submitted" in _df.columns else ("PO Create Date" if "PO Create Date" in _df.columns else None)
+# Date basis selector for consistent filtering
+_date_basis_opts = []
+if "PO Create Date" in _df.columns:
+    _date_basis_opts.append("PO Create Date")
+if "PR Date Submitted" in _df.columns:
+    _date_basis_opts.append("PR Date Submitted")
+_date_col = st.sidebar.radio("Filter by date", options=_date_basis_opts, index=0 if "PO Create Date" in _df.columns else 0) if _date_basis_opts else None
+
 if _date_col:
     min_dt = pd.to_datetime(_df[_date_col]).min()
     max_dt = pd.to_datetime(_df[_date_col]).max()
@@ -256,8 +259,8 @@ else:
 
 # Apply filters
 f = _df.copy()
-if "PR Date Submitted" in f.columns:
-    f = f[(f["PR Date Submitted"] >= pr_start) & (f["PR Date Submitted"] <= pr_end)]
+if _date_col and _date_col in f.columns:
+    f = f[(f[_date_col] >= pr_start) & (f[_date_col] <= pr_end)]
 if date_range and _date_col:
     s_dt, e_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
     f = f[(f[_date_col] >= s_dt) & (f[_date_col] <= e_dt)]
