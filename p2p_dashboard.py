@@ -1232,6 +1232,16 @@ def _norm_code_series(s: pd.Series) -> pd.Series:
     s = s.str.replace(" ", "")  # remove stray internal spaces
     return s
 
+def _norm_code_series(s: pd.Series) -> pd.Series:
+    s = s.astype(str).str.strip().str.upper()
+    s = s.str.replace("\xa0", " ", regex=False)
+    s = s.str.replace("&", "AND", regex=False)
+    s = s.str.replace(r"\s+", " ", regex=True)
+    s = s.str.replace(r"\.+$", "", regex=True)  # remove trailing dots
+    s = s.str.replace(r"\.{2,}", ".", regex=True)  # collapse multiple dots
+    s = s.str.replace(" ", "")  # remove stray internal spaces
+    return s
+
 
 # ------------------------------------
 # 33) Department-wise Spend — robust (mapped if possible) + Mapping QA
@@ -1247,70 +1257,52 @@ filtered_df["__Dept.MapSrc"] = "UNMAPPED"  # EXACT | SUF2 | FALLBACK | UNMAPPED
 try:
     bm = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
     bm.columns = bm.columns.astype(str).str.strip()
-    if ("Budget Code" in bm.columns) and ("PO Budget Code" in filtered_df.columns or "PR Budget Code" in filtered_df.columns):
+    if ("Budget Code" in bm.columns):
         bm_u = bm.dropna(subset=["Budget Code"]).drop_duplicates(subset=["Budget Code"], keep="first").copy()
-        # pick likely department & subcategory columns
-        dept_cols = [c for c in bm_u.columns if ("dept" in c.lower()) or ("department" in c.lower())]
-        subc_cols = [c for c in bm_u.columns if ("subcat" in c.lower()) or ("sub category" in c.lower()) or ("subcategory" in c.lower())]
-        dept_col = dept_cols[0] if dept_cols else None
-        subc_col = subc_cols[0] if subc_cols else None
 
-        # normalized key for mapping dataframe
+        # Normalize mapping codes
         bm_u["__code_norm"] = _norm_code_series(bm_u["Budget Code"]) if "Budget Code" in bm_u.columns else pd.Series(pd.NA, index=bm_u.index)
-        if dept_col:
-            bm_u["__dept"] = bm_u[dept_col].astype(str).str.strip()
-        if subc_col:
-            bm_u["__subc"] = bm_u[subc_col].astype(str).str.strip()
+        dept_col = next((c for c in bm_u.columns if "dept" in c.lower()), None)
+        subc_col = next((c for c in bm_u.columns if "subcat" in c.lower() or "sub category" in c.lower() or "subcategory" in c.lower()), None)
+        bm_u["__dept"] = bm_u[dept_col].astype(str).str.strip() if dept_col else ""
+        bm_u["__subc"] = bm_u[subc_col].astype(str).str.strip() if subc_col else ""
 
-        # exact maps
-        dept_map_exact = dict(zip(bm_u["__code_norm"], bm_u["__dept"])) if dept_col else {}
-        subc_map_exact = dict(zip(bm_u["__code_norm"], bm_u["__subc"])) if subc_col else {}
+        dept_map = dict(zip(bm_u["__code_norm"], bm_u["__dept"])) if dept_col else {}
+        subc_map = dict(zip(bm_u["__code_norm"], bm_u["__subc"])) if subc_col else {}
 
-        # unique last-2-segment suffix maps (for cross-entity reuse)
-        def _last2(code: str) -> str:
-            parts = str(code).split('.')
-            return '.'.join(parts[-2:]) if len(parts) >= 2 else str(code)
-        if dept_col:
-            bm_u["__suf2"] = bm_u["__code_norm"].apply(_last2)
-            suf2_counts = bm_u["__suf2"].value_counts()
-            suf2_unique = bm_u[bm_u["__suf2"].isin(suf2_counts[suf2_counts == 1].index)]
-            dept_map_suf2 = dict(zip(suf2_unique["__suf2"], suf2_unique["__dept"]))
-        else:
-            dept_map_suf2 = {}
-        if subc_col and 'suf2_unique' in locals():
-            subc_map_suf2 = dict(zip(suf2_unique["__suf2"], suf2_unique["__subc"]))
-        else:
-            subc_map_suf2 = {}
+        # Helper: hierarchy-based match (ME.R&D.M2.BTRSWP → R&D.M2.BTRSWP → M2.BTRSWP → BTRSWP)
+        def _hierarchy_lookup(code_norm: str):
+            if pd.isna(code_norm) or str(code_norm) == "":
+                return (pd.NA, pd.NA, "UNMAPPED")
+            if code_norm in dept_map:
+                return (dept_map.get(code_norm), subc_map.get(code_norm, pd.NA), "EXACT")
+            parts = str(code_norm).split(".")
+            for i in range(1, len(parts)):
+                sub = ".".join(parts[i:])
+                if sub in dept_map:
+                    return (dept_map.get(sub), subc_map.get(sub, pd.NA), "HIER")
+            return (pd.NA, pd.NA, "UNMAPPED")
 
-        # normalize codes from filtered_df
+        # Normalize codes from filtered_df
         if "PO Budget Code" in filtered_df.columns:
-            code_ser = _norm_code_series(filtered_df["PO Budget Code"])  # type: ignore
+            codes = _norm_code_series(filtered_df["PO Budget Code"])  # type: ignore
+        elif "PR Budget Code" in filtered_df.columns:
+            codes = _norm_code_series(filtered_df["PR Budget Code"])  # type: ignore
         else:
-            code_ser = pd.Series([pd.NA] * len(filtered_df), index=filtered_df.index)
-        if code_ser.isna().all() and "PR Budget Code" in filtered_df.columns:
-            code_ser = _norm_code_series(filtered_df["PR Budget Code"])  # type: ignore
+            codes = pd.Series([pd.NA] * len(filtered_df), index=filtered_df.index)
 
-        # try exact first
-        dept_exact = code_ser.map(dept_map_exact) if dept_map_exact else pd.Series(pd.NA, index=filtered_df.index)
-        subc_exact = code_ser.map(subc_map_exact) if subc_map_exact else pd.Series(pd.NA, index=filtered_df.index)
+        # Apply hierarchical lookup vectorized via apply→Series
+        look = codes.apply(_hierarchy_lookup).apply(pd.Series)
+        look.columns = ["__dept_out", "__subc_out", "__src_out"]
 
-        # then unique suffix-2
-        code_suf2 = code_ser.fillna("").apply(_last2)
-        dept_suf2 = code_suf2.map(dept_map_suf2) if dept_map_suf2 else pd.Series(pd.NA, index=filtered_df.index)
-        subc_suf2 = code_suf2.map(subc_map_suf2) if subc_map_suf2 else pd.Series(pd.NA, index=filtered_df.index)
-
-        # assign Dept & Subcat + source tags
-        exact_mask = dept_exact.notna()
-        filtered_df.loc[exact_mask, "Dept.Chart"] = dept_exact[exact_mask]
-        filtered_df.loc[exact_mask & subc_exact.notna(), "Subcat.Chart"] = subc_exact[exact_mask]
-        filtered_df.loc[exact_mask, "__Dept.MapSrc"] = "EXACT"
-
-        suf2_mask = (~exact_mask) & dept_suf2.notna()
-        filtered_df.loc[suf2_mask, "Dept.Chart"] = dept_suf2[suf2_mask]
-        filtered_df.loc[suf2_mask & subc_suf2.notna(), "Subcat.Chart"] = subc_suf2[suf2_mask]
-        filtered_df.loc[suf2_mask, "__Dept.MapSrc"] = "SUF2"
-except Exception:
-    pass
+        # Assign back
+        filtered_df["Dept.Chart"] = filtered_df["Dept.Chart"].combine_first(look["__dept_out"]) if "Dept.Chart" in filtered_df.columns else look["__dept_out"]
+        filtered_df["Subcat.Chart"] = filtered_df["Subcat.Chart"].combine_first(look["__subc_out"]) if "Subcat.Chart" in filtered_df.columns else look["__subc_out"]
+        # Only set source for those we mapped here; keep any prior tags if already set
+        need_src = filtered_df["__Dept.MapSrc"].isin(["UNMAPPED", pd.NA, None])
+        filtered_df.loc[need_src, "__Dept.MapSrc"] = look.loc[need_src, "__src_out"].fillna("UNMAPPED")
+except Exception as e:
+    st.warning(f"Mapping failed: {e}")
 
 # Fallback chain from in-file columns if still NA
 pre_fallback_na = filtered_df["Dept.Chart"].isna()
@@ -1454,6 +1446,7 @@ else:
 # ------------------------------------
 # 34) End of Dashboard
 # ------------------------------------
+
 
 
 
