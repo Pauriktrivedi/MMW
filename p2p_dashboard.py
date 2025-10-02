@@ -1,528 +1,400 @@
 import pandas as pd
+import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import date
 
-# ====================================
-#  Procure-to-Pay Dashboard (FINAL)
-#  - Includes unified Smart Budget Mapper
-#  - Department & Services drilldowns
-# ====================================
+st.set_page_config(page_title="P2P Dashboard — Full", layout="wide", initial_sidebar_state="expanded")
 
-st.set_page_config(page_title="Procure-to-Pay Dashboard", layout="wide", initial_sidebar_state="expanded")
-
-# ------------------------------------
-#  1) Load & Combine Source Data
-# ------------------------------------
+# ---------- Load Data ----------
 @st.cache_data(show_spinner=False)
-def load_and_combine_data():
-    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
+def load_all():
+    fns = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
+    frames = []
+    for fn, ent in fns:
+        df = pd.read_excel(fn, skiprows=1)
+        df["Entity"] = ent
+        frames.append(df)
+    x = pd.concat(frames, ignore_index=True)
+    x.columns = x.columns.str.strip().str.replace("\xa0"," ",regex=False).str.replace(" +"," ",regex=True)
+    for c in ["PR Date Submitted","Po create Date","PO Approved Date","PO Delivery Date"]:
+        if c in x.columns: x[c] = pd.to_datetime(x[c], errors="coerce")
+    return x
 
-    mepl_df["Entity"] = "MEPL"; mlpl_df["Entity"] = "MLPL"; mmw_df["Entity"] = "MMW"; mmpl_df["Entity"] = "MMPL"
-    combined = pd.concat([mepl_df, mlpl_df, mmw_df, mmpl_df], ignore_index=True)
-    combined.columns = combined.columns.str.strip().str.replace("\xa0"," ", regex=False).str.replace(" +"," ", regex=True)
-    return combined
+df = load_all()
 
-df = load_and_combine_data()
-
-# ------------------------------------
-#  2) Dates
-# ------------------------------------
-for c in ["PR Date Submitted","Po create Date","PO Approved Date","PO Delivery Date"]:
-    if c in df.columns:
-        df[c] = pd.to_datetime(df[c], errors="coerce")
-
-# ------------------------------------
-#  3) Buyer Group Classification
-# ------------------------------------
+# ---------- Buyer/Creator ----------
 if "Buyer Group" in df.columns:
     df["Buyer Group Code"] = df["Buyer Group"].astype(str).str.extract(r"(\d+)").astype(float)
-    def classify(row):
-        bg = row["Buyer Group"]; code = row["Buyer Group Code"]
+    def _bg(r):
+        bg,code = r["Buyer Group"], r["Buyer Group Code"]
         if bg in ["ME_BG17","MLBG16"]: return "Direct"
         if bg in ["Not Available"] or pd.isna(bg): return "Indirect"
-        if pd.notna(code) and 1 <= code <= 9: return "Direct"
-        if pd.notna(code) and 10 <= code <= 18: return "Indirect"
+        if pd.notna(code) and 1<=code<=9: return "Direct"
+        if pd.notna(code) and 10<=code<=18: return "Indirect"
         return "Other"
-    df["Buyer.Type"] = df.apply(classify, axis=1)
+    df["Buyer.Type"] = df.apply(_bg, axis=1)
 else:
     df["Buyer.Type"] = "Unknown"
-
-# ------------------------------------
-#  4) PO Orderer → PO.Creator Mapping
-# ------------------------------------
-o_created_by_map = {
-    "MMW2324030":"Dhruv","MMW2324062":"Deepak","MMW2425154":"Mukul","MMW2223104":"Paurik","MMW2021181":"Nayan",
-    "MMW2223014":"Aatish","MMW_EXT_002":"Deepakex","MMW2425024":"Kamlesh","MMW2021184":"Suresh","N/A":"Dilip"
-}
-
+map_orderer = {"MMW2324030":"Dhruv","MMW2324062":"Deepak","MMW2425154":"Mukul","MMW2223104":"Paurik","MMW2021181":"Nayan","MMW2223014":"Aatish","MMW_EXT_002":"Deepakex","MMW2425024":"Kamlesh","MMW2021184":"Suresh","N/A":"Dilip"}
 df["PO Orderer"] = df.get("PO Orderer", pd.Series([None]*len(df))).fillna("N/A").astype(str).str.strip()
-df["PO.Creator"] = df["PO Orderer"].map(o_created_by_map).fillna(df["PO Orderer"]).replace({"N/A":"Dilip"})
-indirect_buyers = ["Aatish","Deepak","Deepakex","Dhruv","Dilip","Mukul","Nayan","Paurik","Kamlesh","Suresh"]
-df["PO.BuyerType"] = df["PO.Creator"].apply(lambda x: "Indirect" if x in indirect_buyers else "Direct")
+df["PO.Creator"] = df["PO Orderer"].map(map_orderer).fillna(df["PO Orderer"]).replace({"N/A":"Dilip"})
+indirect = set(["Aatish","Deepak","Deepakex","Dhruv","Dilip","Mukul","Nayan","Paurik","Kamlesh","Suresh"])
+df["PO.BuyerType"] = np.where(df["PO.Creator"].isin(indirect), "Indirect", "Direct")
 
-# ------------------------------------
-#  5) Sidebar Filters
-# ------------------------------------
-st.sidebar.header("🔍 Filters")
-for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType","PR Date Submitted"]:
-    if col not in df.columns: df[col] = pd.NA
+# ---------- Sidebar Filters ----------
+st.sidebar.header("Filters")
+FY = {"All Years":(pd.Timestamp("2023-04-01"),pd.Timestamp("2026-03-31")),"2023":(pd.Timestamp("2023-04-01"),pd.Timestamp("2024-03-31")),"2024":(pd.Timestamp("2024-04-01"),pd.Timestamp("2025-03-31")),"2025":(pd.Timestamp("2025-04-01"),pd.Timestamp("2026-03-31")),"2026":(pd.Timestamp("2026-04-01"),pd.Timestamp("2027-03-31"))}
+fy_key = st.sidebar.selectbox("Financial Year", list(FY))
+pr_start, pr_end = FY[fy_key]
+fil = df.copy()
+if "PR Date Submitted" in fil.columns:
+    fil = fil[(fil["PR Date Submitted"]>=pr_start)&(fil["PR Date Submitted"]<=pr_end)]
 for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType"]:
-    df[col] = df[col].astype(str).fillna("").str.strip()
+    if col not in fil.columns: fil[col] = ""
+    fil[col] = fil[col].astype(str).str.strip()
+sel_b = st.sidebar.multiselect("Buyer Type", sorted(fil["Buyer.Type"].dropna().unique().tolist()), default=sorted(fil["Buyer.Type"].dropna().unique().tolist()))
+sel_e = st.sidebar.multiselect("Entity", sorted(fil["Entity"].dropna().unique().tolist()), default=sorted(fil["Entity"].dropna().unique().tolist()))
+sel_o = st.sidebar.multiselect("PO Ordered By", sorted(fil["PO.Creator"].dropna().unique().tolist()), default=sorted(fil["PO.Creator"].dropna().unique().tolist()))
+sel_p = st.sidebar.multiselect("PO Buyer Type", sorted(fil["PO.BuyerType"].dropna().unique().tolist()), default=sorted(fil["PO.BuyerType"].dropna().unique().tolist()))
+if sel_b: fil = fil[fil["Buyer.Type"].isin(sel_b)]
+if sel_e: fil = fil[fil["Entity"].isin(sel_e)]
+if sel_o: fil = fil[fil["PO.Creator"].isin(sel_o)]
+if sel_p: fil = fil[fil["PO.BuyerType"].isin(sel_p)]
 
-def safe_unique(s):
-    return sorted([str(x).strip() for x in s.dropna().unique()])
+# ---------- Tabs ----------
+T = st.tabs(["KPIs","Spend","PO/PR Timing","Delivery","Vendors","Dept & Services","Unit-rate Outliers","Forecast","Scorecards","Search"]) 
 
-fy = {
-    "All Years":(pd.to_datetime("2023-04-01"), pd.to_datetime("2026-03-31")),
-    "2023":(pd.to_datetime("2023-04-01"), pd.to_datetime("2024-03-31")),
-    "2024":(pd.to_datetime("2024-04-01"), pd.to_datetime("2025-03-31")),
-    "2025":(pd.to_datetime("2025-04-01"), pd.to_datetime("2026-03-31")),
-    "2026":(pd.to_datetime("2026-04-01"), pd.to_datetime("2027-03-31")),
-}
-sel_fy = st.sidebar.selectbox("Financial Year", list(fy.keys()), index=0)
-pr_start, pr_end = fy[sel_fy]
+# ---------- KPIs ----------
+with T[0]:
+    c1,c2,c3,c4,c5 = st.columns(5)
+    c1.metric("Total PRs", int(fil.get("PR Number",pd.Series(dtype=object)).nunique()))
+    c2.metric("Total POs", int(fil.get("Purchase Doc",pd.Series(dtype=object)).nunique()))
+    c3.metric("Line Items", len(fil))
+    c4.metric("Entities", int(fil.get("Entity",pd.Series(dtype=object)).nunique()))
+    c5.metric("Spend (Cr ₹)", f"{fil.get('Net Amount',pd.Series(0)).sum()/1e7:,.2f}")
 
-buyer_filter = st.sidebar.multiselect("Buyer Type", safe_unique(df["Buyer.Type"]), default=safe_unique(df["Buyer.Type"]))
-entity_filter = st.sidebar.multiselect("Entity", safe_unique(df["Entity"]), default=safe_unique(df["Entity"]))
-orderer_filter = st.sidebar.multiselect("PO Ordered By", safe_unique(df["PO.Creator"]), default=safe_unique(df["PO.Creator"]))
-po_buyer_type_filter = st.sidebar.multiselect("PO Buyer Type", safe_unique(df["PO.BuyerType"]), default=safe_unique(df["PO.BuyerType"]))
+# ---------- Spend (Monthly + Entity) ----------
+with T[1]:
+    dcol = "Po create Date" if "Po create Date" in fil.columns else ("PR Date Submitted" if "PR Date Submitted" in fil.columns else None)
+    st.subheader("Monthly Total Spend + Cumulative")
+    if dcol and "Net Amount" in fil.columns:
+        t = fil.dropna(subset=[dcol]).copy()
+        t["PO_Month"] = t[dcol].dt.to_period("M").dt.to_timestamp(); t["Month_Str"] = t["PO_Month"].dt.strftime("%b-%Y")
+        m = t.groupby(["PO_Month","Month_Str"],as_index=False)["Net Amount"].sum().sort_values("PO_Month")
+        m["Cr"] = m["Net Amount"]/1e7; m["CumCr"] = m["Cr"].cumsum()
+        fig = make_subplots(specs=[[{"secondary_y":True}]])
+        fig.add_bar(x=m["Month_Str"], y=m["Cr"], name="Monthly Spend (Cr ₹)")
+        fig.add_scatter(x=m["Month_Str"], y=m["CumCr"], name="Cumulative (Cr ₹)", mode="lines+markers", secondary_y=True)
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Entity Trend")
+    if dcol and "Net Amount" in fil.columns:
+        x = fil.copy(); x["PO Month"] = x[dcol].dt.to_period("M").dt.to_timestamp()
+        g = x.dropna(subset=["PO Month"]).groupby(["PO Month","Entity"],as_index=False)["Net Amount"].sum(); g["Cr"] = g["Net Amount"]/1e7
+        st.plotly_chart(px.line(g, x=g["PO Month"].dt.strftime("%b-%Y"), y="Cr", color="Entity", markers=True, labels={"x":"Month","Cr":"Cr ₹"}).update_layout(xaxis_tickangle=-45), use_container_width=True)
 
-filtered_df = df.copy()
-if "PR Date Submitted" in filtered_df.columns:
-    filtered_df = filtered_df[(filtered_df["PR Date Submitted"] >= pr_start) & (filtered_df["PR Date Submitted"] <= pr_end)]
-
-if buyer_filter:
-    filtered_df = filtered_df[filtered_df["Buyer.Type"].isin(buyer_filter)]
-if entity_filter:
-    filtered_df = filtered_df[filtered_df["Entity"].isin(entity_filter)]
-if orderer_filter:
-    filtered_df = filtered_df[filtered_df["PO.Creator"].isin(orderer_filter)]
-if po_buyer_type_filter:
-    filtered_df = filtered_df[filtered_df["PO.BuyerType"].isin(po_buyer_type_filter)]
-
-st.sidebar.markdown("---")
-st.sidebar.write("FY:", sel_fy)
-st.sidebar.write("Rows:", len(filtered_df))
-
-# ------------------------------------
-#  6) KPIs
-# ------------------------------------
-st.title("📊 Procure-to-Pay Dashboard")
-c1,c2,c3,c4,c5 = st.columns(5)
-c1.metric("Total PRs", int(filtered_df.get("PR Number", pd.Series(dtype=object)).nunique()))
-c2.metric("Total POs", int(filtered_df.get("Purchase Doc", pd.Series(dtype=object)).nunique()))
-c3.metric("Line Items", len(filtered_df))
-c4.metric("Entities", int(filtered_df.get("Entity", pd.Series(dtype=object)).nunique()))
-c5.metric("Spend (Cr ₹)", f"{filtered_df.get('Net Amount', pd.Series(0)).sum()/1e7:,.2f}")
-
-# ------------------------------------
-#  7) SLA Compliance Gauge
-# ------------------------------------
-st.subheader("🎯 SLA Compliance (PR → PO ≤ 7 days)")
-if {"Po create Date","PR Date Submitted"}.issubset(filtered_df.columns):
-    lead_df = filtered_df.dropna(subset=["Po create Date","PR Date Submitted"]).copy()
-    lead_df["Lead Time (Days)"] = (lead_df["Po create Date"] - lead_df["PR Date Submitted"]).dt.days
-    SLA_DAYS = 7
-    avg_lead = float(lead_df["Lead Time (Days)"].mean()) if not lead_df.empty else 0.0
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=avg_lead, number={"suffix":" days"},
-        gauge={"axis":{"range":[0, max(14, avg_lead*1.2 if avg_lead else 14)]},
-               "bar":{"color":"darkblue"},
-               "steps":[{"range":[0,SLA_DAYS],"color":"lightgreen"},{"range":[SLA_DAYS, max(14, avg_lead*1.2 if avg_lead else 14)],"color":"lightcoral"}],
-               "threshold":{"line":{"color":"red","width":4},"thickness":0.75,"value":SLA_DAYS}}))
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Need 'Po create Date' and 'PR Date Submitted' to compute lead time.")
-
-# ------------------------------------
-#  8) Monthly Total Spend (bar + cumulative)
-# ------------------------------------
-st.subheader("📊 Monthly Total Spend (with Cumulative)")
-dcol = "Po create Date" if "Po create Date" in filtered_df.columns else ("PR Date Submitted" if "PR Date Submitted" in filtered_df.columns else None)
-if dcol and "Net Amount" in filtered_df.columns:
-    t = filtered_df.dropna(subset=[dcol]).copy()
-    t["PO_Month"] = t[dcol].dt.to_period("M").dt.to_timestamp(); t["Month_Str"] = t["PO_Month"].dt.strftime("%b-%Y")
-    m = t.groupby(["PO_Month","Month_Str"], as_index=False)["Net Amount"].sum().sort_values("PO_Month")
-    m["Spend (Cr ₹)"] = m["Net Amount"]/1e7; m["Cumulative (Cr ₹)"] = m["Spend (Cr ₹)"].cumsum()
-    fig = make_subplots(specs=[[{"secondary_y":True}]])
-    fig.add_bar(x=m["Month_Str"], y=m["Spend (Cr ₹)"], name="Monthly Spend (Cr ₹)")
-    fig.add_scatter(x=m["Month_Str"], y=m["Cumulative (Cr ₹)"], mode="lines+markers", name="Cumulative (Cr ₹)", secondary_y=True)
-    fig.update_layout(xaxis_tickangle=-45, legend=dict(orientation="h", y=1.05, x=1))
-    st.plotly_chart(fig, use_container_width=True)
-
-# ------------------------------------
-#  9) Entity Trend
-# ------------------------------------
-st.subheader("💹 Monthly Spend Trend by Entity")
-if "Net Amount" in filtered_df.columns and dcol:
-    x = filtered_df.copy(); x["PO Month"] = x[dcol].dt.to_period("M").dt.to_timestamp()
-    g = x.dropna(subset=["PO Month"]).groupby(["PO Month","Entity"], as_index=False)["Net Amount"].sum(); g["Cr"] = g["Net Amount"]/1e7
-    fig = px.line(g, x=g["PO Month"].dt.strftime("%b-%Y"), y="Cr", color="Entity", markers=True, labels={"x":"Month","Cr":"Spend (Cr ₹)"})
-    fig.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
-
-# ------------------------------------
-# 10) PR/PO Trends, Aging, Weekday
-# ------------------------------------
-st.subheader("📅 Monthly PR & PO Trends")
-if dcol:
-    tmp = filtered_df.copy()
-    tmp["PR Month"] = tmp.get("PR Date Submitted", pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M")
-    tmp["PO Month"] = tmp.get("Po create Date", pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M")
-    ms = tmp.groupby("PR Month").agg({"PR Number":"count","Purchase Doc":"count"}).reset_index()
+# ---------- PR/PO Timing ----------
+with T[2]:
+    st.subheader("SLA (PR→PO ≤7d)")
+    if {"Po create Date","PR Date Submitted"}.issubset(fil.columns):
+        ld = fil.dropna(subset=["Po create Date","PR Date Submitted"]).copy(); ld["Lead Time (Days)"]=(ld["Po create Date"]-ld["PR Date Submitted"]).dt.days
+        avg = float(ld["Lead Time (Days)"].mean()) if not ld.empty else 0.0
+        fig = go.Figure(go.Indicator(mode="gauge+number",value=avg,number={"suffix":" d"},gauge={"axis":{"range":[0,max(14,avg*1.2 if avg else 14)]},"bar":{"color":"darkblue"},"steps":[{"range":[0,7],"color":"lightgreen"},{"range":[7,max(14,avg*1.2 if avg else 14)],"color":"lightcoral"}],"threshold":{"line":{"color":"red","width":4},"value":7}}))
+        st.plotly_chart(fig, use_container_width=True)
+        bins=[0,7,15,30,60,90,999]; labels=["0-7","8-15","16-30","31-60","61-90","90+"]
+        ag = pd.cut(ld["Lead Time (Days)"], bins=bins, labels=labels).value_counts(normalize=True).sort_index().reset_index(); ag.columns=["Bucket","Pct"]; ag["Pct"]=ag["Pct"]*100
+        st.plotly_chart(px.bar(ag,x="Bucket",y="Pct",text="Pct").update_traces(texttemplate="%{text:.1f}%",textposition="outside"), use_container_width=True)
+    st.subheader("PR & PO per Month")
+    tmp = fil.copy(); tmp["PR Month"]=tmp.get("PR Date Submitted",pd.Series(pd.NaT,index=tmp.index)).dt.to_period("M"); tmp["PO Month"]=tmp.get("Po create Date",pd.Series(pd.NaT,index=tmp.index)).dt.to_period("M")
+    ms = tmp.groupby("PR Month").agg({"PR Number":"count","Purchase Doc":"count"}).reset_index();
     if not ms.empty:
-        ms.columns = ["Month","PR Count","PO Count"]; ms["Month"] = ms["Month"].astype(str)
+        ms.columns=["Month","PR Count","PO Count"]; ms["Month"]=ms["Month"].astype(str)
         st.line_chart(ms.set_index("Month"), use_container_width=True)
+    st.subheader("Weekday Split")
+    wd = fil.copy(); wd["PR Wk"]=wd.get("PR Date Submitted",pd.Series(pd.NaT,index=wd.index)).dt.day_name(); wd["PO Wk"]=wd.get("Po create Date",pd.Series(pd.NaT,index=wd.index)).dt.day_name()
+    prc = wd["PR Wk"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
+    poc = wd["PO Wk"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
+    c1,c2 = st.columns(2); c1.bar_chart(prc); c2.bar_chart(poc)
+    st.subheader("Open PRs")
+    if "PR Status" in fil.columns:
+        op = fil[fil["PR Status"].isin(["Approved","InReview"])].copy()
+        if not op.empty and "PR Date Submitted" in op.columns:
+            op["Pending Age (d)"]=(pd.Timestamp.today().normalize()-op["PR Date Submitted"]).dt.days
+            st.dataframe(op[[c for c in ["PR Number","PR Date Submitted","Pending Age (d)","Procurement Category","Product Name","Net Amount","PO Budget Code","PR Status","Entity","PO.Creator","Purchase Doc"] if c in op.columns]], use_container_width=True)
 
-st.subheader("🧮 PR to PO Aging Buckets")
-if {"Po create Date","PR Date Submitted"}.issubset(filtered_df.columns):
-    la = (filtered_df["Po create Date"] - filtered_df["PR Date Submitted"]).dt.days.dropna()
-    bins = [0,7,15,30,60,90,999]; labels = ["0-7","8-15","16-30","31-60","61-90","90+"]
-    age = pd.cut(la, bins=bins, labels=labels).value_counts(normalize=True).sort_index().reset_index()
-    age.columns = ["Aging Bucket","Percentage"]; age["Percentage"] *= 100
-    fig = px.bar(age, x="Aging Bucket", y="Percentage", text="Percentage"); fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
+    # NEW: Lead time by Buyer Type & Buyer
+    st.subheader("Lead Time by Buyer Type & Buyer")
+    if {"Po create Date","PR Date Submitted"}.issubset(fil.columns):
+        ld2 = fil.dropna(subset=["Po create Date","PR Date Submitted"]).copy(); ld2["Lead Time (Days)"]=(ld2["Po create Date"]-ld2["PR Date Submitted"]).dt.days
+        if "Buyer.Type" in ld2.columns:
+            st.dataframe(ld2.groupby("Buyer.Type")["Lead Time (Days)"].mean().round(1).reset_index().sort_values("Lead Time (Days)"), use_container_width=True)
+        if "PO.Creator" in ld2.columns:
+            st.dataframe(ld2.groupby("PO.Creator")["Lead Time (Days)"].mean().round(1).reset_index().sort_values("Lead Time (Days)"), use_container_width=True)
 
-st.subheader("📆 PRs and POs by Weekday")
-wd = filtered_df.copy(); wd["PR Weekday"] = wd.get("PR Date Submitted", pd.Series(pd.NaT, index=wd.index)).dt.day_name(); wd["PO Weekday"] = wd.get("Po create Date", pd.Series(pd.NaT, index=wd.index)).dt.day_name()
-prc = wd["PR Weekday"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
-poc = wd["PO Weekday"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
-c1,c2 = st.columns(2); c1.bar_chart(prc, use_container_width=True); c2.bar_chart(poc, use_container_width=True)
+    # NEW: Daily PR Trends
+    st.subheader("Daily PR Submissions")
+    if "PR Date Submitted" in fil.columns:
+        daily = fil.copy(); daily["PR Date"]=pd.to_datetime(daily["PR Date Submitted"], errors="coerce")
+        dtrend = daily.groupby("PR Date").size().reset_index(name="PR Count")
+        st.plotly_chart(px.line(dtrend, x="PR Date", y="PR Count", title="Daily PRs"), use_container_width=True)
 
-# ------------------------------------
-# 11) Open PRs
-# ------------------------------------
-st.subheader("⚠️ Open PRs (Approved/InReview)")
-if "PR Status" in filtered_df.columns:
-    open_df = filtered_df[filtered_df["PR Status"].isin(["Approved","InReview"])].copy()
-    if not open_df.empty and "PR Date Submitted" in open_df.columns:
-        open_df["Pending Age (Days)"] = (pd.Timestamp.today().normalize() - open_df["PR Date Submitted"]).dt.days
-        sm = (open_df.groupby("PR Number").agg({
-            "PR Date Submitted":"first","Pending Age (Days)":"first","Procurement Category":"first","Product Name":"first",
-            "Net Amount":"sum","PO Budget Code":"first","PR Status":"first","Buyer Group":"first","Buyer.Type":"first",
-            "Entity":"first","PO.Creator":"first","Purchase Doc":"first"}).reset_index())
-        st.metric("🔢 Open PRs", int(sm["PR Number"].nunique()))
-        st.bar_chart(pd.to_datetime(sm["PR Date Submitted"]).dt.to_period("M").value_counts().sort_index(), use_container_width=True)
-        st.dataframe(sm, use_container_width=True)
+    # NEW: Monthly Unique PO Generation
+    st.subheader("Monthly Unique PO Generation")
+    if {"Purchase Doc","Po create Date"}.issubset(fil.columns):
+        pm = fil.dropna(subset=["Po create Date","Purchase Doc"]).copy(); pm["PO Month"]=pm["Po create Date"].dt.to_period("M")
+        mcount = pm.groupby("PO Month")["Purchase Doc"].nunique().reset_index(name="Unique PO Count"); mcount["PO Month"]=mcount["PO Month"].astype(str)
+        st.plotly_chart(px.bar(mcount, x="PO Month", y="Unique PO Count", text="Unique PO Count", title="Unique POs per Month").update_traces(textposition="outside"), use_container_width=True)
 
-# ------------------------------------
-# 12) Buyer-wise Spend & Category
-# ------------------------------------
-st.subheader("💰 Buyer-wise Spend (Cr ₹)")
-if {"PO.Creator","Net Amount"}.issubset(filtered_df.columns):
-    bs = filtered_df.groupby("PO.Creator")["Net Amount"].sum().sort_values(ascending=False).reset_index(); bs["Cr"] = bs["Net Amount"]/1e7
-    fig = px.bar(bs, x="PO.Creator", y="Cr", text="Cr", labels={"Cr":"Spend (Cr ₹)","PO.Creator":"Buyer"}); fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
+# ---------- Delivery ----------
+with T[3]:
+    st.subheader("Delivery Summary")
+    dv = fil.rename(columns={"PO Quantity":"PO Qty","ReceivedQTY":"Received Qty","Pending QTY":"Pending Qty"}).copy()
+    if {"PO Qty","Received Qty"}.issubset(dv.columns):
+        dv["% Received"]=np.where(dv["PO Qty"].astype(float)>0,(dv["Received Qty"].astype(float)/dv["PO Qty"].astype(float))*100,0.0)
+        summ = dv.groupby(["Purchase Doc","PO Vendor","Product Name","Item Description"],dropna=False).agg({"PO Qty":"sum","Received Qty":"sum","Pending Qty":"sum","% Received":"mean"}).reset_index()
+        st.dataframe(summ.sort_values("Pending Qty",ascending=False), use_container_width=True)
+        st.plotly_chart(px.bar(summ.sort_values("Pending Qty",ascending=False).head(20), x="Purchase Doc", y="Pending Qty", color="PO Vendor", text="Pending Qty", title="Top 20 Pending Qty").update_traces(textposition="outside"), use_container_width=True)
+        st.subheader("Top Pending Lines by Value")
+        if {"Pending Qty","PO Unit Rate"}.issubset(dv.columns):
+            dv["Pending Value"]=dv["Pending Qty"].astype(float)*dv["PO Unit Rate"].astype(float)
+            keep=["PR Number","Purchase Doc","Procurement Category","Buying legal entity","PR Budget description","Product Name","Item Description","Pending Qty","PO Unit Rate","Pending Value"]
+            st.dataframe(dv.sort_values("Pending Value",ascending=False).head(50)[[c for c in keep if c in dv.columns]], use_container_width=True)
 
-st.subheader("🧭 Spend by Category (Descending)")
-if {"Procurement Category","Net Amount"}.issubset(filtered_df.columns):
-    cs = filtered_df.groupby("Procurement Category")["Net Amount"].sum().sort_values(ascending=False).reset_index(); cs["Cr"] = cs["Net Amount"]/1e7
-    fig = px.bar(cs, x="Procurement Category", y="Cr", labels={"Cr":"Spend (Cr ₹)"}); fig.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+# ---------- Vendors ----------
+with T[4]:
+    st.subheader("Top Vendors by Spend")
+    if {"PO Vendor","Purchase Doc","Net Amount"}.issubset(fil.columns):
+        vs = fil.groupby("PO Vendor",dropna=False).agg(Vendor_PO_Count=("Purchase Doc","nunique"), Total_Spend_Cr=("Net Amount", lambda s:(s.sum()/1e7).round(2))).reset_index().sort_values("Total_Spend_Cr",ascending=False)
+        st.dataframe(vs.head(10), use_container_width=True)
+        st.plotly_chart(px.bar(vs.head(10), x="PO Vendor", y="Total_Spend_Cr", text="Total_Spend_Cr", title="Top 10 Vendors (Cr ₹)").update_traces(textposition="outside"), use_container_width=True)
 
-# ------------------------------------
-# 13) PO Approval & Status
-# ------------------------------------
-if "PO Approved Date" in filtered_df.columns:
-    st.subheader("📋 PO Approval Summary")
-    pad = filtered_df.dropna(subset=["Po create Date"]).copy(); pad["PO Approved Date"] = pd.to_datetime(pad["PO Approved Date"], errors="coerce")
-    tot = int(pad.get("Purchase Doc", pd.Series(dtype=object)).nunique()); appr = int(pad[pad["PO Approved Date"].notna()].get("Purchase Doc", pd.Series(dtype=object)).nunique())
-    pend = tot - appr; pad["PO Approval Lead Time"] = (pad["PO Approved Date"] - pad["Po create Date"]).dt.days; avg = float(pad["PO Approval Lead Time"].mean()) if not pad.empty else 0.0
-    c1,c2,c3,c4 = st.columns(4); c1.metric("📦 Total POs", tot); c2.metric("✅ Approved POs", appr); c3.metric("⏳ Pending", pend); c4.metric("⏱️ Avg Lead (d)", avg)
-    st.dataframe(pad[["PO.Creator","Purchase Doc","Po create Date","PO Approved Date","PO Approval Lead Time"]].sort_values(by="PO Approval Lead Time", ascending=False), use_container_width=True)
+    # NEW: Vendor Delivery Performance
+    st.subheader("Vendor Delivery Performance (Top 10 by Spend)")
+    if {"PO Vendor","Purchase Doc","PO Delivery Date","Pending QTY"}.issubset(fil.columns):
+        today = pd.Timestamp.today().normalize().date()
+        vdf = fil.copy()
+        vdf["PendingQtyFill"] = vdf["Pending QTY"].fillna(0).astype(float)
+        vdf["Is_Fully_Delivered"] = vdf["PendingQtyFill"] == 0
+        vdf["PO Delivery Date"] = pd.to_datetime(vdf["PO Delivery Date"], errors="coerce")
+        vdf["Is_Late"] = vdf["PO Delivery Date"].dt.date.notna() & (vdf["PO Delivery Date"].dt.date < today) & (vdf["PendingQtyFill"] > 0)
+        perf = vdf.groupby("PO Vendor", dropna=False).agg(Total_PO_Count=("Purchase Doc","nunique"), Fully_Delivered_PO_Count=("Is_Fully_Delivered","sum"), Late_PO_Count=("Is_Late","sum")).reset_index()
+        perf["Pct_Fully_Delivered"] = (perf["Fully_Delivered_PO_Count"] / perf["Total_PO_Count"] * 100).round(1)
+        perf["Pct_Late"] = (perf["Late_PO_Count"] / perf["Total_PO_Count"] * 100).round(1)
+        # join spend
+        if {"PO Vendor","Net Amount"}.issubset(fil.columns):
+            spend = fil.groupby("PO Vendor", dropna=False)["Net Amount"].sum().rename("Spend").reset_index()
+            perf = perf.merge(spend, on="PO Vendor", how="left").fillna({"Spend":0})
+        top10 = perf.sort_values("Spend", ascending=False).head(10)
+        st.dataframe(top10[["PO Vendor","Total_PO_Count","Fully_Delivered_PO_Count","Late_PO_Count","Pct_Fully_Delivered","Pct_Late"]], use_container_width=True)
+        melt = top10.melt(id_vars=["PO Vendor"], value_vars=["Pct_Fully_Delivered","Pct_Late"], var_name="Metric", value_name="Percentage")
+        st.plotly_chart(px.bar(melt, x="PO Vendor", y="Percentage", color="Metric", barmode="group", title="% Fully Delivered vs % Late (Top 10 by Spend)"), use_container_width=True)
 
-if "PO Status" in filtered_df.columns:
-    st.subheader("📊 PO Status Breakdown")
-    s = filtered_df["PO Status"].value_counts().reset_index(); s.columns=["PO Status","Count"]
-    c1,c2 = st.columns([2,3]); c1.dataframe(s, use_container_width=True); c2.plotly_chart(px.pie(s, names="PO Status", values="Count", hole=0.3), use_container_width=True)
-
-# ------------------------------------
-# 14) Delivery Summary & Top Pending by Value
-# ------------------------------------
-st.subheader("🚚 PO Delivery Summary: Received vs Pending")
-delv = filtered_df.rename(columns={"PO Quantity":"PO Qty","ReceivedQTY":"Received Qty","Pending QTY":"Pending Qty"}).copy()
-if {"PO Qty","Received Qty"}.issubset(delv.columns):
-    delv["% Received"] = (delv["Received Qty"] / delv["PO Qty"]).replace([pd.NA, pd.NaT], 0).fillna(0)*100
-    summ = delv.groupby(["Purchase Doc","PO Vendor","Product Name","Item Description"], dropna=False).agg({"PO Qty":"sum","Received Qty":"sum","Pending Qty":"sum","% Received":"mean"}).reset_index()
-    st.dataframe(summ.sort_values("Pending Qty", ascending=False), use_container_width=True)
-    fig = px.bar(summ.sort_values("Pending Qty", ascending=False).head(20), x="Purchase Doc", y="Pending Qty", color="PO Vendor", text="Pending Qty", title="Top 20 POs Awaiting Delivery")
-    fig.update_traces(textposition="outside"); st.plotly_chart(fig, use_container_width=True)
-    st.markdown("### 📋 Delivery Performance Summary")
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("PO Lines", len(delv)); c2.metric("Fully Delivered", int((delv["Pending Qty"]==0).sum())); c3.metric("Pending Delivery", int((delv["Pending Qty"]>0).sum())); c4.metric("Avg. Receipt %", f"{delv['% Received'].mean():.1f}%")
-
-st.subheader("📋 Top 50 Pending Lines (by Value)")
-if {"Pending Qty","PO Unit Rate"}.issubset(delv.columns):
-    p = delv[delv["Pending Qty"]>0].copy(); p["Pending Value"] = p["Pending Qty"]*p["PO Unit Rate"]
-    keep = ["PR Number","Purchase Doc","Procurement Category","Buying legal entity","PR Budget description","Product Name","Item Description","Pending Qty","Pending Value"]
-    cols = [c for c in keep if c in p.columns]
-    st.dataframe(p.sort_values("Pending Value", ascending=False).head(50)[cols], use_container_width=True)
-
-st.subheader("🏆 Top 10 Vendors by Spend (Cr ₹)")
-if {"PO Vendor","Purchase Doc","Net Amount"}.issubset(filtered_df.columns):
-    vs = (filtered_df.groupby("PO Vendor", dropna=False)
-          .agg(Vendor_PO_Count=("Purchase Doc","nunique"), Total_Spend_Cr=("Net Amount", lambda x:(x.sum()/1e7).round(2)))
-          .reset_index().sort_values("Total_Spend_Cr", ascending=False))
-    st.dataframe(vs.head(10), use_container_width=True)
-    st.plotly_chart(px.bar(vs.head(10), x="PO Vendor", y="Total_Spend_Cr", text="Total_Spend_Cr", labels={"Total_Spend_Cr":"Spend (Cr ₹)","PO Vendor":"Vendor"}), use_container_width=True)
-
-# ======================================================================
-# 15) SMART BUDGET MAPPER (Unified) — Dept & Services (Subcategory)
-# ======================================================================
-
-st.subheader("🏢 Department-wise Spend — Smart Mapper (Dept + Services)")
-
-smart = filtered_df.copy(); smart["Dept.Chart"], smart["Subcat.Chart"], smart["__Dept.MapSrc"] = pd.NA, pd.NA, "UNMAPPED"
-
-# --- Normalizers ---
-import re
-
-def _norm_code_series(s: pd.Series) -> pd.Series:
-    s = s.astype(str).str.upper().str.strip()
-    s = s.str.replace("\xa0", " ", regex=False)
-    s = s.str.replace("&", "AND", regex=False)
-    s = s.str.replace("R&D", "RANDD", regex=False)
-    s = s.str.replace(r"[/\\_\-]+", ".", regex=True)  # unify separators
-    s = s.str.replace(r"\s+", "", regex=True)
-    s = s.str.replace(r"\.{2,}", ".", regex=True)
-    s = s.str.replace(r"^\.+|\.+$", "", regex=True)
-    s = s.str.replace(r"[^A-Z0-9\.]+", "", regex=True)
-    return s
-
-def _norm_one(x):
-    if pd.isna(x): return ""
-    return _norm_code_series(pd.Series([x])).iloc[0]
-
-# --- Hard fallback Prefix_3 → Dept (last resort) ---
-_P3_FALLBACK = {
-    "CNST":"Program","PM":"Program","PRJ":"Design",
-    "MFG":"Manufacturing","INF":"Infra","HR":"HR & Admin","HRP":"HR & Admin",
-    "MKT":"Marketing","A&M":"Marketing","FIN":"Finance",
-    "LGL":"Legal & IP","LGLF":"Legal & IP","IP":"Legal & IP","PRT":"Legal & IP",
-    "SS":"SS & SCM","TLG":"SS & SCM","COG":"SS & SCM",
-    "SLS":"Sales","RENT":"Rental Offices","COUR":"Rental Offices",
-    "R&D":"R&D","RANDD":"R&D","PRDDEV":"R&D","DVP":"R&D","MT":"R&D","TV":"R&D","VIC":"R&D","PT":"R&D","SFL":"R&D",
-    "DSN":"Design","ACCS":"Design","CS":"Customer Success",
-}
-
-# --- Load mapping file(s) ---
-expanded = None
-try:
-    expanded = pd.read_excel("Expanded_Budget_Code_Mapping.xlsx")
-except Exception:
-    try:
-        expanded = pd.read_excel("Final_Budget_Mapping_Completed_Verified.xlsx")
-    except Exception:
-        expanded = None
-
-exact_map = {}; exact_map_sub = {}; entity_pfx_map = {}; entity_pfx_map_sub = {}; pfx_map = {}; pfx_map_sub = {}
-if expanded is not None:
-    m = expanded.copy(); m.columns = m.columns.astype(str).str.strip()
-    code_col = next((c for c in m.columns if c.lower().strip() in ["budget code","code","budget_code"]), None)
-    dept_col = next((c for c in m.columns if "department" in c.lower()), None)
-    subc_col = next((c for c in m.columns if ("subcat" in c.lower()) or ("sub category" in c.lower()) or ("subcategory" in c.lower())), None)
-    p3_col   = next((c for c in m.columns if "prefix_3" in c.lower()), None)
-    ent_col  = next((c for c in m.columns if c.lower().strip() in ["entity","domain","company","prefix_1","brand"]), None)
-
-    if code_col and dept_col:
-        m["__code_norm"] = _norm_code_series(m[code_col])
-        tmp = m.dropna(subset=["__code_norm"]).drop_duplicates(subset=["__code_norm"], keep="first")
-        exact_map = dict(zip(tmp["__code_norm"], tmp[dept_col].astype(str).str.strip()))
-        if subc_col: exact_map_sub = dict(zip(tmp["__code_norm"], tmp[subc_col].astype(str).str.strip()))
-    if p3_col: m["__p3_norm"] = _norm_code_series(m[p3_col])
-    if ent_col: m["__ent_norm"] = _norm_code_series(m[ent_col])
-
-    if p3_col and dept_col and ent_col and not m.empty:
-        grp = m.dropna(subset=["__p3_norm","__ent_norm"]).copy()
-        if not grp.empty:
-            mode_dept = grp.groupby(["__ent_norm","__p3_norm"])[dept_col].agg(lambda x: x.mode().iloc[0] if len(x.mode()) else x.iloc[0])
-            entity_pfx_map = mode_dept.to_dict()
-            if subc_col:
-                mode_sub = grp.groupby(["__ent_norm","__p3_norm"])[subc_col].agg(lambda x: x.mode().iloc[0] if len(x.mode()) else x.iloc[0])
-                entity_pfx_map_sub = mode_sub.to_dict()
-
-    if p3_col and dept_col and not m.empty:
-        grp2 = m.dropna(subset=["__p3_norm"]).copy()
-        if not grp2.empty:
-            mode_dept2 = grp2.groupby("__p3_norm")[dept_col].agg(lambda x: x.mode().iloc[0] if len(x.mode()) else x.iloc[0])
-            pfx_map = mode_dept2.to_dict()
-            if subc_col:
-                mode_sub2 = grp2.groupby("__p3_norm")[subc_col].agg(lambda x: x.mode().iloc[0] if len(x.mode()) else x.iloc[0])
-                pfx_map_sub = mode_sub2.to_dict()
-
-# --- Mapping function ---
-
-def _pick_p3(code: str):
-    segs = code.split('.')
-    for j in range(len(segs)-1, -1, -1):
-        seg = segs[j]
-        if (seg in pfx_map) or (seg in _P3_FALLBACK):
-            return seg
-    return None
-
-def _map_one(code_raw, ent_raw):
-    code = _norm_one(code_raw); ent = _norm_one(ent_raw)
-    if not code: return (pd.NA, pd.NA, "UNMAPPED")
-
-    if code in exact_map:  # EXACT
-        return (exact_map.get(code), exact_map_sub.get(code, pd.NA), "EXACT")
-
-    parts = code.split('.')  # HIER
-    if len(parts) > 1:
-        for i in range(1, len(parts)):
-            suf = '.'.join(parts[i:])
-            if suf in exact_map:
-                return (exact_map.get(suf), exact_map_sub.get(suf, pd.NA), "HIER")
-
-    p3 = _pick_p3(code)
-    if p3 and ent and (ent, p3) in entity_pfx_map:  # ENTITY+PFX3
-        return (entity_pfx_map.get((ent,p3)), entity_pfx_map_sub.get((ent,p3), pd.NA), "ENTITY_PFX")
-    if p3 and (p3 in pfx_map):  # PFX3 only
-        return (pfx_map.get(p3), pfx_map_sub.get(p3, pd.NA), "PFX3")
-    if p3 and (p3 in _P3_FALLBACK):  # KEYWORD fallback
-        return (_P3_FALLBACK[p3], pd.NA, "KEYWORD")
-    return (pd.NA, pd.NA, "UNMAPPED")
-
-# --- Apply mapping ---
-code_cols = [c for c in ["PO Budget Code","PR Budget Code"] if c in smart.columns]
-if code_cols:
-    base = smart[code_cols[0]]; ent = smart.get("Entity", pd.Series([pd.NA]*len(smart)))
-    mapped = pd.DataFrame([_map_one(c,e) for c,e in zip(base.tolist(), ent.tolist())], columns=["__dept","__subc","__src"], index=smart.index)
-    smart["Dept.Chart"] = smart["Dept.Chart"].combine_first(mapped["__dept"]) if "Dept.Chart" in smart.columns else mapped["__dept"]
-    smart["Subcat.Chart"] = smart["Subcat.Chart"].combine_first(mapped["__subc"]) if "Subcat.Chart" in smart.columns else mapped["__subc"]
-    need_src = smart["__Dept.MapSrc"].isin(["UNMAPPED", pd.NA, None])
-    smart.loc[need_src, "__Dept.MapSrc"] = mapped.loc[need_src, "__src"].fillna("UNMAPPED")
-
-pre_fb = smart["Dept.Chart"].isna()
-if pre_fb.all():
-    for cand in ["PO Department","PO Dept","PR Department","PR Dept","Dept.Final","Department"]:
-        if cand in smart.columns:
-            smart["Dept.Chart"] = smart["Dept.Chart"].combine_first(smart[cand])
-smart.loc[smart["__Dept.MapSrc"].eq("UNMAPPED") & smart["Dept.Chart"].notna(), "__Dept.MapSrc"] = "FALLBACK"
-smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
-
-# --- Canonical labels (Dept/Subcategory) & optional alias override ---
-DEPT_ALIASES = {
-    "HR & ADMIN": "HR & Admin",
-    "HUMAN RESOURCES": "HR & Admin",
-    "LEGAL": "Legal & IP",
-    "LEGAL & IP": "Legal & IP",
-    "PROGRAM": "Program",
-    "R AND D": "R&D",
-    "R&D": "R&D",
-    "RANDD": "R&D",
-    "RESEARCH & DEVELOPMENT": "R&D",
-    "INFRASTRUCTURE": "Infra",
-    "INFRA": "Infra",
-    "CUSTOMER SUCCESS": "Customer Success",
-    "MFG": "Manufacturing",
-    "MANUFACTURING": "Manufacturing",
-    "DESIGN": "Design",
-    "MARKETING": "Marketing",
-    "SALES": "Sales",
-    "SS & SCM": "SS & SCM",
-    "SUPPLY CHAIN": "SS & SCM",
-    "FINANCE": "Finance",
-    "RENTAL OFFICES": "Rental Offices",
-}
-SUBCAT_ALIASES = {
-    # Keep as-is unless you want to coalesce spelling variants. Examples:
-    "HOUSEKEEPING": "Admin, Housekeeping and Security",
-    "ADMIN, HOUSEKEEPING AND SECURITY": "Admin, Housekeeping and Security",
-    "ELECTRICITY EXPENSES": "Electricity",
-    "PANTY": "Pantry and Canteen",
-    "PANTRY": "Pantry and Canteen",
-    "TRAVEL": "Travel & Other",
-}
-
-def _canonize(val: pd.Series, mapping: dict) -> pd.Series:
-    def f(x):
-        if pd.isna(x):
-            return x
-        t = str(x).strip()
-        key = t.upper()
-        return mapping.get(key, t)
-    return val.apply(f)
-
-# Sidebar loader for alias overrides (CSV/XLSX with columns: Department, Subcategory, Dept.Alias, Subcat.Alias)
-with st.sidebar.expander("🔧 Optional: alias overrides"):
-    alias_file = st.file_uploader("Upload alias overrides (CSV/XLSX)", type=["csv","xlsx"], key="alias_upload")
-    if alias_file is not None:
+# ---------- Smart Budget Mapper / Dept & Services ----------
+with T[5]:
+    st.subheader("Dept & Services (Smart Mapper)")
+    def _norm_series(s):
+        s = s.astype(str).str.upper().str.strip()
+        s = s.str.replace("\xa0"," ",regex=False).str.replace("&","AND",regex=False).str.replace("R&D","RANDD",regex=False)
+        s = s.str.replace(r"[/\\_\-]+",".",regex=True).str.replace(r"\s+","",regex=True).str.replace(r"\.{2,}",".",regex=True)
+        s = s.str.replace(r"^\.+|\.+$","",regex=True).str.replace(r"[^A-Z0-9\.]+","",regex=True)
+        return s
+    def _norm_one(x):
+        return _norm_series(pd.Series([x])).iloc[0] if pd.notna(x) else ""
+    P3F={"CNST":"Program","PM":"Program","PRJ":"Design","MFG":"Manufacturing","INF":"Infra","HR":"HR & Admin","HRP":"HR & Admin","MKT":"Marketing","A&M":"Marketing","FIN":"Finance","LGL":"Legal & IP","LGLF":"Legal & IP","IP":"Legal & IP","PRT":"Legal & IP","SS":"SS & SCM","TLG":"SS & SCM","COG":"SS & SCM","SLS":"Sales","RENT":"Rental Offices","COUR":"Rental Offices","R&D":"R&D","RANDD":"R&D","PRDDEV":"R&D","DVP":"R&D","MT":"R&D","TV":"R&D","VIC":"R&D","PT":"R&D","SFL":"R&D","DSN":"Design","ACCS":"Design","CS":"Customer Success"}
+    smart = fil.copy(); smart["Dept.Chart"],smart["Subcat.Chart"],smart["__src"]=pd.NA,pd.NA,"UNMAPPED"
+    exp=None
+    for name in ["Expanded_Budget_Code_Mapping.xlsx","Final_Budget_Mapping_Completed_Verified.xlsx"]:
         try:
-            if str(alias_file.name).lower().endswith(".csv"):
-                alias_df = pd.read_csv(alias_file)
-            else:
-                alias_df = pd.read_excel(alias_file)
-            alias_df.columns = alias_df.columns.astype(str).str.strip()
-            if "Department" in alias_df.columns and "Dept.Alias" in alias_df.columns:
-                DEPT_ALIASES.update({str(k).upper().strip(): str(v).strip() for k,v in alias_df[["Department","Dept.Alias"]].dropna().values})
-            if "Subcategory" in alias_df.columns and "Subcat.Alias" in alias_df.columns:
-                SUBCAT_ALIASES.update({str(k).upper().strip(): str(v).strip() for k,v in alias_df[["Subcategory","Subcat.Alias"]].dropna().values})
-            st.success("Aliases loaded.")
-        except Exception as e:
-            st.warning(f"Alias file could not be read: {e}")
-
-# Apply canonicalization just before charts/drilldowns
-smart["Dept.Chart"] = _canonize(smart["Dept.Chart"].astype(str), DEPT_ALIASES)
-smart["Subcat.Chart"] = _canonize(smart.get("Subcat.Chart", pd.Series([pd.NA]*len(smart))), SUBCAT_ALIASES)
-
-with st.expander("🧪 Smart Mapper QA", expanded=False):
-    st.write({"counts": smart["__Dept.MapSrc"].value_counts(dropna=False).to_dict()})
-    if code_cols:
-        probe = smart[smart["__Dept.MapSrc"]=="UNMAPPED"].copy()
-        if not probe.empty:
-            probe["Code.Raw"] = probe[code_cols[0]]; probe["Code.Norm"] = _norm_code_series(probe["Code.Raw"])
-            def _guess(c):
-                parts = str(c).split("."); return parts[-1] if parts else ""
-            probe["P3.Guess"] = probe["Code.Norm"].apply(_guess)
-            probe["Entity.Norm"] = smart.get("Entity", pd.Series([pd.NA]*len(smart))).loc[probe.index].apply(_norm_one)
-            probe["P3.Fallback Dept"] = probe["P3.Guess"].apply(lambda t:_P3_FALLBACK.get(t, ""))
-            show = probe[["Code.Raw","Code.Norm","Entity.Norm","P3.Guess","P3.Fallback Dept"]].drop_duplicates().head(200)
-            st.dataframe(show, use_container_width=True)
-
-# --- Charts & Drilldowns (Dept → Service → Lines) ---
-if "Net Amount" in smart.columns:
-    dep = smart.groupby("Dept.Chart", dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount", ascending=False)
-    dep["Cr"] = dep["Net Amount"]/1e7
-    st.plotly_chart(px.bar(dep.head(30), x="Dept.Chart", y="Cr", labels={"Cr":"Spend (Cr ₹)"}, title="Department-wise Spend (Top 30)").update_layout(xaxis_tickangle=-45), use_container_width=True)
-
-    cA,cB = st.columns([2,1])
-    with cA:
-        dept_pick = st.selectbox("Drill down: Department", dep["Dept.Chart"].astype(str).tolist(), key="smart_dept_pick")
-    with cB:
-        topn = st.number_input("Top N Vendors/Services", min_value=5, max_value=100, value=20, step=5, key="smart_topn")
-
-    det = smart[smart["Dept.Chart"].astype(str)==str(dept_pick)].copy()
-    k1,k2,k3 = st.columns(3)
-    k1.metric("Lines", len(det)); k2.metric("PRs", int(det.get("PR Number", pd.Series(dtype=object)).nunique())); k3.metric("Spend (Cr ₹)", f"{det.get('Net Amount', pd.Series(0)).sum()/1e7:,.2f}")
-
-    if "Subcat.Chart" in det.columns:
-        ss = det.groupby("Subcat.Chart", dropna=False)["Net Amount"].sum().sort_values(ascending=False).reset_index(); ss["Cr"] = ss["Net Amount"]/1e7
-        c1,c2 = st.columns(2)
-        c1.plotly_chart(px.bar(ss.head(int(topn)), x="Subcat.Chart", y="Cr", title=f"{dept_pick} — Top Services").update_layout(xaxis_tickangle=-45), use_container_width=True)
-        c2.plotly_chart(px.pie(ss.head(12), names="Subcat.Chart", values="Net Amount", title=f"{dept_pick} — Service Share"), use_container_width=True)
-        svc = st.selectbox("🔎 Drill Service to see lines", ss["Subcat.Chart"].astype(str).tolist(), key="smart_svc_pick")
-        sub = det[det["Subcat.Chart"].astype(str)==str(svc)].copy()
-        want = ["PO Budget Code","Subcat.Chart","Dept.Chart","Purchase Doc","PR Number","Procurement Category","Product Name","Item Description","PO Vendor","Net Amount"]
-        cols = [c for c in want if c in sub.columns]
-        if not cols:
-            cols = [c for c in ["Dept.Chart","Purchase Doc","PR Number","Net Amount"] if c in sub.columns]
-        st.dataframe(sub[cols], use_container_width=True)
-        st.download_button("⬇️ Download Lines (CSV)", sub[cols].to_csv(index=False), file_name=f"lines_{dept_pick}_{svc}.csv", mime="text/csv", key=f"dl_lines_{hash((dept_pick,svc))}")
-
-    st.subheader("🧩 Dept × Service (₹ Cr)")
+            exp=pd.read_excel(name); break
+        except Exception: pass
+    EM,EMs,EP,EPs,P3,P3s = {},{},{},{},{},{}
+    if exp is not None:
+        m=exp.copy(); m.columns=m.columns.astype(str).str.strip()
+        code_col=next((c for c in m.columns if c.lower().strip() in ["budget code","code","budget_code"]),None)
+        dept_col=next((c for c in m.columns if "department" in c.lower()),None)
+        subc_col=next((c for c in m.columns if ("subcat" in c.lower()) or ("sub category" in c.lower()) or ("subcategory" in c.lower())),None)
+        p3_col=next((c for c in m.columns if "prefix_3" in c.lower()),None)
+        ent_col=next((c for c in m.columns if c.lower().strip() in ["entity","domain","company","prefix_1","brand"]),None)
+        if code_col and dept_col:
+            m["__code"]=_norm_series(m[code_col]); tmp=m.dropna(subset=["__code"]).drop_duplicates("__code")
+            EM= dict(zip(tmp["__code"], tmp[dept_col].astype(str).str.strip()))
+            if subc_col: EMs=dict(zip(tmp["__code"], tmp[subc_col].astype(str).str.strip()))
+        if p3_col: m["__p3"]=_norm_series(m[p3_col])
+        if ent_col: m["__ent"]=_norm_series(m[ent_col])
+        if p3_col and dept_col and ent_col and not m.empty:
+            g=m.dropna(subset=["__p3","__ent"]).copy();
+            if not g.empty:
+                EP = g.groupby(["__ent","__p3"])[dept_col].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else s.iloc[0]).to_dict()
+                if subc_col: EPs = g.groupby(["__ent","__p3"])[subc_col].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else s.iloc[0]).to_dict()
+        if p3_col and dept_col and not m.empty:
+            g2=m.dropna(subset=["__p3"]).copy();
+            if not g2.empty:
+                P3 = g2.groupby("__p3")[dept_col].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else s.iloc[0]).to_dict()
+                if subc_col: P3s = g2.groupby("__p3")[subc_col].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else s.iloc[0]).to_dict()
+    def pick_p3(code):
+        segs=code.split('.')
+        for j in range(len(segs)-1,-1,-1):
+            if (segs[j] in P3) or (segs[j] in P3F): return segs[j]
+        return None
+    def map_one(code_raw, ent_raw):
+        code=_norm_one(code_raw); ent=_norm_one(ent_raw)
+        if not code: return (pd.NA,pd.NA,"UNMAPPED")
+        if code in EM: return (EM.get(code), EMs.get(code,pd.NA), "EXACT")
+        parts=code.split('.')
+        if len(parts)>1:
+            for i in range(1,len(parts)):
+                suf='.'.join(parts[i:])
+                if suf in EM: return (EM.get(suf), EMs.get(suf,pd.NA), "HIER")
+        p3=pick_p3(code)
+        if p3 and ent and (ent,p3) in EP: return (EP.get((ent,p3)), EPs.get((ent,p3),pd.NA), "ENTITY_PFX")
+        if p3 and (p3 in P3): return (P3.get(p3), P3s.get(p3,pd.NA), "PFX3")
+        if p3 and (p3 in P3F): return (P3F[p3], pd.NA, "KEYWORD")
+        return (pd.NA,pd.NA,"UNMAPPED")
+    bcol=[c for c in ["PO Budget Code","PR Budget Code"] if c in smart.columns]
+    if bcol:
+        base=smart[bcol[0]]; ent=smart.get("Entity", pd.Series([pd.NA]*len(smart)))
+        mp=pd.DataFrame([map_one(c,e) for c,e in zip(base.tolist(),ent.tolist())], columns=["Dept.Chart","Subcat.Chart","__src"], index=smart.index)
+        for c in ["Dept.Chart","Subcat.Chart","__src"]:
+            smart[c]=smart[c].combine_first(mp[c]) if c in smart.columns else mp[c]
+    smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+    # Canonical labels + optional overrides
+    DEPT_ALIASES={"HR & ADMIN":"HR & Admin","HUMAN RESOURCES":"HR & Admin","LEGAL":"Legal & IP","LEGAL & IP":"Legal & IP","PROGRAM":"Program","R AND D":"R&D","R&D":"R&D","RANDD":"R&D","RESEARCH & DEVELOPMENT":"R&D","INFRASTRUCTURE":"Infra","INFRA":"Infra","CUSTOMER SUCCESS":"Customer Success","MFG":"Manufacturing","MANUFACTURING":"Manufacturing","DESIGN":"Design","MARKETING":"Marketing","SALES":"Sales","SS & SCM":"SS & SCM","SUPPLY CHAIN":"SS & SCM","FINANCE":"Finance","RENTAL OFFICES":"Rental Offices"}
+    SUBCAT_ALIASES={"HOUSEKEEPING":"Admin, Housekeeping and Security","ADMIN, HOUSEKEEPING AND SECURITY":"Admin, Housekeeping and Security","ELECTRICITY EXPENSES":"Electricity","PANTY":"Pantry and Canteen","PANTRY":"Pantry and Canteen","TRAVEL":"Travel & Other"}
+    def canonize(s, mapping):
+        return s.apply(lambda v: mapping.get(str(v).strip().upper(), str(v).strip()) if pd.notna(v) else v)
+    with st.sidebar.expander("Alias overrides (optional)"):
+        up = st.file_uploader("Upload alias overrides CSV/XLSX", type=["csv","xlsx"], key="alias_up")
+        if up is not None:
+            try:
+                al = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
+                al.columns = al.columns.astype(str).str.strip()
+                if {"Department","Dept.Alias"}.issubset(al.columns):
+                    DEPT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Department","Dept.Alias"]].dropna().values})
+                if {"Subcategory","Subcat.Alias"}.issubset(al.columns):
+                    SUBCAT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Subcategory","Subcat.Alias"]].dropna().values})
+                st.success("Aliases loaded")
+            except Exception as e:
+                st.warning(f"Alias file error: {e}")
+    smart["Dept.Chart"]=canonize(smart["Dept.Chart"].astype(str), DEPT_ALIASES)
+    if "Subcat.Chart" in smart.columns:
+        smart["Subcat.Chart"]=canonize(smart["Subcat.Chart"].astype(str), SUBCAT_ALIASES)
+    st.caption({"map_src_counts": smart.get("__src", pd.Series()).value_counts(dropna=False).to_dict() if "__src" in smart.columns else {}})
+    if "Net Amount" in smart.columns:
+        dep = smart.groupby("Dept.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); dep["Cr"]=dep["Net Amount"]/1e7
+        st.plotly_chart(px.bar(dep.head(30), x="Dept.Chart", y="Cr", title="Department-wise Spend (Top 30)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+        cA,cB = st.columns([2,1])
+        dept_pick = cA.selectbox("Drill Department", dep["Dept.Chart"].astype(str).tolist(), key="dept_pick")
+        topn = int(cB.number_input("Top N", 5, 100, 20, 5, key="dept_topn"))
+        det = smart[smart["Dept.Chart"].astype(str)==str(dept_pick)].copy()
+        k1,k2,k3=st.columns(3); k1.metric("Lines", len(det)); k2.metric("PRs", int(det.get("PR Number",pd.Series(dtype=object)).nunique())); k3.metric("Spend (Cr ₹)", f"{det.get('Net Amount',pd.Series(0)).sum()/1e7:,.2f}")
+        if "Subcat.Chart" in det.columns:
+            ss = det.groupby("Subcat.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); ss["Cr"]=ss["Net Amount"]/1e7
+            c1,c2=st.columns(2)
+            c1.plotly_chart(px.bar(ss.head(topn), x="Subcat.Chart", y="Cr", title=f"{dept_pick} — Top Services").update_layout(xaxis_tickangle=-45), use_container_width=True)
+            c2.plotly_chart(px.pie(ss.head(12), names="Subcat.Chart", values="Net Amount", title=f"{dept_pick} — Service Share"), use_container_width=True)
+            svc = st.selectbox("Drill Service", ss["Subcat.Chart"].astype(str).tolist(), key="svc_pick")
+            sub = det[det["Subcat.Chart"].astype(str)==str(svc)].copy()
+            cols=[c for c in ["PO Budget Code","Subcat.Chart","Dept.Chart","Purchase Doc","PR Number","Procurement Category","Product Name","Item Description","PO Vendor","Net Amount"] if c in sub.columns]
+            if not cols: cols=[c for c in ["Dept.Chart","Purchase Doc","PR Number","Net Amount"] if c in sub.columns]
+            st.dataframe(sub[cols], use_container_width=True)
+    st.subheader("Dept × Service (Cr)")
     if {"Dept.Chart","Subcat.Chart","Net Amount"}.issubset(smart.columns):
-        pivot = smart.pivot_table(index="Dept.Chart", columns="Subcat.Chart", values="Net Amount", aggfunc="sum", fill_value=0.0)
-        st.dataframe((pivot/1e7).round(2), use_container_width=True)
-        treedf = (pivot/1e7).stack().reset_index(); treedf.columns=["Department","Service","SpendCr"]; treedf = treedf[treedf["SpendCr"]>0]
-        st.plotly_chart(px.treemap(treedf, path=["Department","Service"], values="SpendCr", title="Department → Service Treemap (Cr ₹)"), use_container_width=True)
+        pv=(smart.pivot_table(index="Dept.Chart", columns="Subcat.Chart", values="Net Amount", aggfunc="sum", fill_value=0)/1e7)
+        st.dataframe(pv.round(2), use_container_width=True)
+        tm = pv.stack().reset_index(); tm.columns=["Department","Service","Cr"]; tm=tm[tm["Cr"]>0]
+        st.plotly_chart(px.treemap(tm, path=["Department","Service"], values="Cr", title="Dept→Service Treemap (Cr ₹)"), use_container_width=True)
 
-# ------------------------------------
-#  End
-# ------------------------------------
+# ---------- Unit-rate Outliers ----------
+with T[6]:
+    st.subheader("Unit-rate Outliers vs Historical Median")
+    grp_by = st.selectbox("Group by", [c for c in ["Product Name","Item Code"] if c in fil.columns], index=0)
+    if {grp_by,"PO Unit Rate"}.issubset(fil.columns):
+        z = fil[[grp_by,"PO Unit Rate","Purchase Doc","PR Number","PO Vendor","Item Description","Po create Date","Net Amount"]].dropna(subset=[grp_by,"PO Unit Rate"]).copy()
+        med = z.groupby(grp_by)["PO Unit Rate"].median().rename("MedianRate")
+        z = z.join(med, on=grp_by)
+        z["PctDev"] = (z["PO Unit Rate"] - z["MedianRate"]) / z["MedianRate"].replace(0,np.nan)
+        thr = st.slider("Outlier threshold (±%)", 10, 300, 50, 5)
+        out = z[abs(z["PctDev"]) >= thr/100.0].copy(); out["PctDev%"]=(out["PctDev"]*100).round(1)
+        st.dataframe(out.sort_values("PctDev%", ascending=False), use_container_width=True)
+        st.plotly_chart(px.scatter(z, x="Po create Date", y="PO Unit Rate", color=np.where(abs(z["PctDev"])>=thr/100.0,"Outlier","Normal"), hover_data=[grp_by,"Purchase Doc","PO Vendor","MedianRate"]).update_layout(legend_title_text=""), use_container_width=True)
+    else:
+        st.info("Need 'PO Unit Rate' and a grouping column (Product Name / Item Code)")
+
+# ---------- Forecast ----------
+with T[7]:
+    st.subheader("Forecast Next Month Spend (SMA)")
+    dcol = "Po create Date" if "Po create Date" in fil.columns else ("PR Date Submitted" if "PR Date Submitted" in fil.columns else None)
+    if dcol and "Net Amount" in fil.columns:
+        t = fil.dropna(subset=[dcol]).copy(); t["Month"]=t[dcol].dt.to_period("M").dt.to_timestamp()
+        m = t.groupby("Month")["Net Amount"].sum().sort_index(); m_cr=(m/1e7)
+        k = st.slider("Window (months)", 3, 12, 6, 1)
+        sma = m_cr.rolling(k).mean()
+        mu = m_cr.tail(k).mean() if len(m_cr)>=k else m_cr.mean()
+        sd = m_cr.tail(k).std(ddof=1) if len(m_cr)>=k else m_cr.std(ddof=1)
+        n = min(k, max(1,len(m_cr)))
+        se = sd/np.sqrt(n) if sd==sd else 0
+        lo, hi = float(mu-1.96*se), float(mu+1.96*se)
+        nxt = (m_cr.index.max() + pd.offsets.MonthBegin(1)) if len(m_cr)>0 else pd.Timestamp.today().to_period("M").to_timestamp()
+        fdf = pd.DataFrame({"Month": list(m_cr.index)+[nxt], "SpendCr": list(m_cr.values)+[np.nan], "SMA": list(sma.values)+[mu]})
+        fig = go.Figure()
+        fig.add_bar(x=fdf["Month"], y=fdf["SpendCr"], name="Actual (Cr)")
+        fig.add_scatter(x=fdf["Month"], y=fdf["SMA"], mode="lines+markers", name=f"SMA{k}")
+        fig.add_scatter(x=[nxt,nxt], y=[lo,hi], mode="lines", name="95% CI")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"Forecast for {nxt.strftime('%b-%Y')}: {mu:.2f} Cr (95% CI: {lo:.2f}–{hi:.2f})")
+    else:
+        st.info("Need date and Net Amount to forecast.")
+
+# ---------- Vendor Scorecards ----------
+with T[8]:
+    st.subheader("Vendor Scorecard")
+    if "PO Vendor" in fil.columns:
+        vendor = st.selectbox("Pick Vendor", sorted(fil["PO Vendor"].dropna().astype(str).unique().tolist()))
+        vd = fil[fil["PO Vendor"].astype(str)==str(vendor)].copy()
+        spend = vd.get("Net Amount",pd.Series(0)).sum()/1e7
+        upos = int(vd.get("Purchase Doc",pd.Series(dtype=object)).nunique())
+        today = pd.Timestamp.today().normalize()
+        if {"PO Delivery Date","Pending QTY"}.issubset(vd.columns):
+            late = ((pd.to_datetime(vd["PO Delivery Date"],errors="coerce").dt.date < today.date()) & (vd["Pending QTY"].fillna(0)>0)).sum()
+        else:
+            late = np.nan
+        if "Pending QTY" in vd.columns and "PO Unit Rate" in vd.columns:
+            vd["Pending Value"]=vd["Pending QTY"].fillna(0).astype(float)*vd["PO Unit Rate"].fillna(0).astype(float)
+            pend_val = vd["Pending Value"].sum()/1e7
+        else:
+            pend_val = np.nan
+        k1,k2,k3,k4 = st.columns(4)
+        k1.metric("Spend (Cr)", f"{spend:.2f}"); k2.metric("Unique POs", upos); k3.metric("Late PO count", None if pd.isna(late) else int(late)); k4.metric("Pending Value (Cr)", None if pd.isna(pend_val) else f"{pend_val:.2f}")
+        if {"Product Name","PO Unit Rate"}.issubset(vd.columns):
+            med = vd.groupby("Product Name")["PO Unit Rate"].median().rename("MedianRate"); v2 = vd.join(med, on="Product Name"); v2["Var%"]=((v2["PO Unit Rate"]-v2["MedianRate"])/v2["MedianRate"].replace(0,np.nan))*100
+            st.plotly_chart(px.box(v2, x="Product Name", y="PO Unit Rate", points="outliers", title="Price variance by item"), use_container_width=True)
+        if dcol:= ("Po create Date" if "Po create Date" in vd.columns else ("PR Date Submitted" if "PR Date Submitted" in vd.columns else None)):
+            vsp = vd.dropna(subset=[dcol]).groupby(pd.to_datetime(vd[dcol]).dt.to_period("M"))["Net Amount"].sum().to_timestamp()/1e7
+            st.plotly_chart(px.line(vsp, labels={"value":"Spend (Cr)","index":"Month"}, title="Monthly Spend"), use_container_width=True)
+
+# ---------- Search (Keyword) ----------
+with T[9]:
+    st.subheader("🔍 Keyword Search")
+    valid_cols = [c for c in ["PR Number","Purchase Doc","Product Name","PO Vendor"] if c in df.columns]
+    query = st.text_input("Type vendor, product, PO, PR, etc.", "")
+    cat_sel = st.multiselect("Filter by Procurement Category", sorted(df.get("Procurement Category", pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if "Procurement Category" in df.columns else []
+    vend_sel = st.multiselect("Filter by Vendor", sorted(df.get("PO Vendor", pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if "PO Vendor" in df.columns else []
+    if query and valid_cols:
+        mask = pd.Series(False, index=df.index)
+        q = query.lower()
+        for c in valid_cols:
+            mask = mask | df[c].astype(str).str.lower().str.contains(q, na=False)
+        res = df[mask].copy()
+        if cat_sel:
+            res = res[res["Procurement Category"].astype(str).isin(cat_sel)]
+        if vend_sel:
+            res = res[res["PO Vendor"].astype(str).isin(vend_sel)]
+        st.write(f"Found {len(res)} rows")
+        st.dataframe(res, use_container_width=True)
+        st.download_button("⬇️ Download Search Results", res.to_csv(index=False), file_name="search_results.csv", mime="text/csv", key="dl_search")
+    elif not valid_cols:
+        st.info("No searchable columns present.")
+    else:
+        st.caption("Start typing to search…")
