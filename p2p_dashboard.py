@@ -10,7 +10,7 @@ st.set_page_config(page_title="P2P Dashboard — Full", layout="wide", initial_s
 # ---------- Load Data ----------
 @st.cache_data(show_spinner=False)
 def load_all():
-    fns = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
+    fns = [("MEPL1.xlsx","MEPL"),("MLPL1.xlsx","MLPL"),("mmw1.xlsx","MMW"),("mmpl1.xlsx","MMPL")]
     frames = []
     for fn, ent in fns:
         df = pd.read_excel(fn, skiprows=1)
@@ -69,7 +69,17 @@ if month_basis:
             fil = fil[fil[month_basis].dt.to_period("M").astype(str) == target_period]
 
 # ---- Optional calendar date range (applies after FY + Month) ----
+# Add a basis toggle so users can choose PR vs PO date for filtering
+_basis_options = []
+if "PR Date Submitted" in fil.columns: _basis_options.append("PR Date Submitted")
+if "Po create Date" in fil.columns: _basis_options.append("Po create Date")
+if _basis_options:
+    basis_choice = st.sidebar.radio("Date basis", _basis_options, index=0 if "PR Date Submitted" in _basis_options else 0, key="date_basis_radio")
+    month_basis = basis_choice
+
+# Make sure basis column is datetime
 if month_basis:
+    fil[month_basis] = pd.to_datetime(fil[month_basis], errors="coerce")
     _mindt = fil[month_basis].dropna().min()
     _maxdt = fil[month_basis].dropna().max()
     if pd.notna(_mindt) and pd.notna(_maxdt):
@@ -78,9 +88,25 @@ if month_basis:
             (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()),
             key="sidebar_date_range",
         )
-        if isinstance(dr, tuple) and len(dr) == 2:
-            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
-            fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
+        # Normalize date_input return (could be single date, list, or tuple)
+        if isinstance(dr, (list, tuple)):
+            if len(dr) == 2:
+                _s = pd.to_datetime(dr[0])
+                _e = pd.to_datetime(dr[1])
+            elif len(dr) == 1:
+                _s = pd.to_datetime(dr[0])
+                _e = _s
+            else:
+                _s = pd.to_datetime(_mindt)
+                _e = pd.to_datetime(_maxdt)
+        else:
+            # single date
+            _s = pd.to_datetime(dr)
+            _e = _s
+        # Make end inclusive through end-of-day
+        _e = _e + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        # Apply filter
+        fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
 for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType"]:
     if col not in fil.columns: fil[col] = ""
     fil[col] = fil[col].astype(str).str.strip()
@@ -333,31 +359,55 @@ if "Dept.Chart" in smart.columns:
 
 smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
     # Canonical labels + optional overrides
-# --- Canonical Department Aliases ---
-DEPT_ALIASES = {
-    "HR & ADMIN": "HR & Admin",
-    "HUMAN RESOURCES": "HR & Admin",
-    "LEGAL": "Legal & IP",
-    "LEGAL & IP": "Legal & IP",
-    "PROGRAM": "Program",
-    "R AND D": "R&D",
-    "R&D": "R&D",
-    "RANDD": "R&D",
-    "RESEARCH & DEVELOPMENT": "R&D",
-    "INFRASTRUCTURE": "Infra",
-    "INFRA": "Infra",
-    "CUSTOMER SUCCESS": "Customer Success",
-    "MFG": "Manufacturing",
-    "MANUFACTURING": "Manufacturing",
-    "DESIGN": "Design",
-    "MARKETING": "Marketing",
-    "SALES": "Sales",
-    "SS & SCM": "SS & SCM",
-    "SUPPLY CHAIN": "SS & SCM",
-    "FINANCE": "Finance",
-    "RENTAL OFFICES": "Rental Offices",
-}
-
+    DEPT_ALIASES={"HR & ADMIN":"HR & Admin","HUMAN RESOURCES":"HR & Admin","LEGAL":"Legal & IP","LEGAL & IP":"Legal & IP","PROGRAM":"Program","R AND D":"R&D","R&D":"R&D","RANDD":"R&D","RESEARCH & DEVELOPMENT":"R&D","INFRASTRUCTURE":"Infra","INFRA":"Infra","CUSTOMER SUCCESS":"Customer Success","MFG":"Manufacturing","MANUFACTURING":"Manufacturing","DESIGN":"Design","MARKETING":"Marketing","SALES":"Sales","SS & SCM":"SS & SCM","SUPPLY CHAIN":"SS & SCM","FINANCE":"Finance","RENTAL OFFICES":"Rental Offices"}
+    SUBCAT_ALIASES={"HOUSEKEEPING":"Admin, Housekeeping and Security","ADMIN, HOUSEKEEPING AND SECURITY":"Admin, Housekeeping and Security","ELECTRICITY EXPENSES":"Electricity","PANTY":"Pantry and Canteen","PANTRY":"Pantry and Canteen","TRAVEL":"Travel & Other"}
+    def canonize(s, mapping):
+        return s.apply(lambda v: mapping.get(str(v).strip().upper(), str(v).strip()) if pd.notna(v) else v)
+    with st.sidebar.expander("Alias overrides (optional)"):
+        up = st.file_uploader("Upload alias overrides CSV/XLSX", type=["csv","xlsx"], key="alias_up")
+        if up is not None:
+            try:
+                al = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
+                al.columns = al.columns.astype(str).str.strip()
+                if {"Department","Dept.Alias"}.issubset(al.columns):
+                    DEPT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Department","Dept.Alias"]].dropna().values})
+                if {"Subcategory","Subcat.Alias"}.issubset(al.columns):
+                    SUBCAT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Subcategory","Subcat.Alias"]].dropna().values})
+                st.success("Aliases loaded")
+            except Exception as e:
+                st.warning(f"Alias file error: {e}")
+    smart["Dept.Chart"]=canonize(smart["Dept.Chart"].astype(str), DEPT_ALIASES)
+    if "Subcat.Chart" in smart.columns:
+        smart["Subcat.Chart"]=canonize(smart["Subcat.Chart"].astype(str), SUBCAT_ALIASES)
+    st.caption({"map_src_counts": smart.get("__src", pd.Series()).value_counts(dropna=False).to_dict() if "__src" in smart.columns else {}})
+    if "Net Amount" in smart.columns:
+        dep = smart.groupby("Dept.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); dep["Cr"]=dep["Net Amount"]/1e7
+        st.plotly_chart(px.bar(dep.head(30), x="Dept.Chart", y="Cr", title="Department-wise Spend (Top 30)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+        cA,cB = st.columns([2,1])
+        dept_pick = cA.selectbox("Drill Department", dep["Dept.Chart"].astype(str).tolist(), key="dept_pick")
+        topn = int(cB.number_input("Top N", 5, 100, 20, 5, key="dept_topn"))
+        det = smart[smart["Dept.Chart"].astype(str)==str(dept_pick)].copy()
+        k1,k2,k3=st.columns(3); k1.metric("Lines", len(det)); k2.metric("PRs", int(det.get("PR Number",pd.Series(dtype=object)).nunique())); k3.metric("Spend (Cr ₹)", f"{det.get('Net Amount',pd.Series(0)).sum()/1e7:,.2f}")
+        if "Subcat.Chart" in det.columns:
+            ss = det.groupby("Subcat.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False)
+            ss["Subcat.Chart"] = ss["Subcat.Chart"].fillna("Unspecified")
+            ss["Cr"]=ss["Net Amount"]/1e7
+            c1,c2=st.columns(2)
+            c1.plotly_chart(px.bar(ss.head(topn), x="Subcat.Chart", y="Cr", title=f"{dept_pick} — Top Services").update_layout(xaxis_tickangle=-45), use_container_width=True)
+            c2.plotly_chart(px.pie(ss.head(12), names="Subcat.Chart", values="Net Amount", title=f"{dept_pick} — Service Share"), use_container_width=True)
+            svc = st.selectbox("Drill Service", ss["Subcat.Chart"].astype(str).tolist(), key="svc_pick")
+            det_sub = det.copy()
+            det_sub["Subcat.Chart"] = det_sub["Subcat.Chart"].fillna("Unspecified")
+            sub = det_sub[det_sub["Subcat.Chart"].astype(str)==str(svc)].copy()
+            cols=[c for c in ["PO Budget Code","Subcat.Chart","Dept.Chart","Purchase Doc","PR Number","Procurement Category","Product Name","Item Description","PO Vendor","Net Amount"] if c in sub.columns]
+            if not cols: cols=[c for c in ["Dept.Chart","Purchase Doc","PR Number","Net Amount"] if c in sub.columns]
+            st.dataframe(sub[cols], use_container_width=True)
+    st.subheader("Dept × Service (Cr)")
+    if {"Dept.Chart","Subcat.Chart","Net Amount"}.issubset(smart.columns):
+        pv=(smart.pivot_table(index="Dept.Chart", columns="Subcat.Chart", values="Net Amount", aggfunc="sum", fill_value=0)/1e7)
+        st.dataframe(pv.round(2), use_container_width=True)
+        tm = pv.stack().reset_index(); tm.columns=["Department","Service","Cr"]; tm=tm[tm["Cr"]>0]
+        st.plotly_chart(px.treemap(tm, path=["Department","Service"], values="Cr", title="Dept→Service Treemap (Cr ₹)"), use_container_width=True)
 
 # ---------- Unit-rate Outliers ----------
 with T[6]:
