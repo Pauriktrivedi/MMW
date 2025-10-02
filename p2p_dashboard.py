@@ -10,7 +10,7 @@ st.set_page_config(page_title="P2P Dashboard — Full", layout="wide", initial_s
 # ---------- Load Data ----------
 @st.cache_data(show_spinner=False)
 def load_all():
-    fns = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
+    fns = [("MEPL1.xlsx","MEPL"),("MLPL1.xlsx","MLPL"),("mmw1.xlsx","MMW"),("mmpl1.xlsx","MMPL")]
     frames = []
     for fn, ent in fns:
         df = pd.read_excel(fn, skiprows=1)
@@ -51,6 +51,22 @@ pr_start, pr_end = FY[fy_key]
 fil = df.copy()
 if "PR Date Submitted" in fil.columns:
     fil = fil[(fil["PR Date Submitted"]>=pr_start)&(fil["PR Date Submitted"]<=pr_end)]
+
+# ---- Month dropdown (under FY) ----
+# Use PR Date Submitted primarily; if missing, fall back to PO create Date
+month_basis = "PR Date Submitted" if "PR Date Submitted" in fil.columns else ("Po create Date" if "Po create Date" in fil.columns else None)
+sel_month = "All Months"
+if month_basis:
+    # Build month list from filtered rows (FY applied)
+    months = fil[month_basis].dropna().dt.to_period("M").astype(str).unique().tolist()
+    months = sorted(months, key=lambda s: pd.Period(s))
+    month_labels = [pd.Period(m).strftime("%b-%Y") for m in months]
+    label_to_period = {pd.Period(m).strftime("%b-%Y"): m for m in months}
+    if month_labels:
+        sel_month = st.sidebar.selectbox("Month", ["All Months"] + month_labels, index=0)
+        if sel_month != "All Months":
+            target_period = label_to_period[sel_month]
+            fil = fil[fil[month_basis].dt.to_period("M").astype(str) == target_period]
 for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType"]:
     if col not in fil.columns: fil[col] = ""
     fil[col] = fil[col].astype(str).str.strip()
