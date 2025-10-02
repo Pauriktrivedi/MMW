@@ -18,10 +18,10 @@ st.set_page_config(page_title="Procure-to-Pay Dashboard", layout="wide", initial
 # ------------------------------------
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
-    mepl_df = pd.read_excel("MEPL1.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("MLPL1.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("mmw1.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("mmpl1.xlsx", skiprows=1)
+    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
+    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
+    mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
+    mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
 
     mepl_df["Entity"] = "MEPL"; mlpl_df["Entity"] = "MLPL"; mmw_df["Entity"] = "MMW"; mmpl_df["Entity"] = "MMPL"
     combined = pd.concat([mepl_df, mlpl_df, mmw_df, mmpl_df], ignore_index=True)
