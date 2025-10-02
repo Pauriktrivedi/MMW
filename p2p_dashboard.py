@@ -18,10 +18,10 @@ st.set_page_config(page_title="Procure-to-Pay Dashboard", layout="wide", initial
 # ------------------------------------
 @st.cache_data(show_spinner=False)
 def load_and_combine_data():
-    mepl_df = pd.read_excel("MEPL.xlsx", skiprows=1)
-    mlpl_df = pd.read_excel("MLPL.xlsx", skiprows=1)
-    mmw_df  = pd.read_excel("mmw.xlsx",  skiprows=1)
-    mmpl_df = pd.read_excel("mmpl.xlsx", skiprows=1)
+    mepl_df = pd.read_excel("MEPL1.xlsx", skiprows=1)
+    mlpl_df = pd.read_excel("MLPL1.xlsx", skiprows=1)
+    mmw_df  = pd.read_excel("mmw1.xlsx",  skiprows=1)
+    mmpl_df = pd.read_excel("mmpl1.xlsx", skiprows=1)
 
     mepl_df["Entity"] = "MEPL"; mlpl_df["Entity"] = "MLPL"; mmw_df["Entity"] = "MMW"; mmpl_df["Entity"] = "MMPL"
     combined = pd.concat([mepl_df, mlpl_df, mmw_df, mmpl_df], ignore_index=True)
@@ -406,6 +406,71 @@ if pre_fb.all():
             smart["Dept.Chart"] = smart["Dept.Chart"].combine_first(smart[cand])
 smart.loc[smart["__Dept.MapSrc"].eq("UNMAPPED") & smart["Dept.Chart"].notna(), "__Dept.MapSrc"] = "FALLBACK"
 smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+
+# --- Canonical labels (Dept/Subcategory) & optional alias override ---
+DEPT_ALIASES = {
+    "HR & ADMIN": "HR & Admin",
+    "HUMAN RESOURCES": "HR & Admin",
+    "LEGAL": "Legal & IP",
+    "LEGAL & IP": "Legal & IP",
+    "PROGRAM": "Program",
+    "R AND D": "R&D",
+    "R&D": "R&D",
+    "RANDD": "R&D",
+    "RESEARCH & DEVELOPMENT": "R&D",
+    "INFRASTRUCTURE": "Infra",
+    "INFRA": "Infra",
+    "CUSTOMER SUCCESS": "Customer Success",
+    "MFG": "Manufacturing",
+    "MANUFACTURING": "Manufacturing",
+    "DESIGN": "Design",
+    "MARKETING": "Marketing",
+    "SALES": "Sales",
+    "SS & SCM": "SS & SCM",
+    "SUPPLY CHAIN": "SS & SCM",
+    "FINANCE": "Finance",
+    "RENTAL OFFICES": "Rental Offices",
+}
+SUBCAT_ALIASES = {
+    # Keep as-is unless you want to coalesce spelling variants. Examples:
+    "HOUSEKEEPING": "Admin, Housekeeping and Security",
+    "ADMIN, HOUSEKEEPING AND SECURITY": "Admin, Housekeeping and Security",
+    "ELECTRICITY EXPENSES": "Electricity",
+    "PANTY": "Pantry and Canteen",
+    "PANTRY": "Pantry and Canteen",
+    "TRAVEL": "Travel & Other",
+}
+
+def _canonize(val: pd.Series, mapping: dict) -> pd.Series:
+    def f(x):
+        if pd.isna(x):
+            return x
+        t = str(x).strip()
+        key = t.upper()
+        return mapping.get(key, t)
+    return val.apply(f)
+
+# Sidebar loader for alias overrides (CSV/XLSX with columns: Department, Subcategory, Dept.Alias, Subcat.Alias)
+with st.sidebar.expander("🔧 Optional: alias overrides"):
+    alias_file = st.file_uploader("Upload alias overrides (CSV/XLSX)", type=["csv","xlsx"], key="alias_upload")
+    if alias_file is not None:
+        try:
+            if str(alias_file.name).lower().endswith(".csv"):
+                alias_df = pd.read_csv(alias_file)
+            else:
+                alias_df = pd.read_excel(alias_file)
+            alias_df.columns = alias_df.columns.astype(str).str.strip()
+            if "Department" in alias_df.columns and "Dept.Alias" in alias_df.columns:
+                DEPT_ALIASES.update({str(k).upper().strip(): str(v).strip() for k,v in alias_df[["Department","Dept.Alias"]].dropna().values})
+            if "Subcategory" in alias_df.columns and "Subcat.Alias" in alias_df.columns:
+                SUBCAT_ALIASES.update({str(k).upper().strip(): str(v).strip() for k,v in alias_df[["Subcategory","Subcat.Alias"]].dropna().values})
+            st.success("Aliases loaded.")
+        except Exception as e:
+            st.warning(f"Alias file could not be read: {e}")
+
+# Apply canonicalization just before charts/drilldowns
+smart["Dept.Chart"] = _canonize(smart["Dept.Chart"].astype(str), DEPT_ALIASES)
+smart["Subcat.Chart"] = _canonize(smart.get("Subcat.Chart", pd.Series([pd.NA]*len(smart))), SUBCAT_ALIASES)
 
 with st.expander("🧪 Smart Mapper QA", expanded=False):
     st.write({"counts": smart["__Dept.MapSrc"].value_counts(dropna=False).to_dict()})
