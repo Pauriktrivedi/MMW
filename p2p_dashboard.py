@@ -24,10 +24,10 @@ st.set_page_config(
 def load_and_combine_data():
     """
    Reads the four Excel files from the current directory:
-      - MEPL1.xlsx
-      - MLPL1.xlsx
-      - mmw1.xlsx
-      - mmpl1.xlsx
+      - MEPL.xlsx
+      - MLPL.xlsx
+      - mmw.xlsx
+      - mmpl.xlsx
 
     Tags each with an "Entity" column, concatenates them, and
     normalizes column names by stripping whitespace.
