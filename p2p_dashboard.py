@@ -258,7 +258,50 @@ with T[5]:
         mp=pd.DataFrame([map_one(c,e) for c,e in zip(base.tolist(),ent.tolist())], columns=["Dept.Chart","Subcat.Chart","__src"], index=smart.index)
         for c in ["Dept.Chart","Subcat.Chart","__src"]:
             smart[c]=smart[c].combine_first(mp[c]) if c in smart.columns else mp[c]
-    smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+    # --- Subcategory token fallback (e.g., MKT.CONS → Consulting / Agency)
+SUBCAT_TOKEN_MAP = {
+    # Marketing
+    "CONS": "Consulting / Agency",
+    "PR":   "Public Relations",
+    "CBR":  "Dealer Campaigns / Market Activation",
+    "TVM":  "TV / Media Buying",
+    "VP":   "Vendor Promotion / Partnerships",
+    "AE":   "Agency & Events",
+    "A&E":  "Agency & Events",
+    "ANDE": "Agency & Events",
+    # DT/IT examples
+    "SPMW": "Software & Productivity Tools",
+    "INT":  "Internet / Connectivity",
+    "ACCER":"Accessories",
+    "HDW":  "Hardware",
+    # Ops/Program examples
+    "CNST": "Construction / Fitout",
+    "EHS":  "EHS / Safety",
+}
+
+def _last_token(_raw):
+    if not isinstance(_raw, str):
+        return ""
+    tok = _raw.split(".")[-1].upper().replace(" ", "")
+    tok = tok.replace("&", "AND")
+    return tok
+
+if "Dept.Chart" in smart.columns:
+    has_dept = smart["Dept.Chart"].notna()
+    no_subc  = ~smart.get("Subcat.Chart", pd.Series([pd.NA]*len(smart))).notna()
+    need_sub = has_dept & no_subc
+    code_series = (
+        smart["PO Budget Code"] if "PO Budget Code" in smart.columns else (
+            smart["PR Budget Code"] if "PR Budget Code" in smart.columns else pd.Series([""]*len(smart), index=smart.index)
+        )
+    )
+    tokens = code_series.apply(_last_token)
+    subc_guess = tokens.map(lambda t: SUBCAT_TOKEN_MAP.get(t, pd.NA))
+    smart.loc[need_sub & subc_guess.notna(), "Subcat.Chart"] = subc_guess[need_sub & subc_guess.notna()]
+    if "__src" in smart.columns:
+        smart.loc[need_sub & subc_guess.notna(), "__src"] = smart.loc[need_sub & subc_guess.notna(), "__src"].fillna("TOKEN_SUBCAT").replace("UNMAPPED", "TOKEN_SUBCAT")
+
+smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
     # Canonical labels + optional overrides
     DEPT_ALIASES={"HR & ADMIN":"HR & Admin","HUMAN RESOURCES":"HR & Admin","LEGAL":"Legal & IP","LEGAL & IP":"Legal & IP","PROGRAM":"Program","R AND D":"R&D","R&D":"R&D","RANDD":"R&D","RESEARCH & DEVELOPMENT":"R&D","INFRASTRUCTURE":"Infra","INFRA":"Infra","CUSTOMER SUCCESS":"Customer Success","MFG":"Manufacturing","MANUFACTURING":"Manufacturing","DESIGN":"Design","MARKETING":"Marketing","SALES":"Sales","SS & SCM":"SS & SCM","SUPPLY CHAIN":"SS & SCM","FINANCE":"Finance","RENTAL OFFICES":"Rental Offices"}
     SUBCAT_ALIASES={"HOUSEKEEPING":"Admin, Housekeeping and Security","ADMIN, HOUSEKEEPING AND SECURITY":"Admin, Housekeeping and Security","ELECTRICITY EXPENSES":"Electricity","PANTY":"Pantry and Canteen","PANTRY":"Pantry and Canteen","TRAVEL":"Travel & Other"}
@@ -290,12 +333,16 @@ with T[5]:
         det = smart[smart["Dept.Chart"].astype(str)==str(dept_pick)].copy()
         k1,k2,k3=st.columns(3); k1.metric("Lines", len(det)); k2.metric("PRs", int(det.get("PR Number",pd.Series(dtype=object)).nunique())); k3.metric("Spend (Cr ₹)", f"{det.get('Net Amount',pd.Series(0)).sum()/1e7:,.2f}")
         if "Subcat.Chart" in det.columns:
-            ss = det.groupby("Subcat.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); ss["Cr"]=ss["Net Amount"]/1e7
+            ss = det.groupby("Subcat.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False)
+            ss["Subcat.Chart"] = ss["Subcat.Chart"].fillna("Unspecified")
+            ss["Cr"]=ss["Net Amount"]/1e7
             c1,c2=st.columns(2)
             c1.plotly_chart(px.bar(ss.head(topn), x="Subcat.Chart", y="Cr", title=f"{dept_pick} — Top Services").update_layout(xaxis_tickangle=-45), use_container_width=True)
             c2.plotly_chart(px.pie(ss.head(12), names="Subcat.Chart", values="Net Amount", title=f"{dept_pick} — Service Share"), use_container_width=True)
             svc = st.selectbox("Drill Service", ss["Subcat.Chart"].astype(str).tolist(), key="svc_pick")
-            sub = det[det["Subcat.Chart"].astype(str)==str(svc)].copy()
+            det_sub = det.copy()
+            det_sub["Subcat.Chart"] = det_sub["Subcat.Chart"].fillna("Unspecified")
+            sub = det_sub[det_sub["Subcat.Chart"].astype(str)==str(svc)].copy()
             cols=[c for c in ["PO Budget Code","Subcat.Chart","Dept.Chart","Purchase Doc","PR Number","Procurement Category","Product Name","Item Description","PO Vendor","Net Amount"] if c in sub.columns]
             if not cols: cols=[c for c in ["Dept.Chart","Purchase Doc","PR Number","Net Amount"] if c in sub.columns]
             st.dataframe(sub[cols], use_container_width=True)
