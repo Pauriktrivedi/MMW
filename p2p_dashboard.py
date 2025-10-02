@@ -10,7 +10,7 @@ st.set_page_config(page_title="P2P Dashboard — Full", layout="wide", initial_s
 # ---------- Load Data ----------
 @st.cache_data(show_spinner=False)
 def load_all():
-    fns = [("MEPL1.xlsx","MEPL"),("MLPL1.xlsx","MLPL"),("mmw1.xlsx","MMW"),("mmpl1.xlsx","MMPL")]
+    fns = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
     frames = []
     for fn, ent in fns:
         df = pd.read_excel(fn, skiprows=1)
