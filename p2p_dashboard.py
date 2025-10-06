@@ -1,4 +1,4 @@
-import pandas as pd
+ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
@@ -54,16 +54,11 @@ if "PR Date Submitted" in fil.columns:
 
 # ---- Month dropdown (under FY) ----
 # Use PR Date Submitted primarily; if missing, fall back to PO create Date
-primary_basis = "PR Date Submitted" if "PR Date Submitted" in fil.columns else ("Po create Date" if "Po create Date" in fil.columns else None)
-backup_basis  = "Po create Date" if primary_basis == "PR Date Submitted" and "Po create Date" in fil.columns else ("PR Date Submitted" if primary_basis == "Po create Date" and "PR Date Submitted" in fil.columns else None)
-month_basis = primary_basis
+month_basis = "PR Date Submitted" if "PR Date Submitted" in fil.columns else ("Po create Date" if "Po create Date" in fil.columns else None)
 sel_month = "All Months"
 if month_basis:
-    # Build month list from filtered rows (FY applied). Optionally use fallback for month list so it's not empty.
-    _month_series = pd.to_datetime(fil[month_basis], errors="coerce")
-    if backup_basis is not None:
-        _month_series = _month_series.combine_first(pd.to_datetime(fil[backup_basis], errors="coerce"))
-    months = _month_series.dropna().dt.to_period("M").astype(str).unique().tolist()
+    # Build month list from filtered rows (FY applied)
+    months = fil[month_basis].dropna().dt.to_period("M").astype(str).unique().tolist()
     months = sorted(months, key=lambda s: pd.Period(s))
     month_labels = [pd.Period(m).strftime("%b-%Y") for m in months]
     label_to_period = {pd.Period(m).strftime("%b-%Y"): m for m in months}
@@ -71,51 +66,21 @@ if month_basis:
         sel_month = st.sidebar.selectbox("Month", ["All Months"] + month_labels, index=0)
         if sel_month != "All Months":
             target_period = label_to_period[sel_month]
-            fil_dt = pd.to_datetime(fil[month_basis], errors="coerce")
-            if backup_basis is not None:
-                fil_dt = fil_dt.combine_first(pd.to_datetime(fil[backup_basis], errors="coerce"))
-            fil = fil[fil_dt.dt.to_period("M").astype(str) == target_period]
+            fil = fil[fil[month_basis].dt.to_period("M").astype(str) == target_period]
 
 # ---- Optional calendar date range (applies after FY + Month) ----
-# Add a basis toggle so users can choose PR vs PO date for filtering
-_basis_options = []
-if "PR Date Submitted" in fil.columns: _basis_options.append("PR Date Submitted")
-if "Po create Date" in fil.columns: _basis_options.append("Po create Date")
-if _basis_options:
-    basis_choice = st.sidebar.radio("Date basis", _basis_options, index=0 if "PR Date Submitted" in _basis_options else 0, key="date_basis_radio")
-else:
-    basis_choice = None
-
-# Fallback toggle: when chosen basis is missing on a row, use the other date
-fallback_toggle = st.sidebar.checkbox("Fallback to other date if missing", value=True, help="If a row has no date in the chosen basis, use the other date column when available.")
-
-# Build a single 'FilterDate' series used for min/max and filtering
-if basis_choice:
-    primary = basis_choice
-    backup  = ("Po create Date" if basis_choice == "PR Date Submitted" else "PR Date Submitted") if ( (basis_choice=="PR Date Submitted" and "Po create Date" in fil.columns) or (basis_choice=="Po create Date" and "PR Date Submitted" in fil.columns) ) else None
-    fd = pd.to_datetime(fil[primary], errors="coerce")
-    if fallback_toggle and backup is not None:
-        fd = fd.combine_first(pd.to_datetime(fil[backup], errors="coerce"))
-    _mindt = fd.dropna().min(); _maxdt = fd.dropna().max()
+if month_basis:
+    _mindt = fil[month_basis].dropna().min()
+    _maxdt = fil[month_basis].dropna().max()
     if pd.notna(_mindt) and pd.notna(_maxdt):
-        dr = st.sidebar.date_input("Date range", (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()), key="sidebar_date_range")
-        # Normalize date_input return (could be tuple/list/single)
-        if isinstance(dr, (list, tuple)):
-            if len(dr) == 2:
-                _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
-            elif len(dr) == 1:
-                _s = pd.to_datetime(dr[0]); _e = _s
-            else:
-                _s, _e = pd.to_datetime(_mindt), pd.to_datetime(_maxdt)
-        else:
-            _s = pd.to_datetime(dr); _e = _s
-        _e = _e + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-        # Apply filter using the same 'fd' series
-        mask = (fd >= _s) & (fd <= _e)
-        fil = fil[mask]
-
-# Quick debug counters in sidebar
-st.sidebar.caption(f"Rows after filters: {len(fil):,}")
+        dr = st.sidebar.date_input(
+            "Date range",
+            (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()),
+            key="sidebar_date_range",
+        )
+        if isinstance(dr, tuple) and len(dr) == 2:
+            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
+            fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
 for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType"]:
     if col not in fil.columns: fil[col] = ""
     fil[col] = fil[col].astype(str).str.strip()
@@ -367,7 +332,8 @@ if "Dept.Chart" in smart.columns:
         smart.loc[need_sub & subc_guess.notna(), "__src"] = smart.loc[need_sub & subc_guess.notna(), "__src"].fillna("TOKEN_SUBCAT").replace("UNMAPPED", "TOKEN_SUBCAT")
 
 smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
- # --- Canonical Department Aliases ---
+    # Canonical labels + optional overrides
+# --- Canonical Department Aliases ---
 DEPT_ALIASES = {
     "HR & ADMIN": "HR & Admin",
     "HUMAN RESOURCES": "HR & Admin",
@@ -391,6 +357,7 @@ DEPT_ALIASES = {
     "FINANCE": "Finance",
     "RENTAL OFFICES": "Rental Offices",
 }
+
 
 # ---------- Unit-rate Outliers ----------
 with T[6]:
