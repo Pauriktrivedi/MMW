@@ -188,11 +188,10 @@ for col in ['buyer_type', entity_col, 'po_creator', 'po_buyer_type']:
         fil[col] = ''
     fil[col] = fil[col].astype(str).str.strip()
 
-sel_b = st.sidebar.multiselect('Buyer Type', sorted(fil['buyer_type'].dropna().unique().tolist()), default=sorted(fil['buyer_type'].dropna().unique().tolist()))
+sel_b = st.sidebar.multiselect('Buyer Type', sorted(fil['buyer_type_unified'].dropna().unique().tolist()), default=sorted(fil['buyer_type_unified'].dropna().unique().tolist()))
 sel_e = st.sidebar.multiselect('Entity', sorted(fil[entity_col].dropna().unique().tolist()), default=sorted(fil[entity_col].dropna().unique().tolist()))
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
-sel_p = st.sidebar.multiselect('PO Buyer Type', sorted(fil['po_buyer_type'].dropna().unique().tolist()), default=sorted(fil['po_buyer_type'].dropna().unique().tolist()))
-
+sel_p = st.sidebar.multiselect('PO Buyer Type (raw)', sorted(fil['po_buyer_type'].dropna().unique().tolist()), default=sorted(fil['po_buyer_type'].dropna().unique().tolist()))
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
 if sel_e:
