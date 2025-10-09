@@ -214,8 +214,9 @@ if sel_p:
 # ----------------- Tabs -----------------
 T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
 
-# ----------------- KPIs -----------------
+# ----------------- KPIs & Spend -----------------
 with T[0]:
+    # --- Top KPI metrics ---
     c1,c2,c3,c4,c5 = st.columns(5)
     total_prs = int(fil.get(pr_number_col, pd.Series(dtype=object)).nunique() if pr_number_col else 0)
     total_pos = int(fil.get(purchase_doc_col, pd.Series(dtype=object)).nunique() if purchase_doc_col else 0)
@@ -226,8 +227,8 @@ with T[0]:
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
-# ----------------- Spend (Monthly + Entity) -----------------
-with T[1]:
+    st.markdown('---')
+    # --- Spend charts placed on same page as KPIs ---
     dcol = po_create_col if po_create_col in fil.columns else (pr_col if pr_col in fil.columns else None)
     st.subheader('Monthly Total Spend + Cumulative')
     if dcol and net_amount_col in fil.columns:
@@ -237,11 +238,13 @@ with T[1]:
         m = t.groupby(['po_month','month_str'], as_index=False)[net_amount_col].sum().sort_values('po_month')
         m['cr'] = m[net_amount_col]/1e7
         m['cumcr'] = m['cr'].cumsum()
-        fig = make_subplots(specs=[[{"secondary_y":True}]])
-        fig.add_bar(x=m['month_str'], y=m['cr'], name='Monthly Spend (Cr ₹)')
-        fig.add_scatter(x=m['month_str'], y=m['cumcr'], name='Cumulative (Cr ₹)', mode='lines+markers', secondary_y=True)
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        fig_spend = make_subplots(specs=[[{"secondary_y":True}]])
+        fig_spend.add_bar(x=m['month_str'], y=m['cr'], name='Monthly Spend (Cr ₹)')
+        fig_spend.add_scatter(x=m['month_str'], y=m['cumcr'], name='Cumulative (Cr ₹)', mode='lines+markers', secondary_y=True)
+        fig_spend.update_layout(xaxis_tickangle=-45)
+    else:
+        fig_spend = None
+
     st.subheader('Entity Trend')
     if dcol and net_amount_col in fil.columns:
         x = fil.copy()
@@ -249,9 +252,25 @@ with T[1]:
         g = x.dropna(subset=['po_month']).groupby(['po_month', entity_col], as_index=False)[net_amount_col].sum()
         g['cr'] = g[net_amount_col]/1e7
         if not g.empty:
-            fig2 = px.line(g, x=g['po_month'].dt.strftime('%b-%Y'), y='cr', color=entity_col, markers=True, labels={'x':'Month','cr':'Cr ₹'})
-            fig2.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig2, use_container_width=True)
+            fig_entity = px.line(g, x=g['po_month'].dt.strftime('%b-%Y'), y='cr', color=entity_col, markers=True, labels={'x':'Month','cr':'Cr ₹'})
+            fig_entity.update_layout(xaxis_tickangle=-45)
+        else:
+            fig_entity = None
+    else:
+        fig_entity = None
+
+    # layout: metrics on top, then spend charts side-by-side
+    col_left, col_right = st.columns([2,1])
+    with col_left:
+        if fig_spend is not None:
+            st.plotly_chart(fig_spend, use_container_width=True)
+        else:
+            st.info('Monthly Spend chart not available — need date and Net Amount columns.')
+    with col_right:
+        if fig_entity is not None:
+            st.plotly_chart(fig_entity, use_container_width=True)
+        else:
+            st.info('Entity trend not available — need date and Net Amount columns.')
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
@@ -655,4 +674,3 @@ with T[8]:
         st.caption('Start typing to search…')
 
 # EOF
-
