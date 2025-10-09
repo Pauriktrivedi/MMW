@@ -259,18 +259,18 @@ with T[0]:
     else:
         fig_entity = None
 
-    # layout: metrics on top, then spend charts side-by-side
-    col_left, col_right = st.columns([2,1])
-    with col_left:
-        if fig_spend is not None:
-            st.plotly_chart(fig_spend, use_container_width=True)
-        else:
-            st.info('Monthly Spend chart not available — need date and Net Amount columns.')
-    with col_right:
-        if fig_entity is not None:
-            st.plotly_chart(fig_entity, use_container_width=True)
-        else:
-            st.info('Entity trend not available — need date and Net Amount columns.')
+    # layout:# layout: metrics on top, then spend charts stacked vertically
+    if fig_spend is not None:
+        st.plotly_chart(fig_spend, use_container_width=True)
+    else:
+        st.info('Monthly Spend chart not available — need date and Net Amount columns.')
+
+    st.markdown('---')
+
+    if fig_entity is not None:
+        st.plotly_chart(fig_entity, use_container_width=True)
+    else:
+        st.info('Entity trend not available — need date and Net Amount columns.')
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
