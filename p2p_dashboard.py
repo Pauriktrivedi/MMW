@@ -259,7 +259,7 @@ with T[0]:
     else:
         fig_entity = None
 
-    # layout:# layout: metrics on top, then spend charts stacked vertically
+    # layout: metrics on top, then spend charts stacked vertically
     if fig_spend is not None:
         st.plotly_chart(fig_spend, use_container_width=True)
     else:
