@@ -509,6 +509,98 @@ with T[4]:
             smart[c] = smart[c].combine_first(mp[c]) if c in smart.columns else mp[c]
     smart['dept_chart'].fillna('Unmapped / Missing', inplace=True)
 
+    # ---- Debug: show top unmapped budget codes and suggestions ----
+    import difflib
+
+    # determine which budget-code column we used (safe fallback)
+    bcol_candidates = [c for c in ['po_budget_code','pr_budget_code','po_budget_code_1'] if c in smart.columns]
+    base_col = bcol_candidates[0] if bcol_candidates else None
+
+    # identify unmapped rows (use __src==UNMAPPED OR dept_chart == 'Unmapped / Missing')
+    is_unmapped = (smart.get('__src', pd.Series('', index=smart.index)) == 'UNMAPPED') | (smart.get('dept_chart','').astype(str).str.contains('Unmapped', na=False))
+    unmapped = smart[is_unmapped].copy()
+
+    st.markdown('### Unmapped budget codes — quick diagnostics')
+    if unmapped.empty:
+        st.info('No unmapped lines detected (good!).')
+    else:
+        # Top N budget codes by count and spend
+        topn = 30
+        if base_col:
+            spend_col = net_amount_col if net_amount_col in unmapped.columns else (unmapped.columns[0] if len(unmapped.columns)>0 else None)
+            agg = unmapped.groupby(base_col, dropna=False).agg(
+                Lines=('procurement_category' if 'procurement_category' in unmapped.columns else base_col, 'count'),
+                Spend=(spend_col, 'sum')
+            ).reset_index().sort_values('Lines', ascending=False)
+            if 'Spend' in agg.columns:
+                agg['SpendCr'] = agg['Spend'] / 1e7
+            agg = agg.rename(columns={base_col: 'BudgetCode', 'Lines': 'Count'})
+            cols_to_show = ['BudgetCode','Count'] + (['SpendCr'] if 'SpendCr' in agg.columns else [])
+            st.dataframe(agg.head(topn)[cols_to_show], use_container_width=True)
+        else:
+            st.write(f'No budget-code column found among {bcol_candidates} — showing sample unmapped rows.')
+            st.dataframe(unmapped.head(50), use_container_width=True)
+
+        # Download full list of unmapped rows for offline review
+        csv_buf = unmapped.to_csv(index=False)
+        st.download_button('Download unmapped rows (CSV)', csv_buf, file_name='unmapped_rows.csv', mime='text/csv')
+
+        # Fuzzy suggestions against mapping keys (if mapping dicts exist)
+        mapping_candidates = []
+        try:
+            if isinstance(EM, dict) and EM:
+                mapping_candidates += list(EM.keys())
+        except Exception:
+            pass
+        try:
+            if isinstance(P3, dict) and P3:
+                mapping_candidates += list(P3.keys())
+        except Exception:
+            pass
+        try:
+            if isinstance(P3F, dict) and P3F:
+                mapping_candidates += list(P3F.keys())
+        except Exception:
+            pass
+        mapping_candidates = list(dict.fromkeys(mapping_candidates))  # unique preserve order
+
+        if base_col and mapping_candidates:
+            # normalize unmapped budget-code values similar to mapping logic but without regex
+            def norm(v):
+                try:
+                    s = str(v).upper().strip()
+                    s = s.replace(chr(160),' ').replace('&','AND').replace('R&D','RANDD')
+                    s = s.replace('/','.')
+                    s = s.replace('_','.')
+                    s = s.replace('-','.')
+                    s = s.replace(chr(92), '.')  # backslash -> dot
+                    # remove any non-alnum or dot
+                    s = ''.join(ch for ch in s if (ch.isalnum() or ch == '.'))
+                    while '..' in s:
+                        s = s.replace('..','.')
+                    s = s.strip('.')
+                    s = s.replace(' ','')
+                    return s
+                except Exception:
+                    return str(v)
+
+            # build list of unique budget codes to suggest for
+            code_list = unmapped[base_col].dropna().astype(str).str.strip().unique().tolist()
+            suggestions = []
+            for code in code_list[:200]:  # limit work to first 200 for performance
+                ncode = norm(code)
+                matches = difflib.get_close_matches(ncode, mapping_candidates, n=5, cutoff=0.55)
+                suggestions.append({'BudgetCode': code, 'Normalized': ncode, 'TopMatches': ';'.join(matches) if matches else ''})
+            sug_df = pd.DataFrame(suggestions)
+            if not sug_df.empty:
+                st.markdown('**Suggested close matches (auto-suggest)** — review and copy into alias/override file as needed')
+                st.dataframe(sug_df.head(200), use_container_width=True)
+                st.download_button('Download suggested aliases (CSV)', sug_df.to_csv(index=False), file_name='alias_suggestions.csv', mime='text/csv')
+            else:
+                st.info('No mapping keys found to suggest fuzzy matches.')
+        else:
+            st.info('No mapping candidates found (EM/P3/P3F empty) — consider uploading or placing mapping Excel files in working folder.')
+
     # Canonical labels + optional overrides
     DEPT_ALIASES = {
         'HR & ADMIN':'HR & Admin','HUMAN RESOURCES':'HR & Admin','LEGAL':'Legal & IP','LEGAL & IP':'Legal & IP',
