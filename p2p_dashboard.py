@@ -188,7 +188,17 @@ for col in ['buyer_type', entity_col, 'po_creator', 'po_buyer_type']:
         fil[col] = ''
     fil[col] = fil[col].astype(str).str.strip()
 
-sel_b = st.sidebar.multiselect('Buyer Type', sorted(fil['buyer_type_unified'].dropna().unique().tolist()), default=sorted(fil['buyer_type_unified'].dropna().unique().tolist()))
+# Ensure buyer_type_unified exists in the filtered frame — defensive creation to avoid KeyError
+if 'buyer_type_unified' not in fil.columns:
+    bt = safe_get(fil, 'buyer_type', pd.Series('', index=fil.index)).astype(str).str.strip()
+    pbt = safe_get(fil, 'po_buyer_type', pd.Series('', index=fil.index)).astype(str).str.strip()
+    fil['buyer_type_unified'] = np.where(bt != '', bt, pbt)
+    fil['buyer_type_unified'] = fil['buyer_type_unified'].str.title().replace({'Other':'Indirect','Unknown':'Indirect','':'Indirect','Na':'Indirect','N/A':'Indirect'})
+    fil['buyer_type_unified'] = np.where(fil['buyer_type_unified'].str.lower() == 'direct', 'Direct', 'Indirect')
+
+choices_bt = sorted(fil['buyer_type_unified'].dropna().unique().tolist()) if 'buyer_type_unified' in fil.columns else ['Direct','Indirect']
+sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
+
 sel_e = st.sidebar.multiselect('Entity', sorted(fil[entity_col].dropna().unique().tolist()), default=sorted(fil[entity_col].dropna().unique().tolist()))
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
 sel_p = st.sidebar.multiselect('PO Buyer Type (raw)', sorted(fil['po_buyer_type'].dropna().unique().tolist()), default=sorted(fil['po_buyer_type'].dropna().unique().tolist()))
@@ -645,3 +655,4 @@ with T[8]:
         st.caption('Start typing to search…')
 
 # EOF
+
