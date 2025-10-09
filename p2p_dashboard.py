@@ -193,7 +193,7 @@ sel_e = st.sidebar.multiselect('Entity', sorted(fil[entity_col].dropna().unique(
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
 sel_p = st.sidebar.multiselect('PO Buyer Type (raw)', sorted(fil['po_buyer_type'].dropna().unique().tolist()), default=sorted(fil['po_buyer_type'].dropna().unique().tolist()))
 if sel_b:
-    fil = fil[fil['buyer_type'].isin(sel_b)]
+    fil = fil[fil['buyer_type_unified'].isin(sel_b)]]
 if sel_e:
     fil = fil[fil[entity_col].isin(sel_e)]
 if sel_o:
@@ -202,7 +202,7 @@ if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
 # ----------------- Tabs -----------------
-T = st.tabs(['KPIs','Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
+T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
 
 # ----------------- KPIs -----------------
 with T[0]:
@@ -244,7 +244,7 @@ with T[1]:
             st.plotly_chart(fig2, use_container_width=True)
 
 # ----------------- PR/PO Timing -----------------
-with T[2]:
+with T[1]:
     st.subheader('SLA (PR→PO ≤7d)')
     if pr_col in fil.columns and po_create_col in fil.columns:
         ld = fil.dropna(subset=[po_create_col, pr_col]).copy()
@@ -331,7 +331,7 @@ with T[2]:
             st.plotly_chart(px.bar(mcount, x='po_month', y='Unique PO Count', text='Unique PO Count', title='Unique POs per Month').update_traces(textposition='outside'), use_container_width=True)
 
 # ----------------- Delivery -----------------
-with T[3]:
+with T[2]:
     st.subheader('Delivery Summary')
     dv = fil.rename(columns={
         'po_quantity':'po_qty', 'receivedqty':'received_qty', 'pending_qty':'pending_qty'
@@ -351,7 +351,7 @@ with T[3]:
             st.dataframe(dv.sort_values('pending_value', ascending=False).head(50)[keep], use_container_width=True)
 
 # ----------------- Vendors -----------------
-with T[4]:
+with T[3]:
     st.subheader('Top Vendors by Spend')
     if po_vendor_col in fil.columns and purchase_doc_col in fil.columns and net_amount_col in fil.columns:
         vs = fil.groupby('po_vendor', dropna=False).agg(Vendor_PO_Count=(purchase_doc_col,'nunique'), Total_Spend_Cr=(net_amount_col, lambda s: (s.sum()/1e7).round(2))).reset_index().sort_values('Total_Spend_Cr', ascending=False)
@@ -378,7 +378,7 @@ with T[4]:
             st.plotly_chart(px.bar(melt, x='po_vendor', y='Percentage', color='Metric', barmode='group', title='% Fully Delivered vs % Late (Top 10 by Spend)'), use_container_width=True)
 
 # ----------------- Smart Budget Mapper / Dept & Services -----------------
-with T[5]:
+with T[4]:
     st.subheader('Dept & Services (Smart Mapper)')
 
     def _norm_series_local(s):
@@ -547,7 +547,7 @@ with T[5]:
             st.plotly_chart(px.treemap(tm, path=['Department','Service'], values='Cr', title='Dept→Service Treemap (Cr ₹)'), use_container_width=True)
 
 # ----------------- Unit-rate Outliers -----------------
-with T[6]:
+with T[5]:
     st.subheader('Unit-rate Outliers vs Historical Median')
     grp_candidates = [c for c in ['product_name','item_code'] if c in fil.columns]
     if grp_candidates:
@@ -568,7 +568,7 @@ with T[6]:
         st.info("Need 'PO Unit Rate' and a grouping column (product_name / item_code)")
 
 # ----------------- Forecast -----------------
-with T[7]:
+with T[6]:
     st.subheader('Forecast Next Month Spend (SMA)')
     dcol = po_create_col if po_create_col in fil.columns else (pr_col if pr_col in fil.columns else None)
     if dcol and net_amount_col in fil.columns:
@@ -593,7 +593,7 @@ with T[7]:
         st.info('Need date and Net Amount to forecast.')
 
 # ----------------- Vendor Scorecards -----------------
-with T[8]:
+with T[7]:
     st.subheader('Vendor Scorecard')
     if po_vendor_col in fil.columns:
         vendor = st.selectbox('Pick Vendor', sorted(fil[po_vendor_col].dropna().astype(str).unique().tolist()))
@@ -620,7 +620,7 @@ with T[8]:
                 st.plotly_chart(px.line(vsp, labels={'value':'Spend (Cr)','index':'Month'}, title='Monthly Spend'), use_container_width=True)
 
 # ----------------- Search (Keyword) -----------------
-with T[9]:
+with T[8]:
     st.subheader('🔍 Keyword Search')
     valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in df.columns]
     query = st.text_input('Type vendor, product, PO, PR, etc.', '')
