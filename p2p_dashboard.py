@@ -193,7 +193,7 @@ sel_e = st.sidebar.multiselect('Entity', sorted(fil[entity_col].dropna().unique(
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
 sel_p = st.sidebar.multiselect('PO Buyer Type (raw)', sorted(fil['po_buyer_type'].dropna().unique().tolist()), default=sorted(fil['po_buyer_type'].dropna().unique().tolist()))
 if sel_b:
-    fil = fil[fil['buyer_type_unified'].isin(sel_b)]]
+    fil = fil[fil['buyer_type_unified'].isin(sel_b)]
 if sel_e:
     fil = fil[fil[entity_col].isin(sel_e)]
 if sel_o:
