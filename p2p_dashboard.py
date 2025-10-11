@@ -5,37 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ---- Page header: guaranteed visible ----
-import streamlit as _st
-# touch session_state to ensure session initialised (harmless)
-try:
-    _st.session_state
-except Exception:
-    pass
 
-_st.markdown(
-    """
-    <div style="background-color:transparent; padding:6px 0 12px 0; margin-bottom:6px;">
-      <h1 style="font-size:34px; line-height:1.05; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
-      <div style="font-size:14px; color:#23395b; margin-top:4px; margin-bottom:8px;">
-         Purchase-to-Pay overview (Indirect spend focus)
-      </div>
-      <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Extra plain-text fallback to ensure visibility
-_st.write("## P2P Dashboard — Indirect")
-
-# Quick CSS guard: hide any stray JSON/stJson widgets that came from debug prints (visible until underlying debug line is removed)
-_st.markdown('''
-<style>
-/* hide Streamlit JSON widget and similar debug preformatted blocks */
-[data-testid="stJson"], .stJson, pre.stCodeBlock, pre { display: none !important; }
-</style>
-''', unsafe_allow_html=True)
 
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
