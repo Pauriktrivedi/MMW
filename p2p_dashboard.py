@@ -217,6 +217,12 @@ if sel_o:
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
+# ----------------- Page header -----------------
+with st.container():
+    st.markdown("<h1 style='margin:0.2rem 0 0.0rem 0'>P2P Dashboard — Indirect</h1>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom:0.6rem'><strong>Purchase-to-Pay overview (Indirect spend focus)</strong></div>", unsafe_allow_html=True)
+    st.markdown('---')
+
 # ----------------- Tabs -----------------
 T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
 
