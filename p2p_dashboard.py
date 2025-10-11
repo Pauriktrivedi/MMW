@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
 # ---- Page header: guaranteed visible ----
 import streamlit as _st
