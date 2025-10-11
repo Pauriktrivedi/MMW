@@ -31,6 +31,14 @@ _st.markdown(
 # Extra plain-text fallback to ensure visibility
 _st.write("## P2P Dashboard — Indirect")
 
+# Quick CSS guard: hide any stray JSON/stJson widgets that came from debug prints (visible until underlying debug line is removed)
+_st.markdown('''
+<style>
+/* hide Streamlit JSON widget and similar debug preformatted blocks */
+[data-testid="stJson"], .stJson, pre.stCodeBlock, pre { display: none !important; }
+</style>
+''', unsafe_allow_html=True)
+
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize column names to snake_case lowercase and remove NBSPs."""
