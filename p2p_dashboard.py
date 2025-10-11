@@ -7,10 +7,6 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
-with st.container():
-    st.markdown("<h1 style='margin:0.2rem 0 0.0rem 0'>P2P Dashboard — Indirect</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='margin-bottom:0.6rem'><strong>Purchase-to-Pay overview (Indirect spend focus)</strong></div>", unsafe_allow_html=True)
-    st.markdown('---')
 # Top-level title
 st.title('P2P Dashboard — Indirect')
 
