@@ -7,6 +7,12 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
+# Top-level title
+st.title('P2P Dashboard — Indirect')
+
+# Optional subtitle
+st.markdown('### Purchase-to-Pay overview (Indirect spend focus)')", layout="wide", initial_sidebar_state="expanded")
+
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize column names to snake_case lowercase and remove NBSPs."""
