@@ -245,7 +245,10 @@ if sel_p:
 
 # ----------------- Tabs -----------------
 T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
-T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
+# REMOVED_DUPLICATE_TABS — original tabs call commented out to avoid duplicates
+# (canonical tabs will be inserted below) 
+# REMOVED_DUPLICATE_TABS — original tabs call commented out to avoid duplicates
+# (canonical tabs will be inserted below) 
 
 # ----------------- KPIs & Spend -----------------
 with T[0]:
