@@ -5,7 +5,31 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
+# ---- Page header: guaranteed visible ----
+import streamlit as _st
+# touch session_state to ensure session initialised (harmless)
+try:
+    _st.session_state
+except Exception:
+    pass
+
+_st.markdown(
+    """
+    <div style="background-color:transparent; padding:6px 0 12px 0; margin-bottom:6px;">
+      <h1 style="font-size:34px; line-height:1.05; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
+      <div style="font-size:14px; color:#23395b; margin-top:4px; margin-bottom:8px;">
+         Purchase-to-Pay overview (Indirect spend focus)
+      </div>
+      <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Extra plain-text fallback to ensure visibility
+_st.write("## P2P Dashboard — Indirect")
 
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -56,8 +80,8 @@ def load_all(file_list=None):
     return x
 
 # Allow optional file upload for local testing
-with st.sidebar.expander("Upload data files (optional)"):
-    uploaded = st.file_uploader("Upload one or more Excel files", type=["xlsx","xls"], accept_multiple_files=True, key="files")
+# Upload control removed per user request
+uploaded = None
 
 file_list = None
 if uploaded:
@@ -211,13 +235,8 @@ if sel_o:
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
-# ----------------- Page header -----------------
-with st.container():
-    st.markdown("<h1 style='margin:0.2rem 0 0.0rem 0'>P2P Dashboard — Indirect</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='margin-bottom:0.6rem'><strong>Purchase-to-Pay overview (Indirect spend focus)</strong></div>", unsafe_allow_html=True)
-    st.markdown('---')
-
 # ----------------- Tabs -----------------
+T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
 T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
 
 # ----------------- KPIs & Spend -----------------
@@ -639,7 +658,7 @@ with T[4]:
     if 'subcat_chart' in smart.columns:
         smart['subcat_chart'] = canonize(smart['subcat_chart'].astype(str), SUBCAT_ALIASES)
 
-    st.caption({'map_src_counts': smart.get('__src', pd.Series()).value_counts(dropna=False).to_dict() if '__src' in smart.columns else {}})
+    
 
     if net_amount_col in smart.columns:
         dep = smart.groupby('dept_chart', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
