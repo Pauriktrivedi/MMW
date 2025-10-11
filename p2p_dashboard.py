@@ -7,11 +7,29 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
-# Top-level title
-st.title('P2P Dashboard — Indirect')
+# ---- Page header: guaranteed visible ----
+import streamlit as _st
+# touch session_state to ensure session initialised (harmless)
+try:
+    _st.session_state
+except Exception:
+    pass
 
-# Optional subtitle
-st.markdown('### Purchase-to-Pay overview (Indirect spend focus)')", layout="wide", initial_sidebar_state="expanded")
+_st.markdown(
+    """
+    <div style="background-color:transparent; padding:6px 0 12px 0; margin-bottom:6px;">
+      <h1 style="font-size:34px; line-height:1.05; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
+      <div style="font-size:14px; color:#23395b; margin-top:4px; margin-bottom:8px;">
+         Purchase-to-Pay overview (Indirect spend focus)
+      </div>
+      <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Extra plain-text fallback to ensure visibility
+_st.write("## P2P Dashboard — Indirect")
 
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
