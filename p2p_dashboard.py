@@ -4,6 +4,33 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+# ---- Page header: guaranteed visible ----
+# Place this immediately after st.set_page_config(...)
+import streamlit as _st
+
+# Clear any leftover side-effects (safe)
+try:
+    _st.session_state  # touch state so Streamlit initialises session
+except Exception:
+    pass
+
+# Big visible title + subtitle with high-contrast styling
+_st.markdown(
+    """
+    <div style="background-color:transparent; padding:6px 0 12px 0; margin-bottom:6px;">
+      <h1 style="font-size:34px; line-height:1.05; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
+      <div style="font-size:14px; color:#23395b; margin-top:4px; margin-bottom:8px;">
+         Purchase-to-Pay overview (Indirect spend focus)
+      </div>
+      <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Extra: always show a plain text fallback title so theme issues won't hide it
+_st.write("## P2P Dashboard — Indirect")
+
 
 st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
