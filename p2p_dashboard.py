@@ -244,6 +244,7 @@ if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
 # --- Vendor & Item filters as dropdowns (single-select with 'All' option) ---
+# Ensure columns exist
 if 'po_vendor' not in fil.columns:
     fil['po_vendor'] = ''
 if 'product_name' not in fil.columns:
@@ -262,13 +263,21 @@ sel_i = st.sidebar.selectbox('Item / Product', item_choices, index=0, key='filte
 
 # Reset Filters button
 if st.sidebar.button('Reset Filters'):
-    # remove common filter keys from session_state then rerun
+    # clear common filter keys from session_state then rerun
     for k in ['filter_vendor','filter_item','filter_buyer','filter_entity','filter_po_creator','filter_po_buyer_type','fy_key']:
         if k in st.session_state:
             del st.session_state[k]
     st.experimental_rerun()
 
 # apply dropdown filters (only when specific selection made)
+if sel_v and sel_v != 'All Vendors':
+    fil = fil[fil['po_vendor'] == sel_v]
+
+if sel_i and sel_i != 'All Items':
+    fil = fil[fil[item_display_col] == sel_i]
+
+# marker_end_of_filters
+
 if sel_v and sel_v != 'All Vendors':
     fil = fil[fil['po_vendor'] == sel_v]
 if sel_i and sel_i != 'All Items':
