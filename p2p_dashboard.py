@@ -5,6 +5,39 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
+
+# ---- Page header: guaranteed visible ----
+import streamlit as _st
+# touch session_state to ensure session initialised (harmless)
+try:
+    _st.session_state
+except Exception:
+    pass
+
+_st.markdown(
+    """
+    <div style="background-color:transparent; padding:6px 0 12px 0; margin-bottom:6px;">
+      <h1 style="font-size:34px; line-height:1.05; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
+      <div style="font-size:14px; color:#23395b; margin-top:4px; margin-bottom:8px;">
+         Purchase-to-Pay overview (Indirect spend focus)
+      </div>
+      <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Extra plain-text fallback to ensure visibility
+_st.write("## P2P Dashboard — Indirect")
+
+# Quick CSS guard: hide any stray JSON/stJson widgets that came from debug prints (visible until underlying debug line is removed)
+_st.markdown('''
+<style>
+/* hide Streamlit JSON widget and similar debug preformatted blocks */
+[data-testid="stJson"], .stJson, pre.stCodeBlock, pre { display: none !important; }
+</style>
+''', unsafe_allow_html=True)
 
 # ----------------- Helpers -----------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -209,6 +242,22 @@ if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
+
+# --- New: Vendor & Item filters (sidebar) ---
+if 'po_vendor' not in fil.columns:
+    fil['po_vendor'] = ''
+if 'product_name' not in fil.columns:
+    fil['product_name'] = ''
+fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
+fil['product_name'] = fil['product_name'].astype(str).str.strip()
+
+sel_v = st.sidebar.multiselect('Vendor', sorted(fil['po_vendor'].dropna().unique().tolist()), default=sorted(fil['po_vendor'].dropna().unique().tolist()))
+sel_i = st.sidebar.multiselect('Item / Product', sorted(fil['product_name'].dropna().unique().tolist()), default=sorted(fil['product_name'].dropna().unique().tolist()))
+
+if sel_v:
+    fil = fil[fil['po_vendor'].isin(sel_v)]
+if sel_i:
+    fil = fil[fil['product_name'].isin(sel_i)]
 
 # ----------------- Tabs -----------------
 T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search'])
