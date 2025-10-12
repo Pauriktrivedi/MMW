@@ -240,7 +240,9 @@ if sel_e:
     fil = fil[fil[entity_col].isin(sel_e)]
 if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
+
 # ----------------- Filters: apply PO buyer type then Vendor/Item filters -----------------
+# Apply PO buyer type filter if selected
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
@@ -252,15 +254,15 @@ if 'product_name' not in fil.columns:
 fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
 fil['product_name'] = fil['product_name'].astype(str).str.strip()
 
-# Prefer friendly display column if present
+# Prefer a friendly display column if present
 item_display_col = 'product_name_friendly' if 'product_name_friendly' in fil.columns else 'product_name'
 
 # Vendor & Item multi-selects (allow picking multiple vendors/items)
 vendor_choices = sorted(fil['po_vendor'].dropna().unique().tolist())
 item_choices = sorted(fil[item_display_col].dropna().unique().tolist())
 
-sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=vendor_choices)
-sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=item_choices)
+sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=vendor_choices, key='filter_vendor')
+sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=item_choices, key='filter_item')
 
 # Reset Filters button (clears specific keys and reruns)
 if st.sidebar.button('Reset Filters'):
@@ -278,6 +280,8 @@ if sel_i:
 
 # marker_end_of_filters
 
+
+    
 # (no-op) end of filter block — previous duplicate removed
     fil = fil[fil['po_vendor'] == sel_v]
 if sel_i and sel_i != 'All Items':
