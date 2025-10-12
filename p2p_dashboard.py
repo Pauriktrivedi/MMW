@@ -251,8 +251,17 @@ if 'product_name' not in fil.columns:
 fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
 fil['product_name'] = fil['product_name'].astype(str).str.strip()
 
-sel_v = st.sidebar.multiselect('Vendor', sorted(fil['po_vendor'].dropna().unique().tolist()), default=sorted(fil['po_vendor'].dropna().unique().tolist()))
-sel_i = st.sidebar.multiselect('Item / Product', sorted(fil['product_name'].dropna().unique().tolist()), default=sorted(fil['product_name'].dropna().unique().tolist()))
+# Vendor & Item filters as dropdowns (single-select with 'All' option) for compactness
+vendor_choices = ['All Vendors'] + sorted(fil['po_vendor'].dropna().unique().tolist())
+item_choices = ['All Items'] + sorted(fil['product_name'].dropna().unique().tolist())
+sel_v = st.sidebar.selectbox('Vendor', vendor_choices, index=0)
+sel_i = st.sidebar.selectbox('Item / Product', item_choices, index=0)
+
+# apply dropdown filters (only when specific selection made)
+if sel_v and sel_v != 'All Vendors':
+    fil = fil[fil['po_vendor'] == sel_v]
+if sel_i and sel_i != 'All Items':
+    fil = fil[fil['product_name'] == sel_i].unique().tolist()), default=sorted(fil['product_name'].dropna().unique().tolist()))
 
 if sel_v:
     fil = fil[fil['po_vendor'].isin(sel_v)]
@@ -664,22 +673,6 @@ with T[4]:
 
     def canonize(s, mapping):
         return s.apply(lambda v: mapping.get(str(v).strip().upper(), str(v).strip()) if pd.notna(v) else v)
-
-    with st.sidebar.expander('Alias overrides (optional)'):
-        up = st.file_uploader('Upload alias overrides CSV/XLSX', type=['csv','xlsx'], key='alias_up')
-        if up is not None:
-            try:
-                al = pd.read_csv(up) if up.name.lower().endswith('.csv') else pd.read_excel(up)
-                al.columns = al.columns.astype(str).str.strip()
-                if {'Department','Dept.Alias'}.issubset(al.columns):
-                    for k,v in al[['Department','Dept.Alias']].dropna().values:
-                        DEPT_ALIASES[str(k).upper().strip()] = str(v).strip()
-                if {'Subcategory','Subcat.Alias'}.issubset(al.columns):
-                    for k,v in al[['Subcategory','Subcat.Alias']].dropna().values:
-                        SUBCAT_ALIASES[str(k).upper().strip()] = str(v).strip()
-                st.success('Aliases loaded')
-            except Exception as e:
-                st.warning(f'Alias file error: {e}')
 
     smart['dept_chart'] = canonize(smart['dept_chart'].astype(str), DEPT_ALIASES)
     if 'subcat_chart' in smart.columns:
