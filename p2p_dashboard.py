@@ -243,6 +243,37 @@ if sel_o:
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
+# --- Vendor & Item filters as dropdowns (single-select with 'All' option) ---
+if 'po_vendor' not in fil.columns:
+    fil['po_vendor'] = ''
+if 'product_name' not in fil.columns:
+    fil['product_name'] = ''
+fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
+fil['product_name'] = fil['product_name'].astype(str).str.strip()
+
+# Prefer a friendly display column if provided
+item_display_col = 'product_name_friendly' if 'product_name_friendly' in fil.columns else 'product_name'
+
+vendor_choices = ['All Vendors'] + sorted(fil['po_vendor'].dropna().unique().tolist())
+item_choices = ['All Items'] + sorted(fil[item_display_col].dropna().unique().tolist())
+
+sel_v = st.sidebar.selectbox('Vendor', vendor_choices, index=0, key='filter_vendor')
+sel_i = st.sidebar.selectbox('Item / Product', item_choices, index=0, key='filter_item')
+
+# Reset Filters button
+if st.sidebar.button('Reset Filters'):
+    # remove common filter keys from session_state then rerun
+    for k in ['filter_vendor','filter_item','filter_buyer','filter_entity','filter_po_creator','filter_po_buyer_type','fy_key']:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.experimental_rerun()
+
+# apply dropdown filters (only when specific selection made)
+if sel_v and sel_v != 'All Vendors':
+    fil = fil[fil['po_vendor'] == sel_v]
+if sel_i and sel_i != 'All Items':
+    fil = fil[fil[item_display_col] == sel_i]
+
 # --- New: Vendor & Item filters (sidebar) ---
 if 'po_vendor' not in fil.columns:
     fil['po_vendor'] = ''
