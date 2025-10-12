@@ -242,9 +242,10 @@ if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 if sel_p:
     fil = fil[fil['po_buyer_type'].isin(sel_p)]
+    fil = fil[fil['po_buyer_type'].isin(sel_p)]
 
 # --- Vendor & Item filters as dropdowns (single-select with 'All' option) ---
-# Ensure columns exist
+# Ensure columns exist and normalize
 if 'po_vendor' not in fil.columns:
     fil['po_vendor'] = ''
 if 'product_name' not in fil.columns:
@@ -272,13 +273,12 @@ if st.sidebar.button('Reset Filters'):
 # apply dropdown filters (only when specific selection made)
 if sel_v and sel_v != 'All Vendors':
     fil = fil[fil['po_vendor'] == sel_v]
-
 if sel_i and sel_i != 'All Items':
     fil = fil[fil[item_display_col] == sel_i]
 
 # marker_end_of_filters
 
-if sel_v and sel_v != 'All Vendors':
+# (no-op) end of filter block — previous duplicate removed
     fil = fil[fil['po_vendor'] == sel_v]
 if sel_i and sel_i != 'All Items':
     fil = fil[fil[item_display_col] == sel_i]
@@ -879,10 +879,4 @@ with T[8]:
     else:
         st.caption('Start typing to search…')
 
-# EOF# marker_end_of_filters
-
-# (no-op) end of filter block — previous duplicate removedf sel_p:
-    fil = fil[fil['po_buyer_type'].isin(sel_p)]if sel_p:
-    fil = fil[fil['po_buyer_type'].isin(sel_p)]# marker_end_of_filters
-
-# (no-op) end of filter block — previous duplicate removed
+# EOF
