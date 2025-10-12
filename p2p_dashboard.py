@@ -879,4 +879,10 @@ with T[8]:
     else:
         st.caption('Start typing to search…')
 
-# EOF
+# EOF# marker_end_of_filters
+
+# (no-op) end of filter block — previous duplicate removedf sel_p:
+    fil = fil[fil['po_buyer_type'].isin(sel_p)]if sel_p:
+    fil = fil[fil['po_buyer_type'].isin(sel_p)]# marker_end_of_filters
+
+# (no-op) end of filter block — previous duplicate removed
