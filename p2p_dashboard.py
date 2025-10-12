@@ -247,12 +247,6 @@ if sel_p:
 # Ensure columns exist and normalize
 if 'po_vendor' not in fil.columns:
     fil['po_vendor'] = ''
-    
-if 'product_name' not in fil.columns:
-    fil['product_name'] = ''
-fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
-fil['product_name'] = fil['product_name'].astype(str).str.strip()
-    fil['po_vendor'] = ''
 if 'product_name' not in fil.columns:
     fil['product_name'] = ''
 fil['po_vendor'] = fil['po_vendor'].astype(str).str.strip()
