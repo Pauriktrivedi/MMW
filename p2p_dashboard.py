@@ -24,14 +24,16 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     new_cols = {}
     for c in df.columns:
         s = str(c).strip()
-        s = s.replace(' ', ' ')
-        s = s.replace('\','_').replace('/','_')
-        s = '_'.join(s.split())
+        s = s.replace("\xa0", " ")
+        # properly escape backslash here
+        s = s.replace("\\", "_").replace("/", "_")
+        s = "_".join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
         s = '_'.join([p for p in s.split('_') if p != ''])
         new_cols[c] = s
     return df.rename(columns=new_cols)
+
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_all(fns=None):
