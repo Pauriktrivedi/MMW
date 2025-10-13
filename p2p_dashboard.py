@@ -28,9 +28,9 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     new_cols = {}
     for c in df.columns:
         s = str(c).strip()
-        s = s.replace("\xa0", " ")
+        s = s.replace(" ", " ")
         # escape backslash correctly in Python strings
-        s = s.replace("\\", "_").replace("/", "_")
+        s = s.replace("\\\\", "_").replace("/", "_")
         # collapse whitespace to single underscore
         s = "_".join(s.split())
         s = s.lower()
