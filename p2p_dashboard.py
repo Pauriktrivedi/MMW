@@ -7,7 +7,6 @@ from plotly.subplots import make_subplots
 import difflib
 import re
 
-st.set_page_config(page_title="P2P Dashboard — Indirect (Final)", layout="wide", initial_sidebar_state="expanded")
 
 # --- Header ---
 st.markdown(
