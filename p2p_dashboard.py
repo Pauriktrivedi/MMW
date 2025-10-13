@@ -24,16 +24,14 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     new_cols = {}
     for c in df.columns:
         s = str(c).strip()
-        s = s.replace("\xa0", " ")
-        # properly escape backslash here
-        s = s.replace("\\", "_").replace("/", "_")
-        s = "_".join(s.split())
+        s = s.replace(' ', ' ')
+        s = s.replace('\','_').replace('/','_')
+        s = '_'.join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
         s = '_'.join([p for p in s.split('_') if p != ''])
         new_cols[c] = s
     return df.rename(columns=new_cols)
-
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_all(fns=None):
@@ -215,10 +213,31 @@ with T[3]:
 
 # ---------- Dept & Services (placeholder) ----------
 with T[4]:
-    st.subheader('Dept & Services (Smart Mapper)')
-    st.info('Mapping logic can be enabled by placing mapping files in the working folder. See logs / earlier versions for mapping code.')
+    st.subheader('Dept & Services (PR Department)')
 
-# ---------- Unit-rate Outliers ----------
+    # Use PR department column (check a list of likely column names created by normalization)
+    pr_dept_candidates = [c for c in ['pr_department','pr_dept','pr_dept_name','pr_department_name','pr_department_code','dept_chart','department'] if c in fil.columns]
+    if pr_dept_candidates:
+        pr_dept_col = pr_dept_candidates[0]
+        st.write(f"Using department column: **{pr_dept_col}** for Dept spend aggregation")
+        d = fil.copy()
+        d[pr_dept_col] = d[pr_dept_col].astype(str).str.strip().replace({'nan':pd.NA})
+        if net_amount_col in d.columns:
+            dep = d.groupby(pr_dept_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            dep['Cr'] = dep[net_amount_col]/1e7
+            # show top 30 departments as bar chart
+            topn = min(30, len(dep))
+            if topn > 0:
+                st.plotly_chart(px.bar(dep.head(topn), x=pr_dept_col, y='Cr', title='Department-wise Spend (Top departments)')
+                              .update_layout(xaxis_tickangle=-45, yaxis_title='Cr ₹'), use_container_width=True)
+                st.dataframe(dep.head(200).assign(Spend_Cr=lambda df: (df[net_amount_col]/1e7).round(2)), use_container_width=True)
+            else:
+                st.info('No departments with spend found.')
+        else:
+            st.info('Net Amount column not present — cannot compute department spend.')
+    else:
+        st.info('No PR department-like column found in data. Expected columns: pr_department, pr_dept, pr_dept_name, dept_chart, etc.')
+
 with T[5]:
     st.subheader('Unit-rate Outliers vs Historical Median')
     grp_candidates = [c for c in ['product_name','item_code'] if c in fil.columns]
