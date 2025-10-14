@@ -21,22 +21,17 @@ st.markdown(
 )
 
 # ----------------- Helpers -----------------
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize column names to snake_case lowercase and remove NBSPs.
-
-    Defensive about backslashes and punctuation to avoid unterminated string errors.
-    """
-    new_cols = {}
+def normalize_columns(df):
+    new = {}
     for c in df.columns:
-        s = str(c).strip()
-        s = s.replace(" ", " ")
-        s = s.replace("\", "_").replace("/", "_")
-        s = "_".join(s.split())
+        s = re.sub(r'\s+', '_', str(c).replace('\xa0',' ').strip())
+        s = re.sub(r'[\\/]+', '_', s)            # handle both \ and /
         s = s.lower()
-        s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
-        s = re.sub('_+', '_', s).strip('_')
-        new_cols[c] = s
-    return df.rename(columns=new_cols)
+        s = re.sub(r'[^a-z0-9_]+', '_', s)
+        s = re.sub(r'_+', '_', s).strip('_')
+        new[c] = s
+    return df.rename(columns=new)
+
 
 @st.cache_data(show_spinner=False)
 def load_all():
