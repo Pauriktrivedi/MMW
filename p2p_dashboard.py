@@ -421,3 +421,4 @@ with T[0]:
         st.info('Entity trend not available — need date and Net Amount columns.')
 
 # EOF
+
