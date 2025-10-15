@@ -725,3 +725,4 @@ new_files = st.file_uploader("Upload Excel/CSV files here (bottom uploader)", ty
 if new_files:
     st.session_state['_bottom_uploaded'] = new_files
     st.experimental_rerun()
+
