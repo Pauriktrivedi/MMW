@@ -1,4 +1,4 @@
-# Full P2P Dashboard — copy/paste entire file
+# Full P2P Dashboard — stable reset + month-as-subfilter + bottom uploader
 import re
 import pandas as pd
 import numpy as np
@@ -7,38 +7,35 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="P2P Dashboard — Full", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="P2P Dashboard — Full (Stable)", layout="wide", initial_sidebar_state="expanded")
 
-# ---------- Utility helpers ----------
+# ---------------- Helpers ----------------
 def normalize_text(s: str) -> str:
     return re.sub(r'\s+', ' ', str(s).strip())
 
 def find_col(df: pd.DataFrame, *variants):
-    """Return the first column name in df that matches any variant (case-insensitive, trimmed)."""
     if df is None:
         return None
     cols = list(df.columns)
-    lower_map = {c.lower().strip(): c for c in cols}
+    low_map = {c.lower().strip(): c for c in cols}
     for v in variants:
         if v is None:
             continue
-        if isinstance(v, (list,tuple)):
+        key = str(v).lower().strip()
+        # exact match
+        if key in low_map:
+            return low_map[key]
+        # substring match
+        for lc, orig in low_map.items():
+            if key in lc:
+                return orig
+    # fallback: try partial combos
+    for v in variants:
+        if isinstance(v, (list, tuple)):
             for c in cols:
-                low = c.lower()
-                ok = True
-                for sub in v:
-                    if str(sub).lower() not in low:
-                        ok = False
-                        break
-                if ok:
+                lc = c.lower()
+                if all(str(x).lower() in lc for x in v):
                     return c
-        else:
-            key = str(v).lower().strip()
-            if key in lower_map:
-                return lower_map[key]
-            for lc, orig in lower_map.items():
-                if key in lc:
-                    return orig
     return None
 
 @st.cache_data(show_spinner=False)
@@ -86,63 +83,66 @@ def load_from_uploaded(files):
     x.columns = [normalize_text(c).replace("\xa0"," ") for c in x.columns]
     return x
 
-# ---------- Load data (respect bottom uploader session) ----------
-uploaded_files_session = st.session_state.get("_bottom_uploaded", None)
-if uploaded_files_session:
-    df = load_from_uploaded(uploaded_files_session)
+# ---------------- Load data (persist bottom uploader across reruns) ----------------
+uploaded_session = st.session_state.get("_bottom_uploaded", None)
+if uploaded_session:
+    df = load_from_uploaded(uploaded_session)
 else:
     df = load_default_files()
 
 if df is None or df.empty:
-    st.warning("No data found. Place default files (MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx) next to this script OR use the bottom uploader (at the bottom of the page) to upload files.")
+    st.sidebar.header("Filters")
+    st.warning("No data found. Place default Excel files next to this script (MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx) OR upload files using the bottom uploader below.")
     st.markdown("---")
     st.markdown("### Upload files (bottom of page)")
-    new_files = st.file_uploader("Upload Excel/CSV files here", type=['xlsx','xls','csv'], accept_multiple_files=True, key='_bottom_uploader')
+    new_files = st.file_uploader("Upload Excel/CSV files here", type=['xlsx','xls','csv'], accept_multiple_files=True, key='_bottom_uploader_initial')
     if new_files:
         st.session_state['_bottom_uploaded'] = new_files
-        st.experimental_rerun()
+        # safe rerun
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
     st.stop()
 
-# ---------- Smart column mapping ----------
+# ---------------- Smart column mapping ----------------
 col_map = {}
-col_map['PR Date Submitted'] = find_col(df, "PR Date Submitted", ("pr date","submitted"))
-col_map['Po create Date']   = find_col(df, "Po create Date", ("po create",))
-col_map['PO Approved Date'] = find_col(df, "PO Approved Date", ("po approved",))
-col_map['PO Delivery Date'] = find_col(df, "PO Delivery Date", ("po delivery","delivery"))
-col_map['PR Number']        = find_col(df, "PR Number", ("pr number","pr no"))
-col_map['Purchase Doc']     = find_col(df, "Purchase Doc", ("purchase doc","po number","po_no"))
-col_map['Net Amount']       = find_col(df, "Net Amount", ("net amount","amount","value"))
-col_map['PO Vendor']        = find_col(df, "PO Vendor", ("vendor","supplier"))
-col_map['Product Name']     = find_col(df, "Product Name", ("product name","item"))
-col_map['PO Unit Rate']     = find_col(df, "PO Unit Rate", ("unit rate","rate"))
-col_map['PO Quantity']      = find_col(df, "PO Quantity", ("quantity",))
-col_map['ReceivedQTY']      = find_col(df, "ReceivedQTY", ("received","receivedqty"))
-col_map['Pending QTY']      = find_col(df, "Pending QTY", ("pending","pendingqty"))
-col_map['PO Budget Code']   = find_col(df, "PO Budget Code", ("po budget code","budget"))
-col_map['PR Budget Code']   = find_col(df, "PR Budget Code", ("pr budget code",))
-col_map['Buyer Group']      = find_col(df, "Buyer Group", ("buyer group",))
-col_map['PO Orderer']       = find_col(df, "PO Orderer", ("po orderer",))
-col_map['Entity']           = find_col(df, "Entity", "Entity")
-col_map['PR Status']        = find_col(df, "PR Status", ("pr status",))
-col_map['Procurement Category'] = find_col(df, "Procurement Category", ("procurement category",))
-col_map['PO Department']    = find_col(df, "PO Department", ("po department","department","dept"))
+col_map['PR Date Submitted'] = find_col(df, "PR Date Submitted", "pr date", "pr submitted")
+col_map['Po create Date']   = find_col(df, "Po create Date", "po create", "po created", "po create date")
+col_map['PO Approved Date'] = find_col(df, "PO Approved Date", "po approved")
+col_map['PO Delivery Date'] = find_col(df, "PO Delivery Date", "po delivery", "delivery date")
+col_map['PR Number']        = find_col(df, "PR Number", "pr no", "pr number")
+col_map['Purchase Doc']     = find_col(df, "Purchase Doc", "po number", "purchase doc", "purchase order")
+col_map['Net Amount']       = find_col(df, "Net Amount", "net amount", "amount", "value")
+col_map['PO Vendor']        = find_col(df, "PO Vendor", "vendor", "supplier")
+col_map['Product Name']     = find_col(df, "Product Name", "product name", "item name")
+col_map['PO Unit Rate']     = find_col(df, "PO Unit Rate", "unit rate", "rate")
+col_map['PO Quantity']      = find_col(df, "PO Quantity", "quantity", "po qty")
+col_map['ReceivedQTY']      = find_col(df, "ReceivedQTY", "received", "receivedqty")
+col_map['Pending QTY']      = find_col(df, "Pending QTY", "pending", "pendingqty")
+col_map['PO Budget Code']   = find_col(df, "PO Budget Code", "po budget")
+col_map['PR Budget Code']   = find_col(df, "PR Budget Code", "pr budget")
+col_map['Buyer Group']      = find_col(df, "Buyer Group", "buyer group")
+col_map['PO Orderer']       = find_col(df, "PO Orderer", "po orderer")
+col_map['Entity']           = find_col(df, "Entity", "entity")
+col_map['PR Status']        = find_col(df, "PR Status", "pr status")
+col_map['Procurement Category'] = find_col(df, "Procurement Category", "procurement category")
+col_map['PO Department']    = find_col(df, "PO Department", "po department", "po dept", "department")
 
 def C(k):
-    return col_map.get(k) if (k in col_map and col_map.get(k) in df.columns) else None
+    v = col_map.get(k)
+    return v if (v in df.columns) else None
 
-# normalize date columns
-for dcol in ['PR Date Submitted','Po create Date','PO Approved Date','PO Delivery Date']:
-    c = C(dcol)
+# normalize recognised date columns
+for d in ['PR Date Submitted','Po create Date','PO Approved Date','PO Delivery Date']:
+    c = C(d)
     if c:
-        try:
-            df[c] = pd.to_datetime(df[c], errors='coerce')
-        except Exception:
-            df[c] = pd.to_datetime(df[c].astype(str), errors='coerce')
+        df[c] = pd.to_datetime(df[c], errors='coerce')
 
-# ---------- Buyer/Creator logic ----------
+# ---------------- Buyer logic ----------------
 if C('Buyer Group'):
     try:
-        df['Buyer Group Code'] = df[C('Buyer Group')].astype(str).str.extract(r"(\d+)")[0].astype(float)
+        df['Buyer Group Code'] = df[C('Buyer Group')].astype(str).str.extract(r'(\d+)')[0].astype(float)
     except Exception:
         df['Buyer Group Code'] = np.nan
     def _bg(r):
@@ -164,8 +164,9 @@ if C('Buyer Group'):
 else:
     df['Buyer.Type'] = "Unknown"
 
-map_orderer = {"mmw2324030":"Dhruv","mmw2324062":"Deepak","mmw2425154":"Mukul","mmw2223104":"Paurik","mmw2021181":"Nayan","mmw2223014":"Aatish","mmw_ext_002":"Deepakex","mmw2425024":"Kamlesh","mmw2021184":"Suresh","n/a":"Dilip"}
+# PO creator mapping
 po_ord_col = C('PO Orderer')
+map_orderer = {"mmw2324030":"Dhruv","mmw2324062":"Deepak","mmw2425154":"Mukul","mmw2223104":"Paurik","mmw2021181":"Nayan","mmw2223014":"Aatish","mmw_ext_002":"Deepakex","mmw2425024":"Kamlesh","mmw2021184":"Suresh","n/a":"Dilip"}
 if po_ord_col:
     df['PO Orderer Clean'] = df[po_ord_col].fillna("N/A").astype(str).str.strip()
 else:
@@ -175,28 +176,28 @@ df['PO.Creator'] = df['PO.Creator'].fillna(df['PO Orderer Clean']).replace({"N/A
 indirect_names = set(["Aatish","Deepak","Deepakex","Dhruv","Dilip","Mukul","Nayan","Paurik","Kamlesh","Suresh"])
 df['PO.BuyerType'] = np.where(df['PO.Creator'].isin(indirect_names), "Indirect", "Direct")
 
-# ---------- Sidebar (Filters) ----------
+# ---------------- Sidebar filters ----------------
 st.sidebar.header("Filters")
 FY = {
     "All Years": (pd.Timestamp("2023-04-01"), pd.Timestamp("2026-03-31")),
     "2023": (pd.Timestamp("2023-04-01"), pd.Timestamp("2024-03-31")),
     "2024": (pd.Timestamp("2024-04-01"), pd.Timestamp("2025-03-31")),
     "2025": (pd.Timestamp("2025-04-01"), pd.Timestamp("2026-03-31")),
-    "2026": (pd.Timestamp("2026-04-01"), pd.Timestamp("2027-03-31")),
 }
 fy_key = st.sidebar.selectbox("Financial Year", list(FY.keys()), index=0)
 pr_start, pr_end = FY[fy_key]
+
 fil = df.copy()
 pr_date_col = C('PR Date Submitted')
 if pr_date_col:
     fil = fil[(fil[pr_date_col] >= pr_start) & (fil[pr_date_col] <= pr_end)]
 
-# ---- Month dropdown (under FY) ----
+# Month as subfilter (built from data within selected FY)
 month_basis = pr_date_col if pr_date_col else (C('Po create Date') if C('Po create Date') else None)
 sel_month = "All Months"
 if month_basis:
     months = fil[month_basis].dropna().dt.to_period("M").astype(str).unique().tolist()
-    months = sorted(months, key=lambda s: pd.Period(s))
+    months = sorted(months, key=lambda s: pd.Period(s))  # ensure chronological order
     month_labels = [pd.Period(m).strftime("%b-%Y") for m in months]
     label_to_period = {pd.Period(m).strftime("%b-%Y"): m for m in months}
     if month_labels:
@@ -205,16 +206,16 @@ if month_basis:
             target_period = label_to_period[sel_month]
             fil = fil[fil[month_basis].dt.to_period("M").astype(str) == target_period]
 
-# ---- Optional calendar date range (applies after FY+Month) ----
+# Date range picker (applies after FY+Month)
 if month_basis:
     _mindt = fil[month_basis].dropna().min() if not fil[month_basis].dropna().empty else pr_start
     _maxdt = fil[month_basis].dropna().max() if not fil[month_basis].dropna().empty else pr_end
-    if pd.notna(_mindt) and pd.notna(_maxdt):
-        dr = st.sidebar.date_input("Date range (picker)", (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()), key="sidebar_date_range")
-        if isinstance(dr, (list,tuple)) and len(dr) == 2:
-            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
-            fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
+    dr = st.sidebar.date_input("Select Date Range (optional)", (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()))
+    if isinstance(dr, (list, tuple)) and len(dr) == 2:
+        _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
+        fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
 
+# Ensure columns exist for filtering
 for col in ['Buyer.Type','Entity','PO.Creator','PO.BuyerType']:
     if col not in fil.columns:
         fil[col] = ""
@@ -234,13 +235,14 @@ item_choices = sorted(fil[product_col].dropna().unique().tolist()) if product_co
 dept_choices = sorted(fil[po_dept_col].dropna().unique().tolist()) if po_dept_col else []
 
 sel_b = st.sidebar.multiselect("Buyer Type", buyer_choices, default=buyer_choices)
-sel_e = st.sidebar.multiselect("Entity", entity_choices, default=entity_choices if entity_choices else entity_choices)
+sel_e = st.sidebar.multiselect("Entity", entity_choices, default=entity_choices if entity_choices else [])
 sel_o = st.sidebar.multiselect("PO Ordered By", po_creator_choices, default=po_creator_choices)
 sel_p = st.sidebar.multiselect("PO Buyer Type", po_buyertype_choices, default=po_buyertype_choices)
 sel_v = st.sidebar.multiselect("Vendor (pick one or more)", vendor_choices, default=vendor_choices) if vendor_choices else []
 sel_i = st.sidebar.multiselect("Item / Product (pick one or more)", item_choices, default=item_choices) if item_choices else []
 sel_dept = st.sidebar.multiselect("PO Department", ["All Departments"] + dept_choices, default=["All Departments"]) if dept_choices else ["All Departments"]
 
+# Apply selections
 if sel_b:
     fil = fil[fil['Buyer.Type'].isin(sel_b)]
 if sel_e:
@@ -256,21 +258,29 @@ if sel_i and product_col:
 if sel_dept and "All Departments" not in sel_dept and po_dept_col:
     fil = fil[fil[po_dept_col].astype(str).isin(sel_dept)]
 
+# Robust Reset Filters (safe): only reset keys we set; avoid deleting unrelated keys
 if st.sidebar.button("Reset Filters"):
-    for k in list(st.session_state.keys()):
-        if k.startswith("sidebar_") or k in ["_bottom_uploader", "_bottom_uploaded"]:
+    keys_to_clear = ['_bottom_uploaded', '_bottom_uploader', '_bottom_uploader_initial', 'sidebar_date_range']
+    # clear known session keys we use for uploader / filter UI
+    for k in keys_to_clear:
+        if k in st.session_state:
             try:
                 del st.session_state[k]
             except Exception:
                 pass
-    st.experimental_rerun()
+    # Try a rerun - wrapped to avoid crashes if Streamlit runtime disallows
+    try:
+        st.experimental_rerun()
+    except Exception:
+        st.sidebar.info("Filters reset (some UI may need manual refresh).")
 
-# ---------- Tabs: KPI & Spend combined ----------
-T = st.tabs(["KPIs & Spend","PO/PR Timing","Delivery","Vendors","Dept & Services","Unit-rate Outliers","Forecast","Scorecards","Search","Full Data"])
+# ---------------- Tabs (KPIs+Spend first) ----------------
+tabs = st.tabs(["KPIs & Spend","PO/PR Timing","Delivery","Vendors","Dept & Services","Unit-rate Outliers","Forecast","Scorecards","Search","Full Data"])
 
-# ---------- KPIs & Spend (combined) ----------
-with T[0]:
-    # KPIs
+# ---------- KPIs & Spend ----------
+with tabs[0]:
+    st.header("P2P Dashboard — Indirect")
+    st.caption("Purchase-to-Pay overview (Indirect spend focus)")
     c1,c2,c3,c4,c5 = st.columns(5)
     total_prs = int(fil.get(C('PR Number'), pd.Series(dtype=object)).nunique()) if C('PR Number') else int(fil.get('PR Number', pd.Series(dtype=object)).nunique()) if 'PR Number' in fil.columns else 0
     total_pos = int(fil.get(C('Purchase Doc'), pd.Series(dtype=object)).nunique()) if C('Purchase Doc') else int(fil.get('Purchase Doc', pd.Series(dtype=object)).nunique()) if 'Purchase Doc' in fil.columns else 0
@@ -282,15 +292,15 @@ with T[0]:
     spend_val = fil[net_col].sum() if net_col and net_col in fil.columns else 0
     c5.metric("Spend (Cr ₹)", f"{spend_val/1e7:,.2f}")
 
-    st.markdown('---')
-    # Spend charts
+    st.markdown("---")
+    # monthly spend + cumulative
     dcol = C('Po create Date') if C('Po create Date') else (C('PR Date Submitted') if C('PR Date Submitted') else None)
     st.subheader("Monthly Total Spend + Cumulative")
     if dcol and net_col:
         t = fil.dropna(subset=[dcol]).copy()
         t["PO_Month"] = t[dcol].dt.to_period("M").dt.to_timestamp()
         t["Month_Str"] = t["PO_Month"].dt.strftime("%b-%Y")
-        m = t.groupby(["PO_Month","Month_Str"],as_index=False)[net_col].sum().sort_values("PO_Month")
+        m = t.groupby(["PO_Month","Month_Str"], as_index=False)[net_col].sum().sort_values("PO_Month")
         m["Cr"] = m[net_col]/1e7; m["CumCr"] = m["Cr"].cumsum()
         fig = make_subplots(specs=[[{"secondary_y":True}]])
         fig.add_bar(x=m["Month_Str"], y=m["Cr"], name="Monthly Spend (Cr ₹)")
@@ -308,7 +318,7 @@ with T[0]:
             st.plotly_chart(px.line(g, x=g["PO Month"].dt.strftime("%b-%Y"), y="Cr", color="Entity", markers=True, labels={"x":"Month","Cr":"Cr ₹"}).update_layout(xaxis_tickangle=-45), use_container_width=True)
 
 # ---------- PO/PR Timing ----------
-with T[1]:
+with tabs[1]:
     st.subheader("SLA (PR→PO ≤7d)")
     if C('Po create Date') and C('PR Date Submitted'):
         ld = fil.dropna(subset=[C('Po create Date'), C('PR Date Submitted')]).copy()
@@ -321,7 +331,7 @@ with T[1]:
         ag.columns=["Bucket","Pct"]; ag["Pct"] = ag["Pct"]*100
         st.plotly_chart(px.bar(ag, x="Bucket", y="Pct", text="Pct").update_traces(texttemplate="%{text:.1f}%", textposition="outside"), use_container_width=True)
     else:
-        st.info("Need both PR Date Submitted and Po create Date to compute SLA.")
+        st.info("Need both PR Date and PO create Date to compute SLA.")
 
     st.subheader("PR & PO per Month")
     tmp = fil.copy(); tmp["PR Month"] = tmp.get(C('PR Date Submitted'), pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M"); tmp["PO Month"] = tmp.get(C('Po create Date'), pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M")
@@ -333,23 +343,8 @@ with T[1]:
         ms.columns=["Month","PR Count","PO Count"]; ms["Month"] = ms["Month"].astype(str)
         st.line_chart(ms.set_index("Month"), use_container_width=True)
 
-    st.subheader("Weekday Split")
-    wd = fil.copy(); wd["PR Wk"] = wd.get(C('PR Date Submitted'), pd.Series(pd.NaT, index=wd.index)).dt.day_name(); wd["PO Wk"] = wd.get(C('Po create Date'), pd.Series(pd.NaT, index=wd.index)).dt.day_name()
-    order=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    prc = wd["PR Wk"].value_counts().reindex(order, fill_value=0)
-    poc = wd["PO Wk"].value_counts().reindex(order, fill_value=0)
-    c1,c2 = st.columns(2); c1.bar_chart(prc); c2.bar_chart(poc)
-
-    st.subheader("Open PRs")
-    if C('PR Status'):
-        op = fil[fil[C('PR Status')].isin(["Approved","InReview"])].copy()
-        if not op.empty and C('PR Date Submitted') in op.columns:
-            op["Pending Age (d)"] = (pd.Timestamp.today().normalize() - op[C('PR Date Submitted')]).dt.days
-            show_cols = [c for c in [C('PR Number'), C('PR Date Submitted'), "Pending Age (d)", "Procurement Category", C('Product Name'), C('Net Amount'), C('PO Budget Code'), C('PR Status'), "Entity", "PO.Creator", C('Purchase Doc')] if c in op.columns]
-            st.dataframe(op[show_cols], use_container_width=True)
-
 # ---------- Delivery ----------
-with T[2]:
+with tabs[2]:
     st.subheader("Delivery Summary")
     dv = fil.rename(columns={C('PO Quantity'):'PO Qty', C('ReceivedQTY'):'Received Qty', C('Pending QTY'):'Pending Qty'}).copy()
     if {'PO Qty','Received Qty'}.issubset(dv.columns):
@@ -364,23 +359,23 @@ with T[2]:
             summ = dv.groupby(agcols, dropna=False).agg(agg_map).reset_index()
             st.dataframe(summ.sort_values('Pending Qty', ascending=False), use_container_width=True)
     else:
-        st.info("Delivery view needs PO Qty and Received Qty (or Pending Qty) present.")
+        st.info("Delivery view needs PO Qty and Received Qty (or Pending Qty).")
 
 # ---------- Vendors ----------
-with T[3]:
+with tabs[3]:
     st.subheader("Top Vendors by Spend")
     if C('PO Vendor') and C('Purchase Doc') and net_col:
         vs = fil.groupby(C('PO Vendor'), dropna=False).agg(Vendor_PO_Count=(C('Purchase Doc'),'nunique'), Total_Spend_Cr=(net_col, lambda s: (s.sum()/1e7).round(2))).reset_index().sort_values("Total_Spend_Cr", ascending=False)
         st.dataframe(vs.head(10), use_container_width=True)
         st.plotly_chart(px.bar(vs.head(10), x=C('PO Vendor'), y='Total_Spend_Cr', text='Total_Spend_Cr', title='Top 10 Vendors (Cr ₹)').update_traces(textposition='outside'), use_container_width=True)
 
-# ---------- Dept & Services ----------
-with T[4]:
+# ---------- Dept & Services (placeholder) ----------
+with tabs[4]:
     st.subheader("Dept & Services (Smart Mapper)")
-    st.info("Dept mapping section preserved from LOVELY script. See code for mapping logic and optional mapping file support.")
+    st.info("Dept mapping section is present in the original LOVELY script. If you want, I can paste full mapping logic here too.")
 
 # ---------- Unit-rate Outliers ----------
-with T[5]:
+with tabs[5]:
     st.subheader("Unit-rate Outliers vs Historical Median")
     grp_options = [c for c in [C('Product Name'), 'Item Code'] if c and c in fil.columns]
     if grp_options and C('PO Unit Rate'):
@@ -398,7 +393,7 @@ with T[5]:
         st.info("Need 'PO Unit Rate' and a grouping column (Product Name / Item Code).")
 
 # ---------- Forecast ----------
-with T[6]:
+with tabs[6]:
     st.subheader("Forecast Next Month Spend (SMA)")
     dcol = C('Po create Date') if C('Po create Date') else (C('PR Date Submitted') if C('PR Date Submitted') else None)
     if dcol and net_col:
@@ -422,25 +417,27 @@ with T[6]:
     else:
         st.info("Need date and Net Amount to forecast.")
 
-# ---------- Scorecards / Vendor Scorecard ----------
-with T[7]:
+# ---------- Scorecards (Vendor simple) ----------
+with tabs[7]:
     st.subheader("Vendor Scorecard")
-    if C('PO Vendor') in fil.columns:
-        vendor_list = sorted(fil[C('PO Vendor')].dropna().astype(str).unique().tolist())
-        if vendor_list:
-            vendor = st.selectbox("Pick Vendor", vendor_list)
+    if C('PO Vendor') and C('Purchase Doc'):
+        vlist = sorted(fil[C('PO Vendor')].dropna().astype(str).unique().tolist())
+        if vlist:
+            vendor = st.selectbox("Pick Vendor", vlist)
             vd = fil[fil[C('PO Vendor')].astype(str) == str(vendor)].copy()
             spend = vd.get(net_col, pd.Series(0)).sum()/1e7 if net_col else 0
-            upos = int(vd.get(C('Purchase Doc'), pd.Series(dtype=object)).nunique()) if C('Purchase Doc') else 0
-            today = pd.Timestamp.today().normalize()
-            st.metric("Spend (Cr)", f"{spend:.2f}")
+            k1,k2,k3,k4 = st.columns(4)
+            k1.metric("Spend (Cr)", f"{spend:.2f}")
+            k2.metric("Unique POs", int(vd.get(C('Purchase Doc'), pd.Series(dtype=object)).nunique()))
+            # additional vendor KPIs can be added here
 
 # ---------- Search ----------
-with T[8]:
+with tabs[8]:
     st.subheader("🔍 Keyword Search")
     valid_cols = [c for c in [C('PR Number'), C('Purchase Doc'), C('Product Name'), C('PO Vendor')] if c and c in df.columns]
     query = st.text_input("Type vendor, product, PO, PR, etc.", "")
-    cat_sel = st.multiselect("Filter by Procurement Category", sorted(df.get(C('Procurement Category') if C('Procurement Category') else 'Procurement Category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if C('Procurement Category') or 'Procurement Category' in df.columns else []
+    cat_col = C('Procurement Category') if C('Procurement Category') else ('Procurement Category' if 'Procurement Category' in df.columns else None)
+    cat_sel = st.multiselect("Filter by Procurement Category", sorted(df.get(cat_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if cat_col else []
     vend_sel = st.multiselect("Filter by Vendor", sorted(df.get(C('PO Vendor') if C('PO Vendor') else 'PO Vendor', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if C('PO Vendor') in df.columns else []
     if query and valid_cols:
         mask = pd.Series(False, index=df.index)
@@ -448,10 +445,9 @@ with T[8]:
         for c in valid_cols:
             mask = mask | df[c].astype(str).str.lower().str.contains(q, na=False)
         res = df[mask].copy()
-        if cat_sel and (C('Procurement Category') in df.columns or 'Procurement Category' in df.columns):
-            colname = C('Procurement Category') if C('Procurement Category') in df.columns else 'Procurement Category'
-            res = res[res[colname].astype(str).isin(cat_sel)]
-        if vend_sel and C('PO Vendor') in df.columns:
+        if cat_sel and cat_col:
+            res = res[res[cat_col].astype(str).isin(cat_sel)]
+        if vend_sel and C('PO Vendor'):
             res = res[res[C('PO Vendor')].astype(str).isin(vend_sel)]
         st.write(f"Found {len(res)} rows")
         st.dataframe(res, use_container_width=True)
@@ -461,18 +457,21 @@ with T[8]:
     else:
         st.caption("Start typing to search…")
 
-# ---------- Full Data tab (reflects current filters) ----------
-with T[9]:
+# ---------- Full Data (filtered) ----------
+with tabs[9]:
     st.subheader("Full Filtered Dataset")
-    st.write("This table shows the complete dataset after applying all sidebar filters (FY, Month, Date range, Buyer/Entity/PO Creator/Vendor/Item/Dept).")
+    st.write("The table below shows the dataset after all sidebar filters (FY, Month, date range, buyer/entity/po creator/vendor/item/department).")
     st.dataframe(fil.reset_index(drop=True), use_container_width=True)
     csv_buf = fil.to_csv(index=False)
-    st.download_button('⬇️ Download filtered dataset (CSV)', csv_buf, file_name='filtered_dataset.csv', mime='text/csv')
+    st.download_button("⬇️ Download filtered dataset (CSV)", csv_buf, file_name="filtered_dataset.csv", mime="text/csv")
 
-# ----------------- Bottom uploader (persist across runs) -----------------
+# ---------- Bottom uploader (persist across runs) ----------
 st.markdown("---")
 st.markdown("### Upload & Debug (bottom of page)")
 new_files = st.file_uploader("Upload Excel/CSV files here (bottom uploader)", type=['xlsx','xls','csv'], accept_multiple_files=True, key='_bottom_uploader_bottom')
 if new_files:
     st.session_state['_bottom_uploaded'] = new_files
-    st.experimental_rerun()
+    try:
+        st.experimental_rerun()
+    except Exception:
+        st.info("Files uploaded — refresh to apply.")
