@@ -10,11 +10,15 @@ st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide"
 # ---------- Helpers ----------
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names to safe snake_case."""
     new_cols = {}
     for c in df.columns:
         s = str(c).strip()
+        # replace common NBSP and backslash safely
         s = s.replace(' ', ' ')
-        s = s.replace('\', '_').replace('/', '_')
+        s = s.replace(' ', ' ')
+        s = s.replace("\", "_")
+        s = s.replace('/', '_')
         s = '_'.join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
@@ -24,27 +28,27 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_all_from_files(uploaded_files=None, skiprows=1):
-    """Load uploaded files (list of UploadedFile) or default filenames in working folder.
-    Attempts skiprows=1 first, falls back to skiprows=0 if that fails for a given file.
-    Returns a concatenated DataFrame with normalized column names.
+def load_all_from_files(uploaded_files=None, skiprows_first=1):
+    """Load uploaded files (or default filenames) trying skiprows_first then fallback.
+    Returns concatenated dataframe with normalized columns.
     """
     frames = []
     if uploaded_files:
         files = [(f, f.name.rsplit('.', 1)[0]) for f in uploaded_files]
     else:
-        files = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
+        files = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
 
     for f, ent in files:
         try:
             if uploaded_files:
-                df_temp = pd.read_excel(f, skiprows=skiprows)
+                df_temp = pd.read_excel(f, skiprows=skiprows_first)
             else:
-                df_temp = pd.read_excel(f, skiprows=skiprows)
+                df_temp = pd.read_excel(f, skiprows=skiprows_first)
             df_temp['entity'] = ent
             frames.append(df_temp)
         except Exception:
             try:
+                # fallback to reading without skiprows
                 if uploaded_files:
                     df_temp = pd.read_excel(f)
                 else:
@@ -52,8 +56,9 @@ def load_all_from_files(uploaded_files=None, skiprows=1):
                 df_temp['entity'] = ent
                 frames.append(df_temp)
             except Exception:
-                # skip file if cannot read
+                # skip file if unreadable
                 continue
+
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True, sort=False)
@@ -63,17 +68,17 @@ def load_all_from_files(uploaded_files=None, skiprows=1):
 
 # ---------- UI: Header ----------
 st.markdown(
-    """
+    '''
     <div style="padding:6px 0 12px 0;">
       <h1 style="font-size:34px; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
       <div style="font-size:14px; color:#23395b; margin-top:4px;">Purchase-to-Pay overview (Indirect spend focus)</div>
       <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
     </div>
-    """,
+    ''',
     unsafe_allow_html=True,
 )
 
-# ---------- Sidebar filters (top section) ----------
+# ---------- Sidebar filters (static top group) ----------
 st.sidebar.header('Filters')
 
 FY = {
@@ -86,25 +91,22 @@ FY = {
 fy_key = st.sidebar.selectbox('Financial Year', list(FY.keys()), index=0)
 pr_start, pr_end = FY[fy_key]
 
-# Month will be populated after data loads (placeholder for layout)
+# placeholder for month (populated after load)
 st.sidebar.markdown('')
 
-# Date range picker placeholder — will be set after data is loaded
-# We'll provide a date_input later once we know date column bounds.
-
-# ----------------- File loading -----------------
-# Top uploader (optional quick test)
+# ---------- File loading ----------
+# small uploader in sidebar for quick tests
 uploaded_top = st.sidebar.file_uploader('Upload Excel/CSV files (optional)', type=['xlsx','xls','csv'], accept_multiple_files=True)
 
-# Load dataframe (attempts defaults if no upload)
+# attempt to load
 if uploaded_top:
     df = load_all_from_files(uploaded_top)
 else:
     df = load_all_from_files()
 
+# if still empty, prompt bottom uploader and stop
 if df.empty:
     st.warning('No data loaded — place default Excel files next to this script (MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx) OR upload files using the uploader at the bottom of the page.')
-    # still provide bottom uploader
     st.markdown('---')
     st.markdown('### Upload files (bottom of page)')
     new_files = st.file_uploader('Upload Excel/CSV files here', type=['xlsx','xls','csv'], accept_multiple_files=True, key='_bottom_uploader')
@@ -113,77 +115,75 @@ if df.empty:
         st.experimental_rerun()
     st.stop()
 
-# Ensure key normalized columns exist and parse dates
-# Common expected date columns (normalized)
-possible_pr_cols = [c for c in ['pr_date_submitted', 'pr_date', 'pr_date_submitted'] if c in df.columns]
-possible_po_create_cols = [c for c in ['po_create_date', 'po_create_date', 'po_create_date'] if c in df.columns]
-
+# ---------- Normalize and identify columns ----------
+# Try common variants — normalized names
 pr_col = next((c for c in ['pr_date_submitted','pr_date','pr_date_submitted'] if c in df.columns), None)
 po_create_col = next((c for c in ['po_create_date','po_create_date'] if c in df.columns), None)
 po_delivery_col = next((c for c in ['po_delivery_date','po_delivery_date'] if c in df.columns), None)
 
+# parse dates where present
 for d in [pr_col, po_create_col, po_delivery_col]:
     if d and d in df.columns:
         df[d] = pd.to_datetime(df[d], errors='coerce')
 
-# normalize some helpful column names
-net_amount_col = 'net_amount' if 'net_amount' in df.columns else ( 'net amount' if 'net amount' in df.columns else None )
-pr_number_col = 'pr_number' if 'pr_number' in df.columns else ( 'pr number' if 'pr number' in df.columns else None )
-purchase_doc_col = 'purchase_doc' if 'purchase_doc' in df.columns else ( 'purchase doc' if 'purchase doc' in df.columns else None )
-po_vendor_col = 'po_vendor' if 'po_vendor' in df.columns else ( 'po vendor' if 'po vendor' in df.columns else None )
-po_unit_rate_col = 'po_unit_rate' if 'po_unit_rate' in df.columns else ( 'po unit rate' if 'po unit rate' in df.columns else None )
-received_qty_col = 'receivedqty' if 'receivedqty' in df.columns else ( 'received qty' if 'received qty' in df.columns else None )
-pending_qty_col = 'pending_qty' if 'pending_qty' in df.columns else ( 'pending qty' if 'pending qty' in df.columns else None )
+net_amount_col = next((c for c in ['net_amount','net amount'] if c in df.columns), None)
+pr_number_col = next((c for c in ['pr_number','pr number'] if c in df.columns), None)
+purchase_doc_col = next((c for c in ['purchase_doc','purchase doc'] if c in df.columns), None)
+po_vendor_col = next((c for c in ['po_vendor','po vendor'] if c in df.columns), None)
+po_unit_rate_col = next((c for c in ['po_unit_rate','po unit rate','po_unit_rate'] if c in df.columns), None)
+received_qty_col = next((c for c in ['receivedqty','received qty'] if c in df.columns), None)
+pending_qty_col = next((c for c in ['pending_qty','pending qty','pendingqty'] if c in df.columns), None)
 entity_col = 'entity' if 'entity' in df.columns else None
-po_department_col = 'po_department' if 'po_department' in df.columns else ( 'po department' if 'po department' in df.columns else None )
-product_col = 'product_name' if 'product_name' in df.columns else ( 'product name' if 'product name' in df.columns else None )
+po_department_col = next((c for c in ['po_department','po department'] if c in df.columns), None)
+product_col = next((c for c in ['product_name','product name'] if c in df.columns), None)
 
-# Some derived helper columns
-if pr_col:
+# derived month/year from PR date
+if pr_col and pr_col in df.columns:
     df['__pr_month'] = df[pr_col].dt.to_period('M')
     df['__pr_year'] = df[pr_col].dt.year
 else:
     df['__pr_month'] = pd.NaT
     df['__pr_year'] = pd.NaT
 
-# ----------------- Sidebar: dynamic filters (after data is loaded) -----------------
-# Month options (sub-filter of FY)
-# Build months using the PR date (fallback to PO create date)
+# ---------- Sidebar dynamic controls (after data loaded) ----------
+# Month list (sub-filter of FY) — build from PR date (fallback to PO create)
 month_basis = pr_col if pr_col else (po_create_col if po_create_col else None)
 months = ['All Months']
 if month_basis and df[month_basis].notna().any():
-    months_periods = (df.dropna(subset=[month_basis])[month_basis].dt.to_period('M').sort_values().unique())
+    months_periods = df.dropna(subset=[month_basis])[month_basis].dt.to_period('M').sort_values().unique()
     month_labels = [p.strftime('%b-%Y') for p in months_periods]
     months = ['All Months'] + month_labels
 
 sel_month = st.sidebar.selectbox('Month (sub-filter of FY)', months, index=0)
 
-# Date range picker — default to FY bounds but clipped to available data
-min_date = df[month_basis].min() if month_basis else pd.Timestamp(pd.Timestamp.now().year,1,1)
-max_date = df[month_basis].max() if month_basis else pd.Timestamp(pd.Timestamp.now().year,12,31)
+# Date range picker — default clipped to data bounds
+if month_basis and df[month_basis].notna().any():
+    min_date = df[month_basis].min().date()
+    max_date = df[month_basis].max().date()
+else:
+    min_date = pr_start.date()
+    max_date = pr_end.date()
+
 try:
-    dr = st.sidebar.date_input('Date range (optional)', value=(max(pr_start, min_date).date(), min(pr_end, max_date).date()))
+    dr = st.sidebar.date_input('Date range (optional)', value=(max(pr_start.date(), min_date), min(pr_end.date(), max_date)))
     if isinstance(dr, tuple) and len(dr) == 2:
         pr_start, pr_end = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
 except Exception:
-    # fallback no-op
     pass
 
-# Now apply the FY date window first
-if month_basis:
+# apply FY window first
+if month_basis and month_basis in df.columns:
     df = df[(df[month_basis] >= pr_start) & (df[month_basis] <= pr_end)]
 
-# then apply the month subfilter if chosen
-if sel_month and sel_month != 'All Months' and month_basis:
-    # convert chosen label back to period string (YYYY-MM)
+# apply month subfilter if selected
+if sel_month and sel_month != 'All Months' and month_basis and month_basis in df.columns:
     try:
         chosen = pd.Period(pd.to_datetime(sel_month, format='%b-%Y'))
         df = df[df[month_basis].dt.to_period('M') == chosen]
     except Exception:
-        # best effort: filter by label prefix
         df = df[df[month_basis].dt.strftime('%b-%Y') == sel_month]
 
-# Prepare sidebar controls: PO Dept, Vendor, Item — single-select with All option
+# PO Dept / Vendor / Item — single-select with All option
 if po_department_col and po_department_col in df.columns:
     dept_choices = ['All Departments'] + sorted(df[po_department_col].dropna().astype(str).unique().tolist())
 else:
@@ -208,7 +208,8 @@ sel_item = st.sidebar.selectbox('Item / Product', item_choices, index=0)
 if sel_item != 'All Items' and product_col in df.columns:
     df = df[df[product_col].astype(str) == str(sel_item)]
 
-# Additional data-driven multi-select filters
+# Additional multi-selects (data-driven)
+# buyer type
 for col in ['buyer_type','buyer.type','buyer_type_unified','buyer.type_unified']:
     if col in df.columns:
         df['__buyer_type'] = df[col].astype(str)
@@ -216,12 +217,14 @@ for col in ['buyer_type','buyer.type','buyer_type_unified','buyer.type_unified']
 else:
     df['__buyer_type'] = 'Indirect'
 
-for col in ['entity','entity']:
-    if col in df.columns:
-        df['__entity'] = df[col].astype(str)
-        break
-    
-for col in ['po_creator','po_creator','po.creator']:
+# entity
+if entity_col and entity_col in df.columns:
+    df['__entity'] = df[entity_col].astype(str)
+else:
+    df['__entity'] = 'Unknown'
+
+# po creator
+for col in ['po_creator','po.creator','po_orderer']:
     if col in df.columns:
         df['__po_creator'] = df[col].astype(str)
         break
@@ -229,13 +232,13 @@ else:
     df['__po_creator'] = ''
 
 choices_bt = sorted(df['__buyer_type'].dropna().unique().tolist())
-sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 choices_ent = sorted(df['__entity'].dropna().unique().tolist())
-sel_e = st.sidebar.multiselect('Entity', choices_ent, default=choices_ent)
 choices_po_c = sorted(df['__po_creator'].dropna().unique().tolist())
+
+sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
+sel_e = st.sidebar.multiselect('Entity', choices_ent, default=choices_ent)
 sel_o = st.sidebar.multiselect('PO Ordered By', choices_po_c, default=choices_po_c)
 
-# Apply these multi-selects
 if sel_b:
     df = df[df['__buyer_type'].isin(sel_b)]
 if sel_e:
@@ -243,14 +246,15 @@ if sel_e:
 if sel_o:
     df = df[df['__po_creator'].isin(sel_o)]
 
-# Reset Filters button — clear session keys and rerun
+# Reset Filters
 if st.sidebar.button('Reset Filters'):
-    keys = list(st.session_state.keys())
-    for k in [k for k in keys if k.startswith('filter_') or k.startswith('_')]:
-        try:
-            del st.session_state[k]
-        except Exception:
-            pass
+    # clear known keys (do not aggressively delete unrelated keys)
+    for k in list(st.session_state.keys()):
+        if k.startswith('_') or k.startswith('filter_'):
+            try:
+                del st.session_state[k]
+            except Exception:
+                pass
     st.experimental_rerun()
 
 # ---------- Tabs ----------
@@ -260,8 +264,8 @@ T = st.tabs(['KPIs & Spend','PO/PR Timing','Delivery','Vendors','Dept & Services
 with T[0]:
     st.subheader('KPIs & Spend')
     c1,c2,c3,c4,c5 = st.columns(5)
-    total_prs = int(df[pr_number_col].nunique()) if pr_number_col and pr_number_col in df.columns else int(df.get(pr_number_col, pd.Series(dtype=object)).nunique())
-    total_pos = int(df[purchase_doc_col].nunique()) if purchase_doc_col and purchase_doc_col in df.columns else int(df.get(purchase_doc_col, pd.Series(dtype=object)).nunique())
+    total_prs = int(df[pr_number_col].nunique()) if pr_number_col and pr_number_col in df.columns else 0
+    total_pos = int(df[purchase_doc_col].nunique()) if purchase_doc_col and purchase_doc_col in df.columns else 0
     c1.metric('Total PRs', total_prs)
     c2.metric('Total POs', total_pos)
     c3.metric('Line Items', len(df))
@@ -270,8 +274,8 @@ with T[0]:
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
     st.markdown('---')
-    # Monthly Spend + Cumulative chart
-    dcol = po_create_col if po_create_col in df.columns else (pr_col if pr_col in df.columns else None)
+    # Monthly Spend + Cumulative
+    dcol = po_create_col if po_create_col and po_create_col in df.columns else (pr_col if pr_col and pr_col in df.columns else None)
     st.subheader('Monthly Total Spend + Cumulative')
     if dcol and net_amount_col and net_amount_col in df.columns:
         t = df.dropna(subset=[dcol]).copy()
@@ -300,13 +304,13 @@ with T[0]:
     else:
         st.info('Entity trend not available — need date, Net Amount and Entity columns.')
 
-    # Optional: show Open PRs summary here as a small table
+    # Open PRs summary
     st.subheader('Open PRs')
     if 'pr_status' in df.columns:
-        op = df[df['pr_status'].str.lower().isin(['approved','inreview','in review','open'])]
+        op = df[df['pr_status'].astype(str).str.lower().isin(['approved','inreview','in review','open'])]
     else:
         op = df[df.get(purchase_doc_col, pd.Series()).isna()]
-    if not op.empty and pr_col in df.columns:
+    if not op.empty and pr_col and pr_col in df.columns:
         op = op.copy()
         op['pending_age_d'] = (pd.Timestamp.now().normalize() - op[pr_col]).dt.days
         cols = [c for c in [pr_number_col, pr_col, 'pending_age_d', 'procurement_category', product_col, net_amount_col, 'po_budget_code', 'pr_status', entity_col, 'po_creator', purchase_doc_col] if c in op.columns]
@@ -365,7 +369,7 @@ with T[1]:
 # ---------- Delivery (Tab 2) ----------
 with T[2]:
     st.subheader('Delivery Summary')
-    dv = df.rename(columns={received_qty_col:'received_qty', pending_qty_col:'pending_qty', 'po_quantity':'po_qty', 'po_qty':'po_qty'}).copy()
+    dv = df.rename(columns={received_qty_col:'received_qty', pending_qty_col:'pending_qty', 'po_quantity':'po_qty'})
     if 'po_qty' in dv.columns and 'received_qty' in dv.columns:
         dv['pct_received'] = np.where(dv['po_qty'].astype(float) > 0, (dv['received_qty'].astype(float)/dv['po_qty'].astype(float))*100, 0.0)
         group_cols = [purchase_doc_col, po_vendor_col, product_col, 'item_description']
@@ -435,7 +439,7 @@ with T[5]:
 # ---------- Forecast (Tab 6) ----------
 with T[6]:
     st.subheader('Forecast Next Month Spend (SMA)')
-    dcol = po_create_col if po_create_col in df.columns else (pr_col if pr_col in df.columns else None)
+    dcol = po_create_col if po_create_col and po_create_col in df.columns else (pr_col if pr_col and pr_col in df.columns else None)
     if dcol and net_amount_col and net_amount_col in df.columns:
         t = df.dropna(subset=[dcol]).copy(); t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
         m = t.groupby('month')[net_amount_col].sum().sort_index(); m_cr = (m/1e7)
@@ -519,4 +523,3 @@ if new_files:
     st.experimental_rerun()
 
 # EOF
-
