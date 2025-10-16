@@ -1,5 +1,4 @@
-LOVELY
-   import pandas as pd
+import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
@@ -52,36 +51,6 @@ pr_start, pr_end = FY[fy_key]
 fil = df.copy()
 if "PR Date Submitted" in fil.columns:
     fil = fil[(fil["PR Date Submitted"]>=pr_start)&(fil["PR Date Submitted"]<=pr_end)]
-
-# ---- Month dropdown (under FY) ----
-# Use PR Date Submitted primarily; if missing, fall back to PO create Date
-month_basis = "PR Date Submitted" if "PR Date Submitted" in fil.columns else ("Po create Date" if "Po create Date" in fil.columns else None)
-sel_month = "All Months"
-if month_basis:
-    # Build month list from filtered rows (FY applied)
-    months = fil[month_basis].dropna().dt.to_period("M").astype(str).unique().tolist()
-    months = sorted(months, key=lambda s: pd.Period(s))
-    month_labels = [pd.Period(m).strftime("%b-%Y") for m in months]
-    label_to_period = {pd.Period(m).strftime("%b-%Y"): m for m in months}
-    if month_labels:
-        sel_month = st.sidebar.selectbox("Month", ["All Months"] + month_labels, index=0)
-        if sel_month != "All Months":
-            target_period = label_to_period[sel_month]
-            fil = fil[fil[month_basis].dt.to_period("M").astype(str) == target_period]
-
-# ---- Optional calendar date range (applies after FY + Month) ----
-if month_basis:
-    _mindt = fil[month_basis].dropna().min()
-    _maxdt = fil[month_basis].dropna().max()
-    if pd.notna(_mindt) and pd.notna(_maxdt):
-        dr = st.sidebar.date_input(
-            "Date range",
-            (pd.Timestamp(_mindt).date(), pd.Timestamp(_maxdt).date()),
-            key="sidebar_date_range",
-        )
-        if isinstance(dr, tuple) and len(dr) == 2:
-            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
-            fil = fil[(fil[month_basis] >= _s) & (fil[month_basis] <= _e)]
 for col in ["Buyer.Type","Entity","PO.Creator","PO.BuyerType"]:
     if col not in fil.columns: fil[col] = ""
     fil[col] = fil[col].astype(str).str.strip()
@@ -289,76 +258,53 @@ with T[5]:
         mp=pd.DataFrame([map_one(c,e) for c,e in zip(base.tolist(),ent.tolist())], columns=["Dept.Chart","Subcat.Chart","__src"], index=smart.index)
         for c in ["Dept.Chart","Subcat.Chart","__src"]:
             smart[c]=smart[c].combine_first(mp[c]) if c in smart.columns else mp[c]
-    # --- Subcategory token fallback (e.g., MKT.CONS → Consulting / Agency)
-SUBCAT_TOKEN_MAP = {
-    # Marketing
-    "CONS": "Consulting / Agency",
-    "PR":   "Public Relations",
-    "CBR":  "Dealer Campaigns / Market Activation",
-    "TVM":  "TV / Media Buying",
-    "VP":   "Vendor Promotion / Partnerships",
-    "AE":   "Agency & Events",
-    "A&E":  "Agency & Events",
-    "ANDE": "Agency & Events",
-    # DT/IT examples
-    "SPMW": "Software & Productivity Tools",
-    "INT":  "Internet / Connectivity",
-    "ACCER":"Accessories",
-    "HDW":  "Hardware",
-    # Ops/Program examples
-    "CNST": "Construction / Fitout",
-    "EHS":  "EHS / Safety",
-}
-
-def _last_token(_raw):
-    if not isinstance(_raw, str):
-        return ""
-    tok = _raw.split(".")[-1].upper().replace(" ", "")
-    tok = tok.replace("&", "AND")
-    return tok
-
-if "Dept.Chart" in smart.columns:
-    has_dept = smart["Dept.Chart"].notna()
-    no_subc  = ~smart.get("Subcat.Chart", pd.Series([pd.NA]*len(smart))).notna()
-    need_sub = has_dept & no_subc
-    code_series = (
-        smart["PO Budget Code"] if "PO Budget Code" in smart.columns else (
-            smart["PR Budget Code"] if "PR Budget Code" in smart.columns else pd.Series([""]*len(smart), index=smart.index)
-        )
-    )
-    tokens = code_series.apply(_last_token)
-    subc_guess = tokens.map(lambda t: SUBCAT_TOKEN_MAP.get(t, pd.NA))
-    smart.loc[need_sub & subc_guess.notna(), "Subcat.Chart"] = subc_guess[need_sub & subc_guess.notna()]
-    if "__src" in smart.columns:
-        smart.loc[need_sub & subc_guess.notna(), "__src"] = smart.loc[need_sub & subc_guess.notna(), "__src"].fillna("TOKEN_SUBCAT").replace("UNMAPPED", "TOKEN_SUBCAT")
-
-smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
+    smart["Dept.Chart"].fillna("Unmapped / Missing", inplace=True)
     # Canonical labels + optional overrides
-# --- Canonical Department Aliases ---
-DEPT_ALIASES = {
-    "HR & ADMIN": "HR & Admin",
-    "HUMAN RESOURCES": "HR & Admin",
-    "LEGAL": "Legal & IP",
-    "LEGAL & IP": "Legal & IP",
-    "PROGRAM": "Program",
-    "R AND D": "R&D",
-    "R&D": "R&D",
-    "RANDD": "R&D",
-    "RESEARCH & DEVELOPMENT": "R&D",
-    "INFRASTRUCTURE": "Infra",
-    "INFRA": "Infra",
-    "CUSTOMER SUCCESS": "Customer Success",
-    "MFG": "Manufacturing",
-    "MANUFACTURING": "Manufacturing",
-    "DESIGN": "Design",
-    "MARKETING": "Marketing",
-    "SALES": "Sales",
-    "SS & SCM": "SS & SCM",
-    "SUPPLY CHAIN": "SS & SCM",
-    "FINANCE": "Finance",
-    "RENTAL OFFICES": "Rental Offices",
-}
-
+    DEPT_ALIASES={"HR & ADMIN":"HR & Admin","HUMAN RESOURCES":"HR & Admin","LEGAL":"Legal & IP","LEGAL & IP":"Legal & IP","PROGRAM":"Program","R AND D":"R&D","R&D":"R&D","RANDD":"R&D","RESEARCH & DEVELOPMENT":"R&D","INFRASTRUCTURE":"Infra","INFRA":"Infra","CUSTOMER SUCCESS":"Customer Success","MFG":"Manufacturing","MANUFACTURING":"Manufacturing","DESIGN":"Design","MARKETING":"Marketing","SALES":"Sales","SS & SCM":"SS & SCM","SUPPLY CHAIN":"SS & SCM","FINANCE":"Finance","RENTAL OFFICES":"Rental Offices"}
+    SUBCAT_ALIASES={"HOUSEKEEPING":"Admin, Housekeeping and Security","ADMIN, HOUSEKEEPING AND SECURITY":"Admin, Housekeeping and Security","ELECTRICITY EXPENSES":"Electricity","PANTY":"Pantry and Canteen","PANTRY":"Pantry and Canteen","TRAVEL":"Travel & Other"}
+    def canonize(s, mapping):
+        return s.apply(lambda v: mapping.get(str(v).strip().upper(), str(v).strip()) if pd.notna(v) else v)
+    with st.sidebar.expander("Alias overrides (optional)"):
+        up = st.file_uploader("Upload alias overrides CSV/XLSX", type=["csv","xlsx"], key="alias_up")
+        if up is not None:
+            try:
+                al = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
+                al.columns = al.columns.astype(str).str.strip()
+                if {"Department","Dept.Alias"}.issubset(al.columns):
+                    DEPT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Department","Dept.Alias"]].dropna().values})
+                if {"Subcategory","Subcat.Alias"}.issubset(al.columns):
+                    SUBCAT_ALIASES.update({str(k).upper().strip():str(v).strip() for k,v in al[["Subcategory","Subcat.Alias"]].dropna().values})
+                st.success("Aliases loaded")
+            except Exception as e:
+                st.warning(f"Alias file error: {e}")
+    smart["Dept.Chart"]=canonize(smart["Dept.Chart"].astype(str), DEPT_ALIASES)
+    if "Subcat.Chart" in smart.columns:
+        smart["Subcat.Chart"]=canonize(smart["Subcat.Chart"].astype(str), SUBCAT_ALIASES)
+    st.caption({"map_src_counts": smart.get("__src", pd.Series()).value_counts(dropna=False).to_dict() if "__src" in smart.columns else {}})
+    if "Net Amount" in smart.columns:
+        dep = smart.groupby("Dept.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); dep["Cr"]=dep["Net Amount"]/1e7
+        st.plotly_chart(px.bar(dep.head(30), x="Dept.Chart", y="Cr", title="Department-wise Spend (Top 30)").update_layout(xaxis_tickangle=-45), use_container_width=True)
+        cA,cB = st.columns([2,1])
+        dept_pick = cA.selectbox("Drill Department", dep["Dept.Chart"].astype(str).tolist(), key="dept_pick")
+        topn = int(cB.number_input("Top N", 5, 100, 20, 5, key="dept_topn"))
+        det = smart[smart["Dept.Chart"].astype(str)==str(dept_pick)].copy()
+        k1,k2,k3=st.columns(3); k1.metric("Lines", len(det)); k2.metric("PRs", int(det.get("PR Number",pd.Series(dtype=object)).nunique())); k3.metric("Spend (Cr ₹)", f"{det.get('Net Amount',pd.Series(0)).sum()/1e7:,.2f}")
+        if "Subcat.Chart" in det.columns:
+            ss = det.groupby("Subcat.Chart",dropna=False)["Net Amount"].sum().reset_index().sort_values("Net Amount",ascending=False); ss["Cr"]=ss["Net Amount"]/1e7
+            c1,c2=st.columns(2)
+            c1.plotly_chart(px.bar(ss.head(topn), x="Subcat.Chart", y="Cr", title=f"{dept_pick} — Top Services").update_layout(xaxis_tickangle=-45), use_container_width=True)
+            c2.plotly_chart(px.pie(ss.head(12), names="Subcat.Chart", values="Net Amount", title=f"{dept_pick} — Service Share"), use_container_width=True)
+            svc = st.selectbox("Drill Service", ss["Subcat.Chart"].astype(str).tolist(), key="svc_pick")
+            sub = det[det["Subcat.Chart"].astype(str)==str(svc)].copy()
+            cols=[c for c in ["PO Budget Code","Subcat.Chart","Dept.Chart","Purchase Doc","PR Number","Procurement Category","Product Name","Item Description","PO Vendor","Net Amount"] if c in sub.columns]
+            if not cols: cols=[c for c in ["Dept.Chart","Purchase Doc","PR Number","Net Amount"] if c in sub.columns]
+            st.dataframe(sub[cols], use_container_width=True)
+    st.subheader("Dept × Service (Cr)")
+    if {"Dept.Chart","Subcat.Chart","Net Amount"}.issubset(smart.columns):
+        pv=(smart.pivot_table(index="Dept.Chart", columns="Subcat.Chart", values="Net Amount", aggfunc="sum", fill_value=0)/1e7)
+        st.dataframe(pv.round(2), use_container_width=True)
+        tm = pv.stack().reset_index(); tm.columns=["Department","Service","Cr"]; tm=tm[tm["Cr"]>0]
+        st.plotly_chart(px.treemap(tm, path=["Department","Service"], values="Cr", title="Dept→Service Treemap (Cr ₹)"), use_container_width=True)
 
 # ---------- Unit-rate Outliers ----------
 with T[6]:
