@@ -8,18 +8,17 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="P2P Dashboard — Full (Refactor)", layout="wide", initial_sidebar_state="expanded")
 
 # ---------- Helpers ----------
-
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize column names to safe snake_case."""
     new_cols = {}
     for c in df.columns:
         s = str(c).strip()
         # replace common NBSP and backslash safely
-        s = s.replace(' ', ' ')
-        s = s.replace(' ', ' ')
-        s = s.replace("\", "_")
-        s = s.replace('/', '_')
-        s = '_'.join(s.split())
+        s = s.replace('\xa0', ' ')
+        s = s.replace('\\u00A0', ' ')
+        s = s.replace("\\", "_")   # escaped backslash
+        s = s.replace("/", "_")
+        s = "_".join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
         s = '_'.join([p for p in s.split('_') if p != ''])
@@ -29,7 +28,8 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_all_from_files(uploaded_files=None, skiprows_first=1):
-    """Load uploaded files (or default filenames) trying skiprows_first then fallback.
+    """
+    Load uploaded files (or default filenames). Try reading with skiprows_first then fallback.
     Returns concatenated dataframe with normalized columns.
     """
     frames = []
@@ -40,7 +40,8 @@ def load_all_from_files(uploaded_files=None, skiprows_first=1):
 
     for f, ent in files:
         try:
-            if uploaded_files:
+            # f may be a path (str) or UploadedFile
+            if hasattr(f, "read"):
                 df_temp = pd.read_excel(f, skiprows=skiprows_first)
             else:
                 df_temp = pd.read_excel(f, skiprows=skiprows_first)
@@ -48,15 +49,14 @@ def load_all_from_files(uploaded_files=None, skiprows_first=1):
             frames.append(df_temp)
         except Exception:
             try:
-                # fallback to reading without skiprows
-                if uploaded_files:
+                if hasattr(f, "read"):
                     df_temp = pd.read_excel(f)
                 else:
                     df_temp = pd.read_excel(f)
                 df_temp['entity'] = ent
                 frames.append(df_temp)
             except Exception:
-                # skip file if unreadable
+                # skip unreadable file
                 continue
 
     if not frames:
@@ -65,16 +65,15 @@ def load_all_from_files(uploaded_files=None, skiprows_first=1):
     df = normalize_columns(df)
     return df
 
-
-# ---------- UI: Header ----------
+# ---------- UI Header ----------
 st.markdown(
-    '''
+    """
     <div style="padding:6px 0 12px 0;">
       <h1 style="font-size:34px; margin:0; color:#0b1f3b;">P2P Dashboard — Indirect</h1>
       <div style="font-size:14px; color:#23395b; margin-top:4px;">Purchase-to-Pay overview (Indirect spend focus)</div>
       <hr style="border:0; height:1px; background:#e6eef6; margin-top:8px; margin-bottom:12px;" />
     </div>
-    ''',
+    """,
     unsafe_allow_html=True,
 )
 
@@ -87,26 +86,21 @@ FY = {
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-03-31')),
     '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-03-31')),
 }
-
 fy_key = st.sidebar.selectbox('Financial Year', list(FY.keys()), index=0)
 pr_start, pr_end = FY[fy_key]
 
-# placeholder for month (populated after load)
-st.sidebar.markdown('')
-
-# ---------- File loading ----------
 # small uploader in sidebar for quick tests
 uploaded_top = st.sidebar.file_uploader('Upload Excel/CSV files (optional)', type=['xlsx','xls','csv'], accept_multiple_files=True)
 
-# attempt to load
+# ---------- Load Data ----------
 if uploaded_top:
     df = load_all_from_files(uploaded_top)
 else:
     df = load_all_from_files()
 
-# if still empty, prompt bottom uploader and stop
+# If no data loaded: show bottom uploader and stop
 if df.empty:
-    st.warning('No data loaded — place default Excel files next to this script (MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx) OR upload files using the uploader at the bottom of the page.')
+    st.warning('No data loaded — put default Excel files (MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx) next to script OR upload files using the bottom uploader.')
     st.markdown('---')
     st.markdown('### Upload files (bottom of page)')
     new_files = st.file_uploader('Upload Excel/CSV files here', type=['xlsx','xls','csv'], accept_multiple_files=True, key='_bottom_uploader')
@@ -115,29 +109,29 @@ if df.empty:
         st.experimental_rerun()
     st.stop()
 
-# ---------- Normalize and identify columns ----------
-# Try common variants — normalized names
+# ---------- Identify common columns (normalized) ----------
+# Candidate columns (normalized)
 pr_col = next((c for c in ['pr_date_submitted','pr_date','pr_date_submitted'] if c in df.columns), None)
-po_create_col = next((c for c in ['po_create_date','po_create_date'] if c in df.columns), None)
+po_create_col = next((c for c in ['po_create_date','po_create_date','po_create_date'] if c in df.columns), None)
 po_delivery_col = next((c for c in ['po_delivery_date','po_delivery_date'] if c in df.columns), None)
 
-# parse dates where present
+# parse date columns defensively
 for d in [pr_col, po_create_col, po_delivery_col]:
     if d and d in df.columns:
         df[d] = pd.to_datetime(df[d], errors='coerce')
 
 net_amount_col = next((c for c in ['net_amount','net amount'] if c in df.columns), None)
-pr_number_col = next((c for c in ['pr_number','pr number'] if c in df.columns), None)
-purchase_doc_col = next((c for c in ['purchase_doc','purchase doc'] if c in df.columns), None)
+pr_number_col = next((c for c in ['pr_number','pr number','pr no'] if c in df.columns), None)
+purchase_doc_col = next((c for c in ['purchase_doc','purchase doc','purchase_doc'] if c in df.columns), None)
 po_vendor_col = next((c for c in ['po_vendor','po vendor'] if c in df.columns), None)
-po_unit_rate_col = next((c for c in ['po_unit_rate','po unit rate','po_unit_rate'] if c in df.columns), None)
+po_unit_rate_col = next((c for c in ['po_unit_rate','po unit rate'] if c in df.columns), None)
 received_qty_col = next((c for c in ['receivedqty','received qty'] if c in df.columns), None)
 pending_qty_col = next((c for c in ['pending_qty','pending qty','pendingqty'] if c in df.columns), None)
 entity_col = 'entity' if 'entity' in df.columns else None
 po_department_col = next((c for c in ['po_department','po department'] if c in df.columns), None)
 product_col = next((c for c in ['product_name','product name'] if c in df.columns), None)
 
-# derived month/year from PR date
+# Derived pr month/year for building month filter values
 if pr_col and pr_col in df.columns:
     df['__pr_month'] = df[pr_col].dt.to_period('M')
     df['__pr_year'] = df[pr_col].dt.year
@@ -146,7 +140,7 @@ else:
     df['__pr_year'] = pd.NaT
 
 # ---------- Sidebar dynamic controls (after data loaded) ----------
-# Month list (sub-filter of FY) — build from PR date (fallback to PO create)
+# Month list (sub-filter of FY) — build from PR date (fallback to PO create date)
 month_basis = pr_col if pr_col else (po_create_col if po_create_col else None)
 months = ['All Months']
 if month_basis and df[month_basis].notna().any():
@@ -171,7 +165,7 @@ try:
 except Exception:
     pass
 
-# apply FY window first
+# apply FY window first (on month_basis)
 if month_basis and month_basis in df.columns:
     df = df[(df[month_basis] >= pr_start) & (df[month_basis] <= pr_end)]
 
@@ -188,7 +182,7 @@ if po_department_col and po_department_col in df.columns:
     dept_choices = ['All Departments'] + sorted(df[po_department_col].dropna().astype(str).unique().tolist())
 else:
     dept_choices = ['All Departments']
-sel_dept = st.sidebar.selectbox('PO Dept', dept_choices, index=0)
+sel_dept = st.sidebar.selectbox('PO Department', dept_choices, index=0)
 if sel_dept != 'All Departments' and po_department_col in df.columns:
     df = df[df[po_department_col].astype(str) == str(sel_dept)]
 
@@ -209,7 +203,7 @@ if sel_item != 'All Items' and product_col in df.columns:
     df = df[df[product_col].astype(str) == str(sel_item)]
 
 # Additional multi-selects (data-driven)
-# buyer type
+# buyer type (try a few possible column names)
 for col in ['buyer_type','buyer.type','buyer_type_unified','buyer.type_unified']:
     if col in df.columns:
         df['__buyer_type'] = df[col].astype(str)
@@ -224,7 +218,7 @@ else:
     df['__entity'] = 'Unknown'
 
 # po creator
-for col in ['po_creator','po.creator','po_orderer']:
+for col in ['po_creator','po.creator','po_orderer','po orderer']:
     if col in df.columns:
         df['__po_creator'] = df[col].astype(str)
         break
@@ -248,13 +242,14 @@ if sel_o:
 
 # Reset Filters
 if st.sidebar.button('Reset Filters'):
-    # clear known keys (do not aggressively delete unrelated keys)
+    # clear known session keys (only those we set)
     for k in list(st.session_state.keys()):
         if k.startswith('_') or k.startswith('filter_'):
             try:
                 del st.session_state[k]
             except Exception:
                 pass
+    # rerun to reset UI
     st.experimental_rerun()
 
 # ---------- Tabs ----------
@@ -320,51 +315,72 @@ with T[0]:
 
 # ---------- PO/PR Timing (Tab 1) ----------
 with T[1]:
-    st.subheader('SLA (PR→PO ≤7d)')
-    if pr_col and po_create_col and pr_col in df.columns and po_create_col in df.columns:
+    # This block mirrors your requested PR report exactly
+    st.subheader("SLA (PR→PO ≤7d)")
+    if {po_create_col, pr_col} <= set(df.columns):
         ld = df.dropna(subset=[po_create_col, pr_col]).copy()
-        ld['lead_time_days'] = (ld[po_create_col] - ld[pr_col]).dt.days
-        avg = float(ld['lead_time_days'].mean()) if not ld.empty else 0.0
-        max_range = max(14, avg*1.2 if avg else 14)
-        fig = go.Figure(go.Indicator(mode='gauge+number', value=avg, number={'suffix':' d'},
-                                     gauge={'axis':{'range':[0,max_range]}, 'bar':{'color':'darkblue'},
-                                            'steps':[{'range':[0,7],'color':'lightgreen'},{'range':[7,max_range],'color':'lightcoral'}],
-                                            'threshold':{'line':{'color':'red','width':4}, 'value':7}}))
+        ld["Lead Time (Days)"] = (ld[po_create_col] - ld[pr_col]).dt.days
+        avg = float(ld["Lead Time (Days)"].mean()) if not ld.empty else 0.0
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=avg, number={"suffix":" d"},
+                                     gauge={"axis":{"range":[0,max(14,avg*1.2 if avg else 14)]},
+                                            "bar":{"color":"darkblue"},
+                                            "steps":[{"range":[0,7],"color":"lightgreen"},{"range":[7,max(14,avg*1.2 if avg else 14)],"color":"lightcoral"}],
+                                            "threshold":{"line":{"color":"red","width":4},"value":7}}))
         st.plotly_chart(fig, use_container_width=True)
 
-        bins=[0,7,15,30,60,90,999]
-        labels=['0-7','8-15','16-30','31-60','61-90','90+']
-        ag = pd.cut(ld['lead_time_days'], bins=bins, labels=labels).value_counts(normalize=True).reindex(labels, fill_value=0).reset_index()
-        ag.columns=['Bucket','Pct']
-        ag['Pct'] = ag['Pct']*100
-        st.plotly_chart(px.bar(ag, x='Bucket', y='Pct', text='Pct').update_traces(texttemplate='%{text:.1f}%', textposition='outside'), use_container_width=True)
+        bins=[0,7,15,30,60,90,999]; labels=["0-7","8-15","16-30","31-60","61-90","90+"]
+        ag = pd.cut(ld["Lead Time (Days)"], bins=bins, labels=labels).value_counts(normalize=True).reindex(labels, fill_value=0).reset_index()
+        ag.columns=["Bucket","Pct"]; ag["Pct"] = ag["Pct"]*100
+        st.plotly_chart(px.bar(ag, x="Bucket", y="Pct", text="Pct").update_traces(texttemplate="%{text:.1f}%", textposition="outside"), use_container_width=True)
+    else:
+        st.info("Need both PR Date and PO Create Date to compute SLA.")
 
-    st.subheader('PR & PO per Month')
+    st.subheader("PR & PO per Month")
     tmp = df.copy()
-    tmp['pr_month'] = tmp[pr_col].dt.to_period('M') if pr_col in tmp.columns else pd.NaT
-    tmp['po_month'] = tmp[po_create_col].dt.to_period('M') if po_create_col in tmp.columns else pd.NaT
+    tmp["PR Month"] = tmp.get(pr_col, pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M")
+    tmp["PO Month"] = tmp.get(po_create_col, pd.Series(pd.NaT, index=tmp.index)).dt.to_period("M")
     if pr_number_col and purchase_doc_col and pr_number_col in tmp.columns and purchase_doc_col in tmp.columns:
-        ms = tmp.groupby('pr_month').agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
-        ms.columns=['Month','PR Count','PO Count']
-        ms['Month'] = ms['Month'].astype(str)
-        st.line_chart(ms.set_index('Month'), use_container_width=True)
+        ms = tmp.groupby("PR Month").agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
+        if not ms.empty:
+            ms.columns = ["Month","PR Count","PO Count"]
+            ms["Month"] = ms["Month"].astype(str)
+            st.line_chart(ms.set_index("Month"), use_container_width=True)
 
-    st.subheader('Weekday Split')
+    st.subheader("Weekday Split")
     wd = df.copy()
-    if pr_col in wd.columns:
-        wd['pr_wk'] = wd[pr_col].dt.day_name()
-    else:
-        wd['pr_wk'] = ''
-    if po_create_col in wd.columns:
-        wd['po_wk'] = wd[po_create_col].dt.day_name()
-    else:
-        wd['po_wk'] = ''
-    order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-    prc = wd['pr_wk'].value_counts().reindex(order, fill_value=0)
-    poc = wd['po_wk'].value_counts().reindex(order, fill_value=0)
-    c1,c2 = st.columns(2)
-    c1.bar_chart(prc)
-    c2.bar_chart(poc)
+    wd["PR Wk"] = wd.get(pr_col, pd.Series(pd.NaT, index=wd.index)).dt.day_name() if pr_col in wd.columns else ""
+    wd["PO Wk"] = wd.get(po_create_col, pd.Series(pd.NaT, index=wd.index)).dt.day_name() if po_create_col in wd.columns else ""
+    prc = wd["PR Wk"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
+    poc = wd["PO Wk"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], fill_value=0)
+    c1,c2 = st.columns(2); c1.bar_chart(prc); c2.bar_chart(poc)
+
+    # Lead time by Buyer Type & Buyer
+    st.subheader("Lead Time by Buyer Type & Buyer")
+    if {po_create_col, pr_col} <= set(df.columns):
+        ld2 = df.dropna(subset=[po_create_col, pr_col]).copy()
+        ld2["Lead Time (Days)"] = (ld2[po_create_col] - ld2[pr_col]).dt.days
+        if "__buyer_type" in ld2.columns:
+            st.dataframe(ld2.groupby("__buyer_type")["Lead Time (Days)"].mean().round(1).reset_index().sort_values("Lead Time (Days)"), use_container_width=True)
+        if "__po_creator" in ld2.columns:
+            st.dataframe(ld2.groupby("__po_creator")["Lead Time (Days)"].mean().round(1).reset_index().sort_values("Lead Time (Days)"), use_container_width=True)
+
+    # Daily PR Trends
+    st.subheader("Daily PR Submissions")
+    if pr_col and pr_col in df.columns:
+        daily = df.copy(); daily["PR Date"] = pd.to_datetime(daily[pr_col], errors="coerce")
+        dtrend = daily.groupby("PR Date").size().reset_index(name="PR Count")
+        if not dtrend.empty:
+            st.plotly_chart(px.line(dtrend, x="PR Date", y="PR Count", title="Daily PRs"), use_container_width=True)
+
+    # Monthly Unique PO Generation
+    st.subheader("Monthly Unique PO Generation")
+    if purchase_doc_col and po_create_col and purchase_doc_col in df.columns and po_create_col in df.columns:
+        pm = df.dropna(subset=[po_create_col, purchase_doc_col]).copy()
+        pm["PO Month"] = pm[po_create_col].dt.to_period("M")
+        mcount = pm.groupby("PO Month")[purchase_doc_col].nunique().reset_index(name="Unique PO Count")
+        if not mcount.empty:
+            mcount["PO Month"] = mcount["PO Month"].astype(str)
+            st.plotly_chart(px.bar(mcount, x="PO Month", y="Unique PO Count", text="Unique PO Count", title="Unique POs per Month").update_traces(textposition="outside"), use_container_width=True)
 
 # ---------- Delivery (Tab 2) ----------
 with T[2]:
@@ -507,7 +523,7 @@ with T[8]:
     else:
         st.caption('Start typing to search…')
 
-# ---------- Full Data (last tab) ----------
+# ---------- Full Data (Tab 9) ----------
 with T[9]:
     st.subheader('Full Data (after filters)')
     st.write('This tab shows the full dataset after all filters — useful for exporting.')
@@ -521,5 +537,3 @@ new_files = st.file_uploader('Upload Excel/CSV files here', type=['xlsx','xls','
 if new_files:
     st.session_state['_uploaded_files'] = new_files
     st.experimental_rerun()
-
-# EOF
