@@ -36,7 +36,7 @@ def load_all_from_files(uploaded_files=None, skiprows_first=1):
     if uploaded_files:
         files = [(f, f.name.rsplit('.', 1)[0]) for f in uploaded_files]
     else:
-        files = [("MEPL.xlsx","MEPL"),("MLPL.xlsx","MLPL"),("mmw.xlsx","MMW"),("mmpl.xlsx","MMPL")]
+        files = [("MEPL (1).xlsx","MEPL"),("MLPL (1).xlsx","MLPL"),("mmw (1).xlsx","MMW"),("mmpl (1).xlsx","MMPL")]
 
     for f, ent in files:
         try:
