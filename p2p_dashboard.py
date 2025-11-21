@@ -278,48 +278,78 @@ with T[3]:
         vs = fil.groupby('po_vendor', dropna=False).agg(Vendor_PO_Count=(purchase_doc_col,'nunique'), Total_Spend_Cr=(net_amount_col, lambda s: (s.sum()/1e7).round(2))).reset_index().sort_values('Total_Spend_Cr', ascending=False)
         st.dataframe(vs.head(10), use_container_width=True)
 
-# ----------------- Dept & Services (PR Dept logic) -----------------
-with T[4]:
-    st.subheader('Dept & Services (PR Department)')
+# ---------- Robust column lookups + PR-department spend ----------
 
-    dept_df = fil.copy()
+def find_col(df, candidates):
+    """Return the first exact-or-close matching column name from df.columns, or None."""
+    if df is None or df.empty:
+        return None
+    cols_low = {c.lower().strip(): c for c in df.columns}
+    for cand in candidates:
+        if cand is None: 
+            continue
+        cand_low = cand.lower().strip()
+        # exact match
+        if cand_low in cols_low:
+            return cols_low[cand_low]
+        # substring match (safe)
+        for k, orig in cols_low.items():
+            if cand_low in k:
+                return orig
+    return None
 
-    # Build unified PR department using available PR/PO budget & business unit fields
-    # preference: PR Business Unit -> PR Budget description -> PO Business Unit -> PO Budget description
-    for col in ['pr_budget_description','pr_bussiness_unit','pr_business_unit','pr_businessunit','pr_budget_desc']:
-        if col not in dept_df.columns:
-            dept_df[col] = ''
-    for col in ['po_budget_description','po_bussiness_unit','po_business_unit','po_businessunit','po_budget_desc']:
-        if col not in dept_df.columns:
-            dept_df[col] = ''
+# Use find_col to pick up different naming conventions in uploaded data
+po_delivery_col = find_col(df, ['po_delivery_date', 'po delivery date', 'po_delivery', 'po delivery'])
+pending_qty_col = find_col(df, ['pending_qty', 'pending qty', 'pendingq', 'pending qty', 'pending_qty'])
+net_amount_col = find_col(df, ['net_amount', 'net amount', 'net_amt', 'amount'])
+# columns for department logic
+pr_budget_code_col = find_col(df, ['pr_budget_code', 'pr budget code'])
+pr_budget_desc_col = find_col(df, ['pr_budget_description', 'pr budget description', 'pr budget desc', 'pr budget'])
+po_budget_code_col = find_col(df, ['po_budget_code', 'po budget code'])
+po_budget_desc_col = find_col(df, ['po_budget_description', 'po budget description'])
+pr_business_unit_col = find_col(df, ['pr_business_unit', 'pr business unit', 'pr bussiness unit'])
+po_business_unit_col = find_col(df, ['po_business_unit', 'po business unit'])
 
-    # Normalize and pick
-    def pick_dept(row):
-        candidates = [
-            row.get('pr_bussiness_unit',''),
-            row.get('pr_budget_description',''),
-            row.get('po_bussiness_unit',''),
-            row.get('po_budget_description','')
-        ]
-        for v in candidates:
-            if pd.notna(v) and str(v).strip() != '':
-                return str(v).strip()
-        return 'Unmapped / Missing'
+# pick PR department column with fallback order
+pr_dept_col = pr_budget_code_col or pr_budget_desc_col or pr_business_unit_col or po_budget_code_col or po_budget_desc_col or po_business_unit_col
 
-    dept_df['pr_department'] = dept_df.apply(pick_dept, axis=1)
+# defensive: ensure chosen columns exist as strings in fil (if you use fil = df.copy() earlier)
+for c in [po_delivery_col, pending_qty_col, net_amount_col, pr_dept_col]:
+    # nothing to do if None
+    pass
 
-    if net_amount_col in dept_df.columns:
-        dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        if not dep.empty:
-            dep['cr'] = dep[net_amount_col]/1e7
-            st.subheader('PR Department Spend (Top 30)')
-            fig = px.bar(dep.head(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)').update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(dep.head(100), use_container_width=True)
-        else:
-            st.info('No department spend data available (missing Net Amount).')
+# ------------- Dept & Services: PR department spend (Top 30) -------------
+# Insert this where you want the PR Department spend chart (e.g., Dept & Services tab)
+st.subheader('PR Department Spend (Top 30)')
+
+if pr_dept_col and net_amount_col and pr_dept_col in fil.columns and net_amount_col in fil.columns:
+    # group by the chosen department column and sum spend
+    dep = fil.groupby(pr_dept_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+    # convert to crores (if your Net Amount is in rupees; adjust divisor if needed)
+    dep['cr'] = dep[net_amount_col] / 1e7
+    # keep top 30 and show
+    top_dep = dep.head(30)
+    if not top_dep.empty:
+        # if department values are numeric codes, try to convert to str for labels
+        top_dep[pr_dept_col] = top_dep[pr_dept_col].astype(str)
+        st.plotly_chart(px.bar(top_dep, x=pr_dept_col, y='cr', title='PR Department Spend (Top 30)', labels={pr_dept_col:'pr_department','cr':'Cr'}).update_layout(xaxis_tickangle=-45), use_container_width=True)
     else:
-        st.info('Net Amount column not found; cannot compute departmental spend.')
+        st.info('No PR-department spend rows found.')
+else:
+    missing = []
+    if not pr_dept_col or pr_dept_col not in fil.columns:
+        missing.append('PR department column')
+    if not net_amount_col or net_amount_col not in fil.columns:
+        missing.append('Net Amount column')
+    st.info('Cannot show PR Department spend — missing: ' + ', '.join(missing))
+
+# ------------- Fix the NameError / guard the vendor scorecard checks -------------
+# Example correction for the earlier NameError line — always check both var is set and in columns:
+# OLD (error-prone):  if po_delivery_col in vd.columns and pending_qty_col in vd.columns:
+# NEW safe pattern:
+if po_delivery_col and pending_qty_col and po_delivery_col in vd.columns and pending_qty_col in vd.columns:
+    # safe to use vd[po_delivery_col] and vd[pending_qty_col] here
+    ...
 
 # ----------------- Unit-rate Outliers -----------------
 with T[5]:
