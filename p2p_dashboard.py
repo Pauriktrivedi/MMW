@@ -312,7 +312,7 @@ with T[4]:
         dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
         if not dep.empty:
             dep['cr'] = dep[net_amount_col]/1e7
-            st.subheader('PR Department Spend (Top 30)') else find_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc', 'po budget'])
+            st.subheader('PR Department Spend (Top 30)')
 
 if po_budget_desc_col and net_amount_col and po_budget_desc_col in fil.columns and net_amount_col in fil.columns:
     dep_po = fil.groupby(po_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
