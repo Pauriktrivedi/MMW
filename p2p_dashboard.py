@@ -335,7 +335,7 @@ else:
         missing.append('Net Amount column')
     st.info('Cannot show PO Budget Description spend — missing: ' + ', '.join(missing))
  
-            fig = px.bar(dep.head(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)')
+        fig = px.bar(dep.head(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)')
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(dep.head(100), use_container_width=True)
         else:
