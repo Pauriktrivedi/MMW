@@ -277,8 +277,25 @@ with T[4]:
     for col in ['pr_budget_code','pr_budget_description']:
         if col not in dept_df.columns:
             dept_df[col] = ''
+
+ # --- PR Budget Description Spend ---
+    st.markdown('### PR Budget Description Spend (Top 30)')
+    pr_desc_spend = (
+        dept_df.groupby('pr_budget_description', dropna=False)[net_amount_col]
+        .sum().reset_index().sort_values(net_amount_col, ascending=False)
+    )
+    pr_desc_spend['cr'] = pr_desc_spend[net_amount_col] / 1e7
+    top_desc = pr_desc_spend.head(30)
+    if not top_desc.empty:
+        fig2 = px.bar(top_desc, x='pr_budget_description', y='cr', title='PR Budget Description Spend (Top 30)')
+        fig2.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info('No PR Budget Description spend data found.')
     
     # --- PR Budget Code Spend ---
+
+    
     st.markdown('### PR Budget Code Spend (Top 30)')
     if net_amount_col in dept_df.columns:
         pr_code_spend = (
@@ -294,20 +311,7 @@ with T[4]:
         else:
             st.info('No PR Budget Code spend data found.')
 
-    # --- PR Budget Description Spend ---
-    st.markdown('### PR Budget Description Spend (Top 30)')
-    pr_desc_spend = (
-        dept_df.groupby('pr_budget_description', dropna=False)[net_amount_col]
-        .sum().reset_index().sort_values(net_amount_col, ascending=False)
-    )
-    pr_desc_spend['cr'] = pr_desc_spend[net_amount_col] / 1e7
-    top_desc = pr_desc_spend.head(30)
-    if not top_desc.empty:
-        fig2 = px.bar(top_desc, x='pr_budget_description', y='cr', title='PR Budget Description Spend (Top 30)')
-        fig2.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info('No PR Budget Description spend data found.')
+
 
 # ----------------- Unit-rate Outliers -----------------
 with T[5]:
