@@ -305,7 +305,7 @@ dep = dep.sort_values(net_amount_col, ascending=False)
 dep['cr'] = dep[net_amount_col] / 1e7
 
 top_dep = dep.head(30)
-(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)')
+fig = px.bar(top_dep, x='pr_department', y='cr', title='PR Department Spend (Top 30)')
             fig.update_layout(xaxis_tickangle=-45, yaxis_title='Cr')
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(dep.head(100), use_container_width=True)
