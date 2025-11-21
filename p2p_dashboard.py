@@ -296,10 +296,16 @@ with T[4]:
     dept_df['pr_department'] = dept_df.apply(pick_dept, axis=1)
 
     if net_amount_col in dept_df.columns:
-        dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        if not dep.empty:
-            dep['cr'] = dep[net_amount_col]/1e7
-            fig = px.bar(dep.head(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)')
+        # Remove unwanted departments
+unwanted = ['CONCOR', 'CHANGODAR']
+dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index()
+dep = dep[~dep['pr_department'].str.upper().isin([u.upper() for u in unwanted])]
+dep = dep.sort_values(net_amount_col, ascending=False)
+
+dep['cr'] = dep[net_amount_col] / 1e7
+
+top_dep = dep.head(30)
+(30), x='pr_department', y='cr', title='PR Department Spend (Top 30)')
             fig.update_layout(xaxis_tickangle=-45, yaxis_title='Cr')
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(dep.head(100), use_container_width=True)
