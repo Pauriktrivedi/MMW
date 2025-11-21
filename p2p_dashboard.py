@@ -267,71 +267,47 @@ with T[3]:
         vs = fil.groupby('po_vendor', dropna=False).agg(Vendor_PO_Count=(purchase_doc_col,'nunique'), Total_Spend_Cr=(net_amount_col, lambda s: (s.sum()/1e7).round(2))).reset_index().sort_values('Total_Spend_Cr', ascending=False)
         st.dataframe(vs.head(10), use_container_width=True)
 
-# ----------------- Dept & Services -----------------
+# ----------------- Dept & Services (PR Budget Code & PR Budget Description) -----------------
 with T[4]:
-    st.subheader('Dept & Services (PR Department)')
+    st.subheader('Dept & Services — PR Budget Code & Description')
 
     dept_df = fil.copy()
 
-    # ensure candidate columns exist
-    for col in ['pr_budget_description','pr_bussiness_unit','pr_business_unit','pr_businessunit','pr_budget_desc']:
+    # Ensure required columns
+    for col in ['pr_budget_code','pr_budget_description']:
         if col not in dept_df.columns:
             dept_df[col] = ''
-    for col in ['po_budget_description','po_bussiness_unit','po_business_unit','po_businessunit','po_budget_desc']:
-        if col not in dept_df.columns:
-            dept_df[col] = ''
-
-    def pick_dept(row):
-        candidates = [
-            row.get('pr_bussiness_unit',''),
-            row.get('pr_budget_description',''),
-            row.get('po_bussiness_unit',''),
-            row.get('po_budget_description','')
-        ]
-        for v in candidates:
-            if pd.notna(v) and str(v).strip() != '':
-                return str(v).strip()
-        return 'Unmapped / Missing'
-
-    dept_df['pr_department'] = dept_df.apply(pick_dept, axis=1)
-
+    
+    # --- PR Budget Code Spend ---
+    st.markdown('### PR Budget Code Spend (Top 30)')
     if net_amount_col in dept_df.columns:
-        # Remove unwanted departments
-        unwanted = ['CONCOR', 'CHANGODAR']
-dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index()
-dep = dep[~dep['pr_department'].str.upper().isin([u.upper() for u in unwanted])]
-dep = dep.sort_values(net_amount_col, ascending=False)
-
-dep['cr'] = dep[net_amount_col] / 1e7
-
-top_dep = dep.head(30)
-fig = px.bar(top_dep, x='pr_department', y='cr', title='PR Department Spend (Top 30)')
-            fig.update_layout(xaxis_tickangle=-45, yaxis_title='Cr')
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(dep.head(100), use_container_width=True)
+        pr_code_spend = (
+            dept_df.groupby('pr_budget_code', dropna=False)[net_amount_col]
+            .sum().reset_index().sort_values(net_amount_col, ascending=False)
+        )
+        pr_code_spend['cr'] = pr_code_spend[net_amount_col] / 1e7
+        top_code = pr_code_spend.head(30)
+        if not top_code.empty:
+            fig1 = px.bar(top_code, x='pr_budget_code', y='cr', title='PR Budget Code Spend (Top 30)')
+            fig1.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig1, use_container_width=True)
         else:
-            st.info('No department spend data available (missing Net Amount).')
-    else:
-        st.info('Net Amount column not found; cannot compute departmental spend.')
+            st.info('No PR Budget Code spend data found.')
 
-    st.markdown('---')
-    st.subheader('PO Budget Description Spend (Top 30)')
-    # try common PO budget description column names
-    po_budget_cols = [c for c in ['po_budget_description','po_budget_desc','po_budget','po budget description','po budget'] if c in fil.columns]
-    if po_budget_cols and net_amount_col in fil.columns:
-        col = po_budget_cols[0]
-        dep_po = fil.groupby(col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        dep_po['cr'] = dep_po[net_amount_col] / 1e7
-        top_dep_po = dep_po.head(30)
-        if not top_dep_po.empty:
-            top_dep_po[col] = top_dep_po[col].astype(str)
-            fig_po = px.bar(top_dep_po, x=col, y='cr', title='PO Budget Description Spend (Top 30)', labels={col: 'PO Budget Description', 'cr': 'Cr'})
-            fig_po.update_layout(xaxis_tickangle=-45, yaxis_title='Cr')
-            st.plotly_chart(fig_po, use_container_width=True)
-        else:
-            st.info('No PO-budget spend rows found.')
+    # --- PR Budget Description Spend ---
+    st.markdown('### PR Budget Description Spend (Top 30)')
+    pr_desc_spend = (
+        dept_df.groupby('pr_budget_description', dropna=False)[net_amount_col]
+        .sum().reset_index().sort_values(net_amount_col, ascending=False)
+    )
+    pr_desc_spend['cr'] = pr_desc_spend[net_amount_col] / 1e7
+    top_desc = pr_desc_spend.head(30)
+    if not top_desc.empty:
+        fig2 = px.bar(top_desc, x='pr_budget_description', y='cr', title='PR Budget Description Spend (Top 30)')
+        fig2.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig2, use_container_width=True)
     else:
-        st.info('Cannot show PO Budget Description spend — required column(s) missing.')
+        st.info('No PR Budget Description spend data found.')
 
 # ----------------- Unit-rate Outliers -----------------
 with T[5]:
