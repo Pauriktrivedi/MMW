@@ -350,6 +350,33 @@ else:
 if po_delivery_col and pending_qty_col and po_delivery_col in vd.columns and pending_qty_col in vd.columns:
     # safe to use vd[po_delivery_col] and vd[pending_qty_col] here
     ...
+# ---------- PO Budget Description Spend (Top 30) ----------
+st.markdown('---')  # visual separator between the two charts
+st.subheader('PO Budget Description Spend (Top 30)')
+
+# pick the best PO budget-description column (we used find_col earlier)
+po_budget_desc_col = po_budget_desc_col if 'po_budget_desc_col' in globals() else find_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc', 'po budget'])
+
+if po_budget_desc_col and net_amount_col and po_budget_desc_col in fil.columns and net_amount_col in fil.columns:
+    dep_po = fil.groupby(po_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+    dep_po['cr'] = dep_po[net_amount_col] / 1e7
+    top_dep_po = dep_po.head(30)
+    if not top_dep_po.empty:
+        top_dep_po[po_budget_desc_col] = top_dep_po[po_budget_desc_col].astype(str)
+        fig_po = px.bar(top_dep_po, x=po_budget_desc_col, y='cr',
+                        title='PO Budget Description Spend (Top 30)',
+                        labels={po_budget_desc_col: 'po_budget_description', 'cr': 'Cr'})
+        fig_po.update_layout(xaxis_tickangle=-45, yaxis_title='Cr')
+        st.plotly_chart(fig_po, use_container_width=True)
+    else:
+        st.info('No PO-budget spend rows found.')
+else:
+    missing = []
+    if not po_budget_desc_col or po_budget_desc_col not in fil.columns:
+        missing.append('PO Budget Description column')
+    if not net_amount_col or net_amount_col not in fil.columns:
+        missing.append('Net Amount column')
+    st.info('Cannot show PO Budget Description spend — missing: ' + ', '.join(missing))
 
 # ----------------- Unit-rate Outliers -----------------
 with T[5]:
