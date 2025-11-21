@@ -297,7 +297,7 @@ with T[4]:
 
     if net_amount_col in dept_df.columns:
         # Remove unwanted departments
-unwanted = ['CONCOR', 'CHANGODAR']
+        unwanted = ['CONCOR', 'CHANGODAR']
 dep = dept_df.groupby('pr_department', dropna=False)[net_amount_col].sum().reset_index()
 dep = dep[~dep['pr_department'].str.upper().isin([u.upper() for u in unwanted])]
 dep = dep.sort_values(net_amount_col, ascending=False)
