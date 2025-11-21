@@ -280,7 +280,7 @@ with T[3]:
 
 # ----------------- Dept & Services (PR Dept logic) -----------------
 with T[4]:
-    st.subheader('Dept & Services (PR Department)')
+    st.subheader('PR Department Spend (Top 30)')
 
     dept_df = fil.copy()
 
