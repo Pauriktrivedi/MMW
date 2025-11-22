@@ -5,20 +5,17 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Final corrected Streamlit P2P dashboard (robust + defensive)
-# Copy this file content into your app file (e.g. p2p_dashboard.py) and run Streamlit.
-
+# FINAL: Robust P2P dashboard - paste into p2p_dashboard.py and run
 st.set_page_config(page_title="P2P Dashboard — Indirect (Final)", layout="wide", initial_sidebar_state="expanded")
 
 # ----------------- Helpers -----------------
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize arbitrary dataframe column names to snake_case."""
+    """Normalize any dataframe column names to snake_case safe names."""
     new = {}
     for c in df.columns:
         s = str(c).strip()
         s = s.replace("\xa0", " ")
-        # replace backslash and forward slash safely
         s = s.replace("\\", "_").replace("/", "_")
         s = "_".join(s.split())
         s = s.lower()
@@ -29,7 +26,6 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def safe_col(df, candidates, default=None):
-    """Return the first column name from candidates that exists in df, else default."""
     for c in candidates:
         if c in df.columns:
             return c
@@ -55,7 +51,7 @@ def load_all(file_list=None):
         return pd.DataFrame()
     x = pd.concat(frames, ignore_index=True)
     x = normalize_columns(x)
-    # coerce likely date columns
+    # coerce common date cols
     for c in ['pr_date_submitted', 'po_create_date', 'po_delivery_date', 'po_approved_date']:
         if c in x.columns:
             x[c] = pd.to_datetime(x[c], errors='coerce')
@@ -65,10 +61,9 @@ def load_all(file_list=None):
 # load
 df = load_all()
 if df.empty:
-    st.warning("No data loaded. Put MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
+    st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to the script or upload files.")
 
-# ----------------- Column discovery / canonical names -----------------
-# Common names (normalized)
+# ----------------- Column discovery -----------------
 pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
 po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
 net_amount_col = safe_col(df, ['net_amount', 'net amount', 'net_amount_inr', 'amount'])
@@ -76,23 +71,20 @@ purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchas
 pr_number_col = safe_col(df, ['pr_number', 'pr number', 'pr_no'])
 po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
 po_unit_rate_col = safe_col(df, ['po_unit_rate', 'po unit rate', 'po_unit_price'])
-pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode', 'pr_budget_code'])
-pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc', 'pr_budget_description'])
+pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
+pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc'])
 po_budget_code_col = safe_col(df, ['po_budget_code', 'po budget code', 'po_budgetcode'])
 po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc'])
 pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu'])
 po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu'])
+entity_col = safe_col(df, ['entity', 'entity_source_file', 'entity_source']) or 'entity'
 
-# Fallback ensure columns exist as strings to avoid KeyError
+# ensure these columns exist to avoid KeyErrors later
 for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
     if c and c not in df.columns:
         df[c] = ''
 
-# ensure entity column exists
-if 'entity' not in df.columns:
-    df['entity'] = ''
-
-# ----------------- Buyer/PO creator mapping -----------------
+# ----------------- Buyer mapping & PO creator -----------------
 if 'buyer_group' in df.columns:
     try:
         df['buyer_group_code'] = df['buyer_group'].astype(str).str.extract(r"(\d+)")[0].astype(float)
@@ -101,7 +93,6 @@ if 'buyer_group' in df.columns:
 
 
 def map_buyer_type_generic(val, code):
-    # map only to Direct / Indirect — treat unknown as Indirect to avoid 'Other'
     if pd.isna(val) or str(val).strip() == '' or str(val).strip().lower() in ['not available','na','n/a']:
         return 'Indirect'
     try:
@@ -113,7 +104,6 @@ def map_buyer_type_generic(val, code):
             return 'Indirect'
     except Exception:
         pass
-    # default to Indirect (no 'Other')
     return 'Indirect'
 
 if not df.empty:
@@ -121,16 +111,15 @@ if not df.empty:
 else:
     df['buyer_type'] = pd.Series(dtype=object)
 
-# PO orderer -> creator mapping (example mapping)
+# PO orderer mapping
 map_orderer = {
     'mmw2324030': 'Dhruv', 'mmw2324062': 'Deepak', 'mmw2425154': 'Mukul', 'mmw2223104': 'Paurik',
-    'mmw2021181': 'Nayan', 'mmw2223014': 'Aatish', 'mmw_ext_002': 'Deepakex', 'mmw2425024': 'Kamlesh',
 }
 if 'po_orderer' in df.columns:
     df['po_orderer_filled'] = df['po_orderer'].fillna('N/A').astype(str)
     df['po_creator'] = df['po_orderer_filled'].str.lower().map(map_orderer).fillna(df['po_orderer_filled'])
 else:
-    df['po_creator'] = pd.Series('', index=df.index)
+    df['po_creator'] = ''
 
 # ----------------- Sidebar filters -----------------
 st.sidebar.header('Filters')
@@ -144,47 +133,49 @@ fy_key = st.sidebar.selectbox('Financial Year', list(FY))
 pr_start, pr_end = FY[fy_key]
 
 fil = df.copy()
-if pr_col:
-    # Apply FY using PR date if available
+if pr_col and pr_col in fil.columns:
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
 
-# Add explicit date range picker (applies on top of FY selection)
-# Prefer PR date but fall back to PO create date
-date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
-if date_basis:
-    min_dt = fil[date_basis].dropna().min()
-    max_dt = fil[date_basis].dropna().max()
-    if pd.notna(min_dt) and pd.notna(max_dt):
-        dr = st.sidebar.date_input('Date range', (pd.Timestamp(min_dt).date(), pd.Timestamp(max_dt).date()))
-        if isinstance(dr, tuple) and len(dr) == 2:
-            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
-            fil = fil[(fil[date_basis] >= _s) & (fil[date_basis] <= _e)]
+# Date-range picker (applies on top of FY)
+_date_min = fil[pr_col].dropna().min() if (pr_col and pr_col in fil.columns) else None
+_date_max = fil[pr_col].dropna().max() if (pr_col and pr_col in fil.columns) else None
+if _date_min is not None and _date_max is not None:
+    dr = st.sidebar.date_input('Date range', (pd.Timestamp(_date_min).date(), pd.Timestamp(_date_max).date()))
+    if isinstance(dr, tuple) and len(dr) == 2:
+        sdt, edt = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
+        if pr_col and pr_col in fil.columns:
+            fil = fil[(fil[pr_col] >= sdt) & (fil[pr_col] <= edt)]
 
-# defensive creation of filter columns
-for c in ['buyer_type', 'po_creator', 'po_vendor']:
+# defensive columns
+for c in ['buyer_type', 'po_creator']:
     if c not in fil.columns:
         fil[c] = ''
 
-# Buyer Type, Entity, PO Creator filters
-choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in fil.columns else ['Direct','Indirect']
-sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
-entity_choices = sorted(fil['entity'].dropna().unique().tolist()) if 'entity' in fil.columns else []
-sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
+# Buyer Type choices (remove stray 'Other')
+choices_bt_master = sorted(df['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in df.columns else ['Direct','Indirect']
+choices_bt_master = [c for c in choices_bt_master if str(c).strip().lower() != 'other']
+sel_b = st.sidebar.multiselect('Buyer Type', choices_bt_master, default=choices_bt_master)
+
+# Entity choices should default to all entities from original df so it doesn't go empty after filtering
+entity_master = sorted(df.get(entity_col, pd.Series(dtype=object)).dropna().unique().tolist()) if entity_col in df.columns else []
+sel_e = st.sidebar.multiselect('Entity', entity_master, default=entity_master)
+
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
 
+# Apply these filters
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
-if sel_e and 'entity' in fil.columns:
-    fil = fil[fil['entity'].isin(sel_e)]
+if sel_e:
+    if entity_col in fil.columns:
+        fil = fil[fil[entity_col].isin(sel_e)]
 if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 
-# Vendor + Item filters (multi-select)
+# Vendor & Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
     fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
 else:
     fil['po_vendor'] = ''
-
 if 'product_name' not in fil.columns:
     fil['product_name'] = ''
 
@@ -198,7 +189,7 @@ if sel_v:
 if sel_i:
     fil = fil[fil['product_name'].isin(sel_i)]
 
-# Reset filters
+# Reset Filters
 if st.sidebar.button('Reset Filters'):
     for k in list(st.session_state.keys()):
         try:
@@ -219,15 +210,14 @@ with T[0]:
     c1.metric('Total PRs', total_prs)
     c2.metric('Total POs', total_pos)
     c3.metric('Line Items', len(fil))
-    c4.metric('Entities', int(fil.get('entity', pd.Series(dtype=object)).nunique()))
+    c4.metric('Entities', int(fil.get(entity_col, pd.Series(dtype=object)).nunique()))
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
     st.markdown('---')
-    # Monthly spend + cumulative
     dcol = po_create_col if po_create_col in fil.columns else (pr_col if pr_col in fil.columns else None)
     st.subheader('Monthly Total Spend + Cumulative')
-    if dcol and net_amount_col in fil.columns and dcol in fil.columns:
+    if dcol and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
         agg = t.groupby('month')[net_amount_col].sum().reset_index().sort_values('month')
@@ -243,19 +233,15 @@ with T[0]:
 
     st.markdown('---')
     st.subheader('Entity Trend')
-    if dcol and net_amount_col in fil.columns and dcol in fil.columns:
+    if dcol and net_amount_col in fil.columns and entity_col in fil.columns:
         x = fil.dropna(subset=[dcol]).copy()
         x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
-        # ensure 'entity' exists
-        if 'entity' not in x.columns:
-            x['entity'] = 'Unknown'
-        # safe groupby only when both grouping cols present
-        if 'month' in x.columns and 'entity' in x.columns:
-            g = x.groupby(['month','entity'])[net_amount_col].sum().reset_index()
-            if not g.empty:
-                fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={'value':'Net Amount','x':'Month'})
-                fig_e.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_e, use_container_width=True)
+        # defensive: if entity column missing fallback to entity_source_file
+        g = x.groupby(['month', entity_col])[net_amount_col].sum().reset_index()
+        if not g.empty:
+            fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color=entity_col, labels={'value':'Net Amount','x':'Month'})
+            fig_e.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_e, use_container_width=True)
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
@@ -273,7 +259,7 @@ with T[2]:
     dv = fil.copy()
     po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity'])
     received_col = safe_col(dv, ['receivedqty','received_qty','received qty'])
-    if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
+    if po_qty_col and received_col:
         dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
         dv['received_f'] = dv[received_col].fillna(0).astype(float)
         dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
@@ -288,22 +274,20 @@ with T[3]:
         vs['cr'] = vs[net_amount_col]/1e7
         st.dataframe(vs.head(50), use_container_width=True)
 
-# ----------------- Dept & Services (PR Budget-focused) -----------------
+# ----------------- Dept & Services (PR Budget focused) -----------------
 with T[4]:
     st.subheader('Dept & Services — PR Budget perspective')
     dept_df = fil.copy()
 
-    # create unified PR department fields from the available PR/PO budget & BU columns
     def pick_pr_dept(r):
-        candidates = []
         for c in [pr_bu_col, pr_budget_desc_col, po_bu_col, po_budget_desc_col]:
             if c and c in r.index and pd.notna(r[c]) and str(r[c]).strip()!='':
-                candidates.append(str(r[c]).strip())
-        return candidates[0] if candidates else 'Unmapped / Missing'
+                return str(r[c]).strip()
+        return 'Unmapped / Missing'
 
     dept_df['pr_department_unified'] = dept_df.apply(pick_pr_dept, axis=1)
 
-    # Aggregate by PR Budget description first (preferred view)
+    # PR Budget Description chart (preferred)
     if pr_budget_desc_col and pr_budget_desc_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         agg_desc = dept_df.groupby(pr_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
         agg_desc['cr'] = agg_desc[net_amount_col]/1e7
@@ -313,13 +297,11 @@ with T[4]:
             fig_desc.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig_desc, use_container_width=True)
 
-            # drill: allow pick from the same list to show rows
             pick_desc = st.selectbox('Drill into PR Budget Description', ['-- none --'] + top_desc[pr_budget_desc_col].astype(str).tolist())
             if pick_desc and pick_desc != '-- none --':
                 sub = dept_df[dept_df[pr_budget_desc_col].astype(str) == pick_desc].copy()
                 show_cols = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub.columns]
                 st.dataframe(sub[show_cols].sort_values(net_amount_col, ascending=False).head(200), use_container_width=True)
-
     else:
         st.info('PR Budget description or Net Amount column not found to show PR Budget Description spend.')
 
