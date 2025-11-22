@@ -108,7 +108,7 @@ def map_buyer_type_generic(val, code):
             return 'Indirect'
     except Exception:
         pass
-    return 'Other'
+    return 'Indirect'
 
 if not df.empty:
     df['buyer_type'] = df.apply(lambda r: map_buyer_type_generic(r.get('buyer_group', ''), r.get('buyer_group_code', np.nan)), axis=1)
@@ -148,6 +148,8 @@ for c in ['buyer_type', 'po_creator', 'po_vendor']:
 
 # Buyer Type, Entity, PO Creator filters
 choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in fil.columns else ['Direct','Indirect']
+# remove any stray 'Other' if present
+choices_bt = [c for c in choices_bt if str(c).strip().lower() != 'other']
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 entity_choices = sorted(fil['entity'].dropna().unique().tolist()) if 'entity' in fil.columns else []
 sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
