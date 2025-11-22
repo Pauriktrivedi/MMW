@@ -76,17 +76,21 @@ purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchas
 pr_number_col = safe_col(df, ['pr_number', 'pr number', 'pr_no'])
 po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
 po_unit_rate_col = safe_col(df, ['po_unit_rate', 'po unit rate', 'po_unit_price'])
-pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
-pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc'])
+pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode', 'pr_budget_code'])
+pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc', 'pr_budget_description'])
 po_budget_code_col = safe_col(df, ['po_budget_code', 'po budget code', 'po_budgetcode'])
 po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc'])
 pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu'])
 po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu'])
 
-# fallback ensure columns exist as strings to avoid KeyError
+# Fallback ensure columns exist as strings to avoid KeyError
 for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
     if c and c not in df.columns:
         df[c] = ''
+
+# ensure entity column exists
+if 'entity' not in df.columns:
+    df['entity'] = ''
 
 # ----------------- Buyer/PO creator mapping -----------------
 if 'buyer_group' in df.columns:
@@ -97,6 +101,7 @@ if 'buyer_group' in df.columns:
 
 
 def map_buyer_type_generic(val, code):
+    # map only to Direct / Indirect — treat unknown as Indirect to avoid 'Other'
     if pd.isna(val) or str(val).strip() == '' or str(val).strip().lower() in ['not available','na','n/a']:
         return 'Indirect'
     try:
@@ -108,6 +113,7 @@ def map_buyer_type_generic(val, code):
             return 'Indirect'
     except Exception:
         pass
+    # default to Indirect (no 'Other')
     return 'Indirect'
 
 if not df.empty:
@@ -139,7 +145,20 @@ pr_start, pr_end = FY[fy_key]
 
 fil = df.copy()
 if pr_col:
+    # Apply FY using PR date if available
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
+
+# Add explicit date range picker (applies on top of FY selection)
+# Prefer PR date but fall back to PO create date
+date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+if date_basis:
+    min_dt = fil[date_basis].dropna().min()
+    max_dt = fil[date_basis].dropna().max()
+    if pd.notna(min_dt) and pd.notna(max_dt):
+        dr = st.sidebar.date_input('Date range', (pd.Timestamp(min_dt).date(), pd.Timestamp(max_dt).date()))
+        if isinstance(dr, tuple) and len(dr) == 2:
+            _s, _e = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
+            fil = fil[(fil[date_basis] >= _s) & (fil[date_basis] <= _e)]
 
 # defensive creation of filter columns
 for c in ['buyer_type', 'po_creator', 'po_vendor']:
@@ -148,8 +167,6 @@ for c in ['buyer_type', 'po_creator', 'po_vendor']:
 
 # Buyer Type, Entity, PO Creator filters
 choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in fil.columns else ['Direct','Indirect']
-# remove any stray 'Other' if present
-choices_bt = [c for c in choices_bt if str(c).strip().lower() != 'other']
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 entity_choices = sorted(fil['entity'].dropna().unique().tolist()) if 'entity' in fil.columns else []
 sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
@@ -157,9 +174,8 @@ sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna(
 
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
-if sel_e:
-    if 'entity' in fil.columns:
-        fil = fil[fil['entity'].isin(sel_e)]
+if sel_e and 'entity' in fil.columns:
+    fil = fil[fil['entity'].isin(sel_e)]
 if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 
@@ -211,7 +227,7 @@ with T[0]:
     # Monthly spend + cumulative
     dcol = po_create_col if po_create_col in fil.columns else (pr_col if pr_col in fil.columns else None)
     st.subheader('Monthly Total Spend + Cumulative')
-    if dcol and net_amount_col in fil.columns:
+    if dcol and net_amount_col in fil.columns and dcol in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
         agg = t.groupby('month')[net_amount_col].sum().reset_index().sort_values('month')
@@ -227,14 +243,19 @@ with T[0]:
 
     st.markdown('---')
     st.subheader('Entity Trend')
-    if dcol and net_amount_col in fil.columns:
+    if dcol and net_amount_col in fil.columns and dcol in fil.columns:
         x = fil.dropna(subset=[dcol]).copy()
         x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
-        g = x.groupby(['month','entity'])[net_amount_col].sum().reset_index()
-        if not g.empty:
-            fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={'value':'Net Amount','x':'Month'})
-            fig_e.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_e, use_container_width=True)
+        # ensure 'entity' exists
+        if 'entity' not in x.columns:
+            x['entity'] = 'Unknown'
+        # safe groupby only when both grouping cols present
+        if 'month' in x.columns and 'entity' in x.columns:
+            g = x.groupby(['month','entity'])[net_amount_col].sum().reset_index()
+            if not g.empty:
+                fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={'value':'Net Amount','x':'Month'})
+                fig_e.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_e, use_container_width=True)
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
@@ -250,16 +271,14 @@ with T[1]:
 with T[2]:
     st.subheader('Delivery Summary')
     dv = fil.copy()
-    if {'po_qty', 'receivedqty'}.intersection(dv.columns):
-        # best-effort column detection
-        po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity'])
-        received_col = safe_col(dv, ['receivedqty','received_qty','received qty'])
-        if po_qty_col and received_col:
-            dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
-            dv['received_f'] = dv[received_col].fillna(0).astype(float)
-            dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
-            ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
-            st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
+    po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity'])
+    received_col = safe_col(dv, ['receivedqty','received_qty','received qty'])
+    if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
+        dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
+        dv['received_f'] = dv[received_col].fillna(0).astype(float)
+        dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
+        ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
+        st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
 
 # ----------------- Vendors -----------------
 with T[3]:
