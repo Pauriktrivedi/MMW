@@ -36,7 +36,7 @@ def safe_col(df, candidates, default=None):
 @st.cache_data(show_spinner=False)
 def load_all(file_list=None):
     if file_list is None:
-        file_list = [("MEPL (2).xlsx", "MEPL"), ("MLPL (2).xlsx", "MLPL"), ("mmw (3).xlsx", "MMW"), ("mmpl (3).xlsx", "MMPL")]
+        file_list = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
     frames = []
     for fn, ent in file_list:
         try:
