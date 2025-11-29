@@ -241,17 +241,39 @@ with T[0]:
 
     st.markdown('---')
     st.subheader('Entity Trend')
-    if dcol and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
-        x = fil.dropna(subset=[dcol]).copy()
-        x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
-        # ensure entity filled
-        x['entity'] = x['entity'].fillna('Unmapped')
-        if 'entity' in x.columns:
-            g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
-            if not g.empty:
-                fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
-                fig_e.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_e, use_container_width=True)
+    try:
+        # ensure date column and net amount column exist
+        if not dcol or not net_amount_col or net_amount_col not in fil.columns:
+            st.info('Entity Trend not available — need a date column and Net Amount column.')
+        else:
+            x = fil.copy()
+            # create 'month' from the chosen date column
+            x['month'] = pd.to_datetime(x[dcol], errors='coerce').dt.to_period('M').dt.to_timestamp()
+            # ensure 'entity' exists and is string
+            if 'entity' not in x.columns:
+                x['entity'] = x.get('entity_source_file', '').fillna('Unmapped').astype(str)
+            x['entity'] = x['entity'].fillna('Unmapped').astype(str)
+
+            # drop rows that don't have a month or net amount
+            x = x.dropna(subset=['month', net_amount_col])
+
+            if x.empty:
+                st.info('No data available for Entity Trend after applying filters.')
+            else:
+                # defensive groupby: only use columns that exist
+                if 'month' in x.columns and 'entity' in x.columns and net_amount_col in x.columns:
+                    g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+                    if g.empty:
+                        st.info('No aggregated data to plot for Entity Trend.')
+                    else:
+                        g = g.sort_values('month')
+                        fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
+                        fig_e.update_layout(xaxis_tickangle=-45)
+                        st.plotly_chart(fig_e, use_container_width=True)
+                else:
+                    st.info('Required columns for Entity Trend are missing.')
+    except Exception as e:
+        st.error(f'Entity Trend error: {e}')
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
