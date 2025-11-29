@@ -5,8 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Final corrected Streamlit P2P dashboard (robust + defensive)
-# Copy this file content into your app file (e.g. p2p_dashboard.py) and run Streamlit.
+# Robust final P2P dashboard — copy this into p2p_dashboard.py and run with Streamlit
 
 st.set_page_config(page_title="P2P Dashboard — Indirect (Final)", layout="wide", initial_sidebar_state="expanded")
 
@@ -17,9 +16,9 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     new = {}
     for c in df.columns:
         s = str(c).strip()
-        s = s.replace("\xa0", " ")
-        # replace backslash and forward slash safely
-        s = s.replace("\\", "_").replace("/", "_")
+        # replace non-breaking space (unicode 160) and normalize slashes safely
+        s = s.replace(chr(160), " ")
+        s = s.replace(chr(92), "_").replace('/', '_')
         s = "_".join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
@@ -65,10 +64,9 @@ def load_all(file_list=None):
 # load
 df = load_all()
 if df.empty:
-    st.warning("No data loaded. Put MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
+    st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
 # ----------------- Column discovery / canonical names -----------------
-# Common names (normalized)
 pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
 po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
 net_amount_col = safe_col(df, ['net_amount', 'net amount', 'net_amount_inr', 'amount'])
@@ -83,7 +81,7 @@ po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget descripti
 pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu'])
 po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu'])
 
-# fallback ensure columns exist as strings to avoid KeyError
+# ensure columns exist to avoid KeyError in later code
 for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
     if c and c not in df.columns:
         df[c] = ''
@@ -91,7 +89,7 @@ for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_
 # ----------------- Buyer/PO creator mapping -----------------
 if 'buyer_group' in df.columns:
     try:
-        df['buyer_group_code'] = df['buyer_group'].astype(str).str.extract(r"(\d+)")[0].astype(float)
+        df['buyer_group_code'] = df['buyer_group'].astype(str).str.extract('([0-9]+)')[0].astype(float)
     except Exception:
         df['buyer_group_code'] = np.nan
 
@@ -141,25 +139,35 @@ fil = df.copy()
 if pr_col:
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
 
+# Date range filter (extra) - based on PR date if available else PO create
+date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+if date_basis:
+    mindt = fil[date_basis].dropna().min()
+    maxdt = fil[date_basis].dropna().max()
+    if pd.notna(mindt) and pd.notna(maxdt):
+        dr = st.sidebar.date_input('Date range', (mindt.date(), maxdt.date()), key='date_range')
+        if isinstance(dr, tuple) and len(dr) == 2:
+            sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
+            fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
+
 # defensive creation of filter columns
-for c in ['buyer_type', 'po_creator', 'po_vendor']:
+for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
     if c not in fil.columns:
         fil[c] = ''
 
 # Buyer Type, Entity, PO Creator filters
 choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in fil.columns else ['Direct','Indirect']
-# remove any stray 'Other' if present
 choices_bt = [c for c in choices_bt if str(c).strip().lower() != 'other']
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 entity_choices = sorted(fil['entity'].dropna().unique().tolist()) if 'entity' in fil.columns else []
+# default include all entities so charts show all
 sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
 
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
-if sel_e:
-    if 'entity' in fil.columns:
-        fil = fil[fil['entity'].isin(sel_e)]
+if sel_e and 'entity' in fil.columns:
+    fil = fil[fil['entity'].isin(sel_e)]
 if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 
@@ -168,7 +176,6 @@ if po_vendor_col and po_vendor_col in fil.columns:
     fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
 else:
     fil['po_vendor'] = ''
-
 if 'product_name' not in fil.columns:
     fil['product_name'] = ''
 
@@ -209,17 +216,18 @@ with T[0]:
 
     st.markdown('---')
     # Monthly spend + cumulative
-    dcol = po_create_col if po_create_col in fil.columns else (pr_col if pr_col in fil.columns else None)
+    dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
     st.subheader('Monthly Total Spend + Cumulative')
-    if dcol and net_amount_col in fil.columns:
+    if dcol and net_amount_col and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
         agg = t.groupby('month')[net_amount_col].sum().reset_index().sort_values('month')
         agg['cr'] = agg[net_amount_col]/1e7
         agg['cum'] = agg['cr'].cumsum()
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_bar(x=agg['month'].dt.strftime('%b-%Y'), y=agg['cr'], name='Monthly Spend (Cr)')
+        fig.add_bar(x=agg['month'].dt.strftime('%b-%Y'), y=agg['cr'], name='Monthly Spend (Cr)', text=agg['cr'])
         fig.add_scatter(x=agg['month'].dt.strftime('%b-%Y'), y=agg['cum'], name='Cumulative (Cr)', mode='lines+markers', secondary_y=True)
+        fig.update_traces(texttemplate='%{text:.2f}', textposition='outside', selector=dict(type='bar'))
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -227,14 +235,16 @@ with T[0]:
 
     st.markdown('---')
     st.subheader('Entity Trend')
-    if dcol and net_amount_col in fil.columns:
+    if dcol and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
         x = fil.dropna(subset=[dcol]).copy()
         x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
-        g = x.groupby(['month','entity'])[net_amount_col].sum().reset_index()
-        if not g.empty:
-            fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={'value':'Net Amount','x':'Month'})
-            fig_e.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_e, use_container_width=True)
+        # guard: ensure 'entity' exists
+        if 'entity' in x.columns:
+            g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+            if not g.empty:
+                fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
+                fig_e.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_e, use_container_width=True)
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
@@ -246,20 +256,62 @@ with T[1]:
         fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
         st.plotly_chart(fig, use_container_width=True)
 
+    # PR/PO per month
+    st.subheader('PR & PO per Month')
+    tmp = fil.copy()
+    if pr_col in tmp.columns:
+        tmp['pr_month'] = tmp[pr_col].dt.to_period('M')
+    else:
+        tmp['pr_month'] = pd.NaT
+    if po_create_col in tmp.columns:
+        tmp['po_month'] = tmp[po_create_col].dt.to_period('M')
+    else:
+        tmp['po_month'] = pd.NaT
+    if pr_number_col and purchase_doc_col and pr_number_col in tmp.columns and purchase_doc_col in tmp.columns:
+        ms = tmp.groupby('pr_month').agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
+        if not ms.empty:
+            ms.columns=['Month','PR Count','PO Count']
+            ms['Month'] = ms['Month'].astype(str)
+            st.line_chart(ms.set_index('Month'), use_container_width=True)
+
+    # Weekday split and Open PRs
+    st.subheader('Weekday Split')
+    wd = fil.copy()
+    if pr_col in wd.columns:
+        wd['pr_wk'] = wd[pr_col].dt.day_name()
+    else:
+        wd['pr_wk'] = ''
+    if po_create_col in wd.columns:
+        wd['po_wk'] = wd[po_create_col].dt.day_name()
+    else:
+        wd['po_wk'] = ''
+    order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    prc = wd['pr_wk'].value_counts().reindex(order, fill_value=0)
+    poc = wd['po_wk'].value_counts().reindex(order, fill_value=0)
+    c1,c2 = st.columns(2)
+    c1.bar_chart(prc)
+    c2.bar_chart(poc)
+
+    st.subheader('Open PRs')
+    if 'pr_status' in fil.columns:
+        op = fil[fil['pr_status'].isin(['Approved','InReview'])].copy()
+        if not op.empty and pr_col in op.columns:
+            op['pending_age_d'] = (pd.Timestamp.now().normalize() - op[pr_col]).dt.days
+            cols = [c for c in [pr_number_col, pr_col, 'pending_age_d', 'procurement_category', 'product_name', net_amount_col, 'po_budget_code', 'pr_status', 'entity', 'po_creator', purchase_doc_col] if c in op.columns]
+            st.dataframe(op[cols], use_container_width=True)
+
 # ----------------- Delivery -----------------
 with T[2]:
     st.subheader('Delivery Summary')
     dv = fil.copy()
-    if {'po_qty', 'receivedqty'}.intersection(dv.columns):
-        # best-effort column detection
-        po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity'])
-        received_col = safe_col(dv, ['receivedqty','received_qty','received qty'])
-        if po_qty_col and received_col:
-            dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
-            dv['received_f'] = dv[received_col].fillna(0).astype(float)
-            dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
-            ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
-            st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
+    po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity','po qty'])
+    received_col = safe_col(dv, ['receivedqty','received_qty','received qty','received_qty'])
+    if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
+        dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
+        dv['received_f'] = dv[received_col].fillna(0).astype(float)
+        dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
+        ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
+        st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
 
 # ----------------- Vendors -----------------
 with T[3]:
@@ -284,34 +336,34 @@ with T[4]:
 
     dept_df['pr_department_unified'] = dept_df.apply(pick_pr_dept, axis=1)
 
-    # Aggregate by PR Budget description first (preferred view)
+    # --- PR Budget Description (preferred) ---
     if pr_budget_desc_col and pr_budget_desc_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         agg_desc = dept_df.groupby(pr_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
         agg_desc['cr'] = agg_desc[net_amount_col]/1e7
         top_desc = agg_desc.head(30)
         if not top_desc.empty:
-            fig_desc = px.bar(top_desc, x=pr_budget_desc_col, y='cr', title='PR Budget Description Spend (Top 30)', labels={pr_budget_desc_col: 'PR Budget Description', 'cr':'Cr'})
+            fig_desc = px.bar(top_desc, x=pr_budget_desc_col, y='cr', title='PR Budget Description Spend (Top 30)', labels={pr_budget_desc_col: 'PR Budget Description', 'cr':'Cr'}, text='cr')
+            fig_desc.update_traces(texttemplate='%{text:.2f}', textposition='outside')
             fig_desc.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig_desc, use_container_width=True)
 
-            # drill: allow pick from the same list to show rows
             pick_desc = st.selectbox('Drill into PR Budget Description', ['-- none --'] + top_desc[pr_budget_desc_col].astype(str).tolist())
             if pick_desc and pick_desc != '-- none --':
                 sub = dept_df[dept_df[pr_budget_desc_col].astype(str) == pick_desc].copy()
                 show_cols = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub.columns]
-                st.dataframe(sub[show_cols].sort_values(net_amount_col, ascending=False).head(200), use_container_width=True)
-
+                st.dataframe(sub[show_cols].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
     else:
         st.info('PR Budget description or Net Amount column not found to show PR Budget Description spend.')
 
     st.markdown('---')
-    # PR Budget Code chart
+    # --- PR Budget Code ---
     if pr_budget_code_col and pr_budget_code_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         agg_code = dept_df.groupby(pr_budget_code_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
         agg_code['cr'] = agg_code[net_amount_col]/1e7
         top_code = agg_code.head(30)
         if not top_code.empty:
-            fig_code = px.bar(top_code, x=pr_budget_code_col, y='cr', title='PR Budget Code Spend (Top 30)', labels={pr_budget_code_col: 'PR Budget Code', 'cr':'Cr'})
+            fig_code = px.bar(top_code, x=pr_budget_code_col, y='cr', title='PR Budget Code Spend (Top 30)', labels={pr_budget_code_col: 'PR Budget Code', 'cr':'Cr'}, text='cr')
+            fig_code.update_traces(texttemplate='%{text:.2f}', textposition='outside')
             fig_code.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig_code, use_container_width=True)
 
@@ -319,7 +371,7 @@ with T[4]:
             if pick_code and pick_code != '-- none --':
                 sub2 = dept_df[dept_df[pr_budget_code_col].astype(str) == pick_code].copy()
                 show_cols2 = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub2.columns]
-                st.dataframe(sub2[show_cols2].sort_values(net_amount_col, ascending=False).head(200), use_container_width=True)
+                st.dataframe(sub2[show_cols2].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
     else:
         st.info('PR Budget code or Net Amount column not found to show PR Budget Code spend.')
 
@@ -341,8 +393,8 @@ with T[5]:
 # ----------------- Forecast -----------------
 with T[6]:
     st.subheader('Forecast Next Month Spend (SMA)')
-    dcol = po_create_col if po_create_col else pr_col
-    if dcol and net_amount_col and dcol in fil.columns and net_amount_col in fil.columns:
+    dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
+    if dcol and net_amount_col and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
         m = t.groupby('month')[net_amount_col].sum().sort_index()
