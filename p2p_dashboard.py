@@ -199,7 +199,7 @@ if st.sidebar.button('Reset Filters'):
     st.experimental_rerun()
 
 # ----------------- Tabs -----------------
-T = st.tabs(['KPIs & Spend','PR/PO Timing','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search','Full Data'])
+T = st.tabs(['KPIs & Spend','PR/PO Timing','PO Approval','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search','Full Data']),'Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search','Full Data'])
 
 # ----------------- KPIs & Spend -----------------
 with T[0]:
@@ -256,51 +256,37 @@ with T[1]:
         fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
         st.plotly_chart(fig, use_container_width=True)
 
-    # PR/PO per month
-    st.subheader('PR & PO per Month')
-    tmp = fil.copy()
-    if pr_col in tmp.columns:
-        tmp['pr_month'] = tmp[pr_col].dt.to_period('M')
-    else:
-        tmp['pr_month'] = pd.NaT
-    if po_create_col in tmp.columns:
-        tmp['po_month'] = tmp[po_create_col].dt.to_period('M')
-    else:
-        tmp['po_month'] = pd.NaT
-    if pr_number_col and purchase_doc_col and pr_number_col in tmp.columns and purchase_doc_col in tmp.columns:
-        ms = tmp.groupby('pr_month').agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
-        if not ms.empty:
-            ms.columns=['Month','PR Count','PO Count']
-            ms['Month'] = ms['Month'].astype(str)
-            st.line_chart(ms.set_index('Month'), use_container_width=True)
+# ----------------- PO Approval Summary -----------------
+with T[2]:
+    st.subheader('📋 PO Approval Summary')
+    po_create = po_create_col
+    po_approved = safe_col(fil, ['po_approved_date','po approved date'])
 
-    # Weekday split and Open PRs
-    st.subheader('Weekday Split')
-    wd = fil.copy()
-    if pr_col in wd.columns:
-        wd['pr_wk'] = wd[pr_col].dt.day_name()
-    else:
-        wd['pr_wk'] = ''
-    if po_create_col in wd.columns:
-        wd['po_wk'] = wd[po_create_col].dt.day_name()
-    else:
-        wd['po_wk'] = ''
-    order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-    prc = wd['pr_wk'].value_counts().reindex(order, fill_value=0)
-    poc = wd['po_wk'].value_counts().reindex(order, fill_value=0)
-    c1,c2 = st.columns(2)
-    c1.bar_chart(prc)
-    c2.bar_chart(poc)
+    if po_approved and po_create and po_create in fil.columns:
+        po_app_df = fil[fil[po_create].notna()].copy()
+        po_app_df[po_approved] = pd.to_datetime(po_app_df[po_approved], errors='coerce')
 
-    st.subheader('Open PRs')
-    if 'pr_status' in fil.columns:
-        op = fil[fil['pr_status'].isin(['Approved','InReview'])].copy()
-        if not op.empty and pr_col in op.columns:
-            op['pending_age_d'] = (pd.Timestamp.now().normalize() - op[pr_col]).dt.days
-            cols = [c for c in [pr_number_col, pr_col, 'pending_age_d', 'procurement_category', 'product_name', net_amount_col, 'po_budget_code', 'pr_status', 'entity', 'po_creator', purchase_doc_col] if c in op.columns]
-            st.dataframe(op[cols], use_container_width=True)
+        total_pos = po_app_df[purchase_doc_col].nunique()
+        approved_pos = po_app_df[po_app_df[po_approved].notna()][purchase_doc_col].nunique()
+        pending_pos = total_pos - approved_pos
+
+        po_app_df['approval_lead_time'] = (po_app_df[po_approved] - po_app_df[po_create]).dt.days
+        avg_approval = po_app_df['approval_lead_time'].mean()
+
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric('Total POs', total_pos)
+        c2.metric('Approved POs', approved_pos)
+        c3.metric('Pending Approval', pending_pos)
+        c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
+
+        st.subheader('📄 PO Approval Details')
+        show_cols = [col for col in [po_creator if 'po_creator' in fil.columns else None, purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if col]
+        st.dataframe(po_app_df[show_cols].sort_values('approval_lead_time', ascending=False), use_container_width=True)
+    else:
+        st.info("ℹ️ 'PO Approved Date' column not found.")
 
 # ----------------- Delivery -----------------
+with T[3]:
 with T[2]:
     st.subheader('Delivery Summary')
     dv = fil.copy()
