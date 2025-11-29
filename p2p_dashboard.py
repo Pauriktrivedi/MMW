@@ -253,6 +253,24 @@ with T[0]:
                 fig_e.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig_e, use_container_width=True)
 
+    st.markdown('---')
+    # ----------------- Buyer-wise Spend -----------------
+    st.subheader('Buyer-wise Spend (Top 20)')
+    if net_amount_col and net_amount_col in fil.columns:
+        bw = fil.copy()
+        # prefer po_creator (ordered by) for buyer; fallback to buyer_type or generic 'Unknown'
+        bw['buyer_display'] = bw.get('po_creator', bw.get('buyer_type', pd.Series(['Unknown']*len(bw)))).fillna('Unknown').astype(str)
+        bwagg = bw.groupby('buyer_display', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+        bwagg['cr'] = bwagg[net_amount_col]/1e7
+        if not bwagg.empty:
+            fig_b = px.bar(bwagg.head(20), x='buyer_display', y='cr', text='cr', labels={'buyer_display':'Buyer','cr':'Cr'})
+            fig_b.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_b.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_b, use_container_width=True)
+            st.dataframe(bwagg.head(200).rename(columns={net_amount_col:'net_amount', 'cr':'cr_in_cr'}), use_container_width=True)
+    else:
+        st.info('Net Amount column not present — cannot compute buyer-wise spend.')
+
 # ----------------- PR/PO Timing -----------------
 with T[1]:
     st.subheader('SLA (PR→PO leadtime)')
