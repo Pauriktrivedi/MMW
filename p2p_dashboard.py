@@ -256,12 +256,106 @@ with T[0]:
 # ----------------- PR/PO Timing -----------------
 with T[1]:
     st.subheader('SLA (PR→PO leadtime)')
+    # SLA gauge + lead time buckets
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
         ld = fil.dropna(subset=[pr_col, po_create_col]).copy()
         ld['lead_time'] = (ld[po_create_col] - ld[pr_col]).dt.days
         avg = ld['lead_time'].mean() if not ld.empty else 0
         fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
         st.plotly_chart(fig, use_container_width=True)
+
+        # lead time distribution buckets
+        bins = [0,7,15,30,60,90,9999]
+        labels = ['0-7','8-15','16-30','31-60','61-90','90+']
+        ld['lt_bucket'] = pd.cut(ld['lead_time'], bins=bins, labels=labels)
+        bucket_pct = ld['lt_bucket'].value_counts(normalize=True).reindex(labels, fill_value=0).reset_index()
+        bucket_pct.columns = ['Bucket','Pct']
+        bucket_pct['Pct'] = bucket_pct['Pct']*100
+        st.plotly_chart(px.bar(bucket_pct, x='Bucket', y='Pct', text='Pct').update_traces(texttemplate='%{text:.1f}%', textposition='outside'), use_container_width=True)
+    else:
+        st.info('Need PR Date and PO Create Date to compute lead times.')
+
+    # PR & PO per Month
+    st.subheader('PR & PO per Month')
+    tmp = fil.copy()
+    if pr_col and pr_col in tmp.columns:
+        tmp['pr_month'] = tmp[pr_col].dt.to_period('M')
+    else:
+        tmp['pr_month'] = pd.NaT
+    if po_create_col and po_create_col in tmp.columns:
+        tmp['po_month'] = tmp[po_create_col].dt.to_period('M')
+    else:
+        tmp['po_month'] = pd.NaT
+    try:
+        if pr_number_col and purchase_doc_col:
+            ms = tmp.groupby('pr_month').agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
+            ms.columns=['Month','PR Count','PO Count']
+            ms['Month'] = ms['Month'].astype(str)
+            if not ms.empty:
+                st.line_chart(ms.set_index('Month'), use_container_width=True)
+    except Exception:
+        pass
+
+    # Weekday split for PR and PO
+    st.subheader('Weekday Split')
+    wd = fil.copy()
+    if pr_col and pr_col in wd.columns:
+        wd['pr_wk'] = wd[pr_col].dt.day_name()
+    else:
+        wd['pr_wk'] = ''
+    if po_create_col and po_create_col in wd.columns:
+        wd['po_wk'] = wd[po_create_col].dt.day_name()
+    else:
+        wd['po_wk'] = ''
+    order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    prc = wd['pr_wk'].value_counts().reindex(order, fill_value=0)
+    poc = wd['po_wk'].value_counts().reindex(order, fill_value=0)
+    c1,c2 = st.columns(2)
+    c1.bar_chart(prc)
+    c2.bar_chart(poc)
+
+    # Open PRs (status-based) — show table and aging
+    st.subheader('Open PRs')
+    pr_status_col = safe_col(fil, ['pr_status','pr status','prstatus'])
+    if pr_status_col and pr_status_col in fil.columns and pr_col and pr_col in fil.columns:
+        op = fil[fil[pr_status_col].astype(str).isin(['Approved','InReview','In Review','Open','Raised','Submitted'])].copy()
+        if not op.empty:
+            op['pending_age_d'] = (pd.Timestamp.now().normalize() - op[pr_col]).dt.days
+            cols = [c for c in [pr_number_col, pr_col, 'pending_age_d', pr_budget_code_col, pr_budget_desc_col, 'product_name', net_amount_col, 'pr_status', 'entity', 'po_creator', purchase_doc_col] if c and c in op.columns]
+            st.dataframe(op[cols].sort_values('pending_age_d', ascending=False).head(500), use_container_width=True)
+        else:
+            st.info('No open PRs found with expected PR status values.')
+    else:
+        st.info('PR Status or PR Date column not found to show Open PRs.')
+
+    # Lead time by Buyer Type & Buyer
+    st.subheader('Lead Time by Buyer Type & Buyer')
+    if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
+        ld2 = fil.dropna(subset=[pr_col, po_create_col]).copy()
+        ld2['lead_time'] = (ld2[po_create_col] - ld2[pr_col]).dt.days
+        if 'buyer_type' in ld2.columns:
+            st.dataframe(ld2.groupby('buyer_type')['lead_time'].mean().round(1).reset_index().sort_values('lead_time'), use_container_width=True)
+        if 'po_creator' in ld2.columns:
+            st.dataframe(ld2.groupby('po_creator')['lead_time'].mean().round(1).reset_index().sort_values('lead_time'), use_container_width=True)
+
+    # Daily PR Trends
+    st.subheader('Daily PR Submissions')
+    if pr_col and pr_col in fil.columns:
+        daily = fil.copy()
+        daily['pr_date_only'] = pd.to_datetime(daily[pr_col], errors='coerce')
+        dtrend = daily.groupby('pr_date_only').size().reset_index(name='PR Count')
+        if not dtrend.empty:
+            st.plotly_chart(px.line(dtrend, x='pr_date_only', y='PR Count', title='Daily PRs'), use_container_width=True)
+
+    # Monthly Unique PO Generation
+    st.subheader('Monthly Unique PO Generation')
+    if purchase_doc_col and po_create_col and purchase_doc_col in fil.columns and po_create_col in fil.columns:
+        pm = fil.dropna(subset=[po_create_col, purchase_doc_col]).copy()
+        pm['po_month'] = pm[po_create_col].dt.to_period('M')
+        mcount = pm.groupby('po_month')[purchase_doc_col].nunique().reset_index(name='Unique PO Count')
+        mcount['po_month'] = mcount['po_month'].astype(str)
+        if not mcount.empty:
+            st.plotly_chart(px.bar(mcount, x='po_month', y='Unique PO Count', text='Unique PO Count', title='Unique POs per Month').update_traces(textposition='outside'), use_container_width=True)
 
 # ----------------- PO Approval Summary -----------------
 with T[2]:
