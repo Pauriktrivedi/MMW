@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Final corrected P2P dashboard — copy into p2p_dashboard.py and run with Streamlit
+# P2P Dashboard — robust final script
 st.set_page_config(page_title="P2P Dashboard — Indirect (Final)", layout="wide", initial_sidebar_state="expanded")
 
 # ----------------- Helpers -----------------
@@ -16,7 +16,7 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.columns:
         s = str(c).strip()
         s = s.replace(chr(160), " ")  # NBSP
-        s = s.replace(chr(92), "_").replace('/', '_')  # backslash and forward slash
+        s = s.replace('\', '_').replace('/', '_')  # backslash and forward slash
         s = "_".join(s.split())
         s = s.lower()
         s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
@@ -146,7 +146,7 @@ if pr_col and pr_col in fil.columns:
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
 
 # Date range filter (extra) - based on PR date if available else PO create
-date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+date_basis = pr_col if (pr_col and pr_col in fil.columns) else (po_create_col if (po_create_col and po_create_col in fil.columns) else None)
 if date_basis:
     mindt = fil[date_basis].dropna().min()
     maxdt = fil[date_basis].dropna().max()
@@ -241,49 +241,54 @@ with T[0]:
 
     st.markdown('---')
     st.subheader('Entity Trend')
+    # Robust Entity Trend: validate columns, create month, drop NaNs, group safely
     try:
-        # ensure date column and net amount column exist
-        if not dcol or not net_amount_col or net_amount_col not in fil.columns:
-            st.info('Entity Trend not available — need a date column and Net Amount column.')
-        else:
+        if dcol and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
             x = fil.copy()
-            # create 'month' from the chosen date column
-            x['month'] = pd.to_datetime(x[dcol], errors='coerce').dt.to_period('M').dt.to_timestamp()
-            # ensure 'entity' exists and is string
-            if 'entity' not in x.columns:
-                x['entity'] = x.get('entity_source_file', '').fillna('Unmapped').astype(str)
-            x['entity'] = x['entity'].fillna('Unmapped').astype(str)
-
-            # drop rows that don't have a month or net amount
-            x = x.dropna(subset=['month', net_amount_col])
-
-            if x.empty:
-                st.info('No data available for Entity Trend after applying filters.')
+            # ensure date col exists
+            if dcol not in x.columns:
+                st.info(f"Date column '{dcol}' not present for Entity Trend")
             else:
-                # defensive groupby: only use columns that exist
-                if 'month' in x.columns and 'entity' in x.columns and net_amount_col in x.columns:
-                    g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
-                    if g.empty:
-                        st.info('No aggregated data to plot for Entity Trend.')
-                    else:
-                        g = g.sort_values('month')
-                        fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
-                        fig_e.update_layout(xaxis_tickangle=-45)
-                        st.plotly_chart(fig_e, use_container_width=True)
+                x = x.dropna(subset=[dcol])
+                if x.empty:
+                    st.info('No rows with date for Entity Trend')
                 else:
-                    st.info('Required columns for Entity Trend are missing.')
+                    x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
+                    x['entity'] = x['entity'].fillna('Unmapped')
+                    # drop rows missing amount
+                    if net_amount_col not in x.columns:
+                        st.info(f"Net amount column '{net_amount_col}' missing for Entity Trend")
+                    else:
+                        x = x.dropna(subset=[net_amount_col])
+                        if x.empty:
+                            st.info('No rows with net amount to plot Entity Trend')
+                        else:
+                            g = x.groupby(['month', 'entity'], dropna=False)[net_amount_col].sum().reset_index()
+                            if g.empty:
+                                st.info('No aggregated data for Entity Trend')
+                            else:
+                                fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
+                                fig_e.update_layout(xaxis_tickangle=-45)
+                                st.plotly_chart(fig_e, use_container_width=True)
+        else:
+            st.info('Entity Trend requires a date column, entity column and net amount column.')
     except Exception as e:
-        st.error(f'Entity Trend error: {e}')
+        st.error(f'Error building Entity Trend: {e}')
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
     st.subheader('SLA (PR→PO leadtime)')
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
         ld = fil.dropna(subset=[pr_col, po_create_col]).copy()
-        ld['lead_time'] = (ld[po_create_col] - ld[pr_col]).dt.days
-        avg = ld['lead_time'].mean() if not ld.empty else 0
-        fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
-        st.plotly_chart(fig, use_container_width=True)
+        if not ld.empty:
+            ld['lead_time'] = (ld[po_create_col] - ld[pr_col]).dt.days
+            avg = ld['lead_time'].mean() if not ld.empty else 0
+            fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info('No rows with both PR and PO dates to compute SLA.')
+    else:
+        st.info('PR/PO timing requires PR Date and PO Create Date columns.')
 
 # ----------------- PO Approval Summary -----------------
 with T[2]:
@@ -320,7 +325,7 @@ with T[3]:
     dv = fil.copy()
     po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity','po qty'])
     received_col = safe_col(dv, ['receivedqty','received_qty','received qty','received_qty'])
-    if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
+    if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns and purchase_doc_col in dv.columns:
         dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
         dv['received_f'] = dv[received_col].fillna(0).astype(float)
         dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
