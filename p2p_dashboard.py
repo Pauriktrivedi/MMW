@@ -67,21 +67,29 @@ if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
 # ----------------- Column discovery / canonical names -----------------
-pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
-po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
-net_amount_col = safe_col(df, ['net_amount', 'net amount', 'net_amount_inr', 'amount'])
-purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchase doc'])
+pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr_date_submitted', 'pr_date_submitted'])
+po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date', 'po_create'])
+net_amount_col = safe_col(df, ['net_amount', 'net amount', 'net_amount_inr', 'amount', 'netamount'])
+purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchase doc', 'purchase_doc_no'])
 pr_number_col = safe_col(df, ['pr_number', 'pr number', 'pr_no'])
-po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
-po_unit_rate_col = safe_col(df, ['po_unit_rate', 'po unit rate', 'po_unit_price'])
-pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
-pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc'])
+po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor', 'po_vendor_name'])
+po_unit_rate_col = safe_col(df, ['po_unit_rate', 'po unit rate', 'po_unit_price', 'po_price'])
+pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode', 'pr_budget'])
+pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc', 'pr_budget_description'])
 po_budget_code_col = safe_col(df, ['po_budget_code', 'po budget code', 'po_budgetcode'])
 po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc'])
-pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu'])
-po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu'])
+pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu','pr_bussiness'])
+po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu','po_bussiness'])
 
-# ensure columns exist to avoid KeyError in later code
+# discover entity column properly and create canonical 'entity'
+entity_col = safe_col(df, ['entity','entity_name','company','brand','legal_entity','company_name'])
+if entity_col:
+    df['entity'] = df[entity_col].astype(str).fillna('').str.strip()
+else:
+    # fallback to source-file label or blank
+    df['entity'] = df.get('entity_source_file', '').astype(str).fillna('').str.strip()
+
+# ensure columns exist to avoid KeyError in later code (create as empty if missing)
 for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
     if c and c not in df.columns:
         df[c] = ''
@@ -113,7 +121,6 @@ if not df.empty:
 else:
     df['buyer_type'] = pd.Series(dtype=object)
 
-# PO orderer -> creator mapping (example mapping)
 map_orderer = {
     'mmw2324030': 'Dhruv', 'mmw2324062': 'Deepak', 'mmw2425154': 'Mukul', 'mmw2223104': 'Paurik',
     'mmw2021181': 'Nayan', 'mmw2223014': 'Aatish', 'mmw_ext_002': 'Deepakex', 'mmw2425024': 'Kamlesh',
@@ -136,11 +143,11 @@ fy_key = st.sidebar.selectbox('Financial Year', list(FY))
 pr_start, pr_end = FY[fy_key]
 
 fil = df.copy()
-if pr_col:
+if pr_col and pr_col in fil.columns:
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
 
 # Date range filter (extra) - based on PR date if available else PO create
-date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+date_basis = pr_col if (pr_col and pr_col in fil.columns) else (po_create_col if (po_create_col and po_create_col in fil.columns) else None)
 if date_basis:
     mindt = fil[date_basis].dropna().min()
     maxdt = fil[date_basis].dropna().max()
@@ -150,7 +157,7 @@ if date_basis:
             sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
 
-# defensive creation of filter columns
+# defensive creation of filter columns (use canonical 'entity')
 for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
     if c not in fil.columns:
         fil[c] = ''
@@ -159,10 +166,15 @@ for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
 choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist()) if 'buyer_type' in fil.columns else ['Direct','Indirect']
 choices_bt = [c for c in choices_bt if str(c).strip().lower() != 'other']
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
-entity_choices = sorted(fil['entity'].dropna().unique().tolist()) if 'entity' in fil.columns else []
+
+entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist()])
+# if entity list is empty, fall back to the entity_source_file values (so default = all)
+if not entity_choices and 'entity_source_file' in fil.columns:
+    entity_choices = sorted([e for e in fil['entity_source_file'].dropna().unique().tolist()])
+
 # default include all entities so charts show all
 sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
-sel_o = st.sidebar.multiselect('PO Ordered By', sorted(fil['po_creator'].dropna().unique().tolist()), default=sorted(fil['po_creator'].dropna().unique().tolist()))
+sel_o = st.sidebar.multiselect('PO Ordered By', sorted([s for s in fil['po_creator'].dropna().unique().tolist()]), default=sorted([s for s in fil['po_creator'].dropna().unique().tolist()]))
 
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
@@ -205,13 +217,13 @@ T = st.tabs(['KPIs & Spend','PR/PO Timing','Delivery','Vendors','Dept & Services
 with T[0]:
     st.header('P2P Dashboard — Indirect (KPIs & Spend)')
     c1,c2,c3,c4,c5 = st.columns(5)
-    total_prs = int(fil.get(pr_number_col, pd.Series(dtype=object)).nunique()) if pr_number_col else 0
-    total_pos = int(fil.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
+    total_prs = int(fil.get(pr_number_col, pd.Series(dtype=object)).nunique()) if pr_number_col and pr_number_col in fil.columns else 0
+    total_pos = int(fil.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col and purchase_doc_col in fil.columns else 0
     c1.metric('Total PRs', total_prs)
     c2.metric('Total POs', total_pos)
     c3.metric('Line Items', len(fil))
     c4.metric('Entities', int(fil.get('entity', pd.Series(dtype=object)).nunique()))
-    spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
+    spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col and net_amount_col in fil.columns else 0
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
     st.markdown('---')
