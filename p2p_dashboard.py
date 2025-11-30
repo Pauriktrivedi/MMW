@@ -293,13 +293,96 @@ with T[0]:
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
-    st.subheader('SLA (PR→PO leadtime)')
+    st.subheader('PR/PO Timing')
+
+    # ------------------------------------
+    # 10) SLA Compliance Gauge (PR → PO ≤ 7 days)
+    # ------------------------------------
+    # require both PR date and PO create date
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
-        ld = fil.dropna(subset=[pr_col, po_create_col]).copy()
-        ld['lead_time'] = (ld[po_create_col] - ld[pr_col]).dt.days
-        avg = ld['lead_time'].mean() if not ld.empty else 0
-        fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
-        st.plotly_chart(fig, use_container_width=True)
+        lead_df = fil.copy()
+        # consider only rows where PR exists; we'll compute lead time only where PO create exists as well
+        lead_df = lead_df[lead_df[pr_col].notna()].copy()
+        lead_df = lead_df[lead_df[po_create_col].notna()].copy()
+        # calculate lead time in days
+        lead_df['Lead Time (Days)'] = (pd.to_datetime(lead_df[po_create_col]) - pd.to_datetime(lead_df[pr_col])).dt.days
+
+        SLA_DAYS = 7
+        avg_lead = float(lead_df['Lead Time (Days)'].mean().round(1)) if not lead_df.empty else 0.0
+
+        gauge_fig = go.Figure(
+            go.Indicator(
+                mode='gauge+number',
+                value=avg_lead,
+                number={'suffix': ' days'},
+                gauge={
+                    'axis': {'range': [0, max(14, avg_lead * 1.2 if avg_lead else 14)]},
+                    'bar': {'color': 'darkblue'},
+                    'steps': [
+                        {'range': [0, SLA_DAYS], 'color': 'lightgreen'},
+                        {'range': [SLA_DAYS, max(14, avg_lead * 1.2 if avg_lead else 14)], 'color': 'lightcoral'},
+                    ],
+                    'threshold': {'line': {'color': 'red', 'width': 4}, 'value': SLA_DAYS}
+                },
+                title={'text': 'Average Lead Time'}
+            )
+        )
+        st.plotly_chart(gauge_fig, use_container_width=True)
+        st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
+
+        # ------------------------------------
+        # 11) PR → PO Lead Time by Buyer Type & Buyer
+        # ------------------------------------
+        st.subheader('⏱️ PR to PO Lead Time by Buyer Type & by Buyer')
+        # group by buyer_type and po_creator if available
+        if 'buyer_type' in lead_df.columns:
+            lead_avg_by_type = (
+                lead_df.groupby('buyer_type')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'buyer_type':'Buyer.Type','Lead Time (Days)':'Lead Time (Days)'})
+            )
+        else:
+            lead_avg_by_type = pd.DataFrame(columns=['Buyer.Type','Lead Time (Days)'])
+
+        if 'po_creator' in lead_df.columns:
+            lead_avg_by_buyer = (
+                lead_df.groupby('po_creator')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'po_creator':'PO.Creator','Lead Time (Days)':'Lead Time (Days)'})
+            )
+        else:
+            lead_avg_by_buyer = pd.DataFrame(columns=['PO.Creator','Lead Time (Days)'])
+
+        c1, c2 = st.columns(2)
+        c1.dataframe(lead_avg_by_type, use_container_width=True)
+        c2.dataframe(lead_avg_by_buyer, use_container_width=True)
+
+        # ------------------------------------
+        # 12) Monthly PR & PO Trends
+        # ------------------------------------
+        st.subheader('📅 Monthly PR & PO Trends')
+        # create PR Month / PO Month using available columns
+        tmp = fil.copy()
+        if pr_col in tmp.columns:
+            tmp['PR Month'] = pd.to_datetime(tmp[pr_col], errors='coerce').dt.to_period('M')
+        else:
+            tmp['PR Month'] = pd.NaT
+        if po_create_col in tmp.columns:
+            tmp['PO Month'] = pd.to_datetime(tmp[po_create_col], errors='coerce').dt.to_period('M')
+        else:
+            tmp['PO Month'] = pd.NaT
+
+        pr_col_name = pr_number_col if pr_number_col else None
+        po_col_name = purchase_doc_col if purchase_doc_col else None
+
+        if pr_col_name and po_col_name and pr_col_name in tmp.columns:
+            monthly_summary = (
+                tmp.groupby('PR Month').agg({pr_col_name: 'count', po_col_name: 'count'}).reset_index()
+            )
+            monthly_summary.columns = ['Month', 'PR Count', 'PO Count']
+            monthly_summary['Month'] = monthly_summary['Month'].astype(str)
+            if not monthly_summary.empty:
+                st.line_chart(monthly_summary.set_index('Month'), use_container_width=True)
+        else:
+            st.info('PR Number or Purchase Doc column missing — cannot show monthly PR/PO trend.')
+    else:
+        st.info('Need both PR Date and PO Create Date columns to compute SLA and lead times.')
 
 # ----------------- PO Approval Summary -----------------
 with T[2]:
