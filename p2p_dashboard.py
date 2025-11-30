@@ -472,8 +472,18 @@ with T[1]:
                 # fallback to full dataset
                 open_df_global = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
                 if not open_df_global.empty:
-                    open_df = open_df_global
-                    using_global = True
+                    # if buyer-type sidebar selection exists, apply same filter to the global open PRs
+                    try:
+                        if 'effective_buyer_type' in open_df_global.columns and sel_b:
+                            open_df_global = open_df_global[open_df_global['effective_buyer_type'].isin(sel_b)].copy()
+                    except Exception:
+                        pass
+                    if not open_df_global.empty:
+                        open_df = open_df_global
+                        using_global = True
+                    else:
+                        # no global rows after applying buyer-type filter — keep empty result
+                        open_df = open_df_filtered
                 else:
                     open_df = open_df_filtered
             else:
@@ -735,8 +745,4 @@ with T[10]:
     try:
         st.dataframe(fil.reset_index(drop=True), use_container_width=True)
         csv = fil.to_csv(index=False)
-        st.download_button('⬇️ Download full filtered data (CSV)', csv, file_name='p2p_full_filtered.csv', mime='text/csv')
-    except Exception as e:
-        st.error(f'Could not display full data: {e}')
-
-# EOF
+        st.download_button('⬇️ Download full filtered data (CSV)', csv, file_name='p2p_full_filtered.csv', mime=
