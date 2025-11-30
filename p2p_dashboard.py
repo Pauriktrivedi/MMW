@@ -153,7 +153,6 @@ df['po_buyer_type'] = df['po_creator'].apply(lambda x: 'Indirect' if str(x).stri
 # resolve buyer_display: prefer PO creator when PO exists, else PR requester
 pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name','pr_requester_name','requester_name'])
 
-
 def resolve_buyer(row):
     # prefer PO creator when Purchase Doc exists
     if purchase_doc_col and purchase_doc_col in row.index and pd.notna(row.get(purchase_doc_col)) and str(row.get(purchase_doc_col)).strip() != '':
@@ -203,7 +202,6 @@ for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
         fil[c] = ''
 
 # ---- Buyer type normalization & robust sidebar choices ----
-# Ensure buyer_type exists and is normalized for reliable filtering
 # Prefer buyer_type, else fall back to po_buyer_type if present
 if 'buyer_type' not in fil.columns or fil['buyer_type'].isna().all():
     if 'po_buyer_type' in fil.columns:
@@ -211,29 +209,30 @@ if 'buyer_type' not in fil.columns or fil['buyer_type'].isna().all():
     else:
         fil['buyer_type'] = ''
 
-# Normalize values: strip whitespace, title case (Direct / Indirect), and coerce unexpected values to 'Indirect'
+# Normalize
 fil['buyer_type'] = fil['buyer_type'].fillna('').astype(str).str.strip().str.title()
+fil.loc[fil['buyer_type'].str.lower().isin(['direct','d']), 'buyer_type'] = 'Direct'
+fil.loc[fil['buyer_type'].str.lower().isin(['indirect','i','in']), 'buyer_type'] = 'Indirect'
+fil.loc[~fil['buyer_type'].isin(['Direct','Indirect']), 'buyer_type'] = 'Indirect'
 
-# Map common variants to Direct/Indirect (defensive)
-fil.loc[fil['buyer_type'].str.lower().isin(['direct', 'd']), 'buyer_type'] = 'Direct'
-fil.loc[fil['buyer_type'].str.lower().isin(['indirect', 'i', 'in']), 'buyer_type'] = 'Indirect'
+# --- Entity filter (placed after buyer_type normalization so both filters interact properly)
+entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip() != '']) if 'entity' in fil.columns else []
+sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 
-# Any remaining empty or unknown values -> Indirect (safe default)
-fil.loc[~fil['buyer_type'].isin(['Direct', 'Indirect']), 'buyer_type'] = 'Indirect'
+# PO Ordered By filter
+sel_o = st.sidebar.multiselect('PO Ordered By', sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)).dropna().unique().tolist() if str(x).strip()!='']), default=sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)).dropna().unique().tolist() if str(x).strip()!='']))
 
-# --- Sidebar debug table to inspect buyer_type distribution ---
-st.sidebar.markdown('**Buyer Type — Debug**')
-vc = fil['buyer_type'].value_counts(dropna=False).rename_axis('buyer_type').reset_index(name='count')
-# show small table in sidebar so user can inspect values quickly
-st.sidebar.dataframe(vc, use_container_width=True)
-
-# Now compute sidebar choices from the normalized column
+# Now compute buyer_type choices and apply filters in a consistent order
 choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist())
-# show all by default
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
-# apply filter (only if user selected something)
+
+# Apply filters in this order: financial year & date range already applied -> buyer_type -> entity -> po_creator -> vendor/item
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
+if sel_e and 'entity' in fil.columns:
+    fil = fil[fil['entity'].isin(sel_e)]
+if sel_o:
+    fil = fil[fil['po_creator'].isin(sel_o)]
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
@@ -313,7 +312,7 @@ with T[0]:
     except Exception as e:
         st.error(f'Could not render Entity Trend: {e}')
 
-    # Buyer-wise Spend (moved to be displayed after Entity Trend)
+    # Buyer-wise Spend (placed after Entity Trend) — this uses the FILTERED `fil` so it should respect Buyer Type and Entity filters
     st.markdown('---')
     st.subheader('Buyer-wise Spend (Cr)')
     if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
