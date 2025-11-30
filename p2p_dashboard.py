@@ -310,6 +310,28 @@ with T[0]:
         fig_buyer.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig_buyer, use_container_width=True)
         st.dataframe(buyer_spend, use_container_width=True)
+
+        # --- Buyer Trend (line chart) — similar to Entity Trend but for selected buyers ---
+        try:
+            if dcol and net_amount_col and net_amount_col in fil.columns:
+                bt = fil.dropna(subset=[dcol]).copy()
+                bt['month'] = bt[dcol].dt.to_period('M').dt.to_timestamp()
+                # determine default buyers to show: top 5 by spend
+                top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
+                pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
+                if pick_mode == 'Choose buyers':
+                    chosen = st.multiselect('Pick buyers to show on trend', sorted(buyer_spend['buyer_display'].astype(str).unique().tolist()), default=top_buyers)
+                else:
+                    chosen = top_buyers
+                if chosen:
+                    bt = bt[bt['buyer_display'].isin(chosen)].copy()
+                    g_b = bt.groupby(['month','buyer_display'], dropna=False)[net_amount_col].sum().reset_index()
+                    if not g_b.empty:
+                        fig_b_trend = px.line(g_b, x=g_b['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='buyer_display', labels={net_amount_col:'Net Amount','x':'Month'}, title='Buyer-wise Monthly Trend')
+                        fig_b_trend.update_layout(xaxis_tickangle=-45)
+                        st.plotly_chart(fig_b_trend, use_container_width=True)
+        except Exception as e:
+            st.error(f'Could not render Buyer Trend: {e}')
     else:
         st.info('Buyer display or Net Amount column missing — cannot compute buyer-wise spend.')
 
