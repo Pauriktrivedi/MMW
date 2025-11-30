@@ -119,16 +119,38 @@ if not df.empty:
 else:
     df['buyer_type'] = pd.Series(dtype=object)
 
-# PO orderer -> creator mapping (example mapping)
+# PO orderer -> creator mapping (example mapping) -- robust and case-insensitive
 map_orderer = {
     'mmw2324030': 'Dhruv', 'mmw2324062': 'Deepak', 'mmw2425154': 'Mukul', 'mmw2223104': 'Paurik',
     'mmw2021181': 'Nayan', 'mmw2223014': 'Aatish', 'mmw_ext_002': 'Deepakex', 'mmw2425024': 'Kamlesh',
 }
+# Normalize po_orderer values and build po_creator with fallbacks
 if 'po_orderer' in df.columns:
-    df['po_orderer_filled'] = df['po_orderer'].fillna('N/A').astype(str)
-    df['po_creator'] = df['po_orderer_filled'].str.lower().map(map_orderer).fillna(df['po_orderer_filled'])
+    # keep raw original trimmed
+    df['po_orderer_raw'] = df['po_orderer'].fillna('').astype(str).str.strip()
+    # normalized key used for mapping (lowercase, remove spaces)
+    df['po_orderer_norm'] = df['po_orderer_raw'].str.lower().str.replace('\s+','', regex=True)
+    # lower-case map keys for case-insensitive matching
+    map_orderer_l = { str(k).lower().replace(' ',''): v for k,v in map_orderer.items() }
+    # map and fallback to original raw value when not found
+    df['po_creator'] = df['po_orderer_norm'].map(map_orderer_l).fillna(df['po_orderer_raw'])
 else:
+    df['po_orderer_raw'] = ''
+    df['po_orderer_norm'] = ''
     df['po_creator'] = pd.Series('', index=df.index)
+
+# clean up common missing tokens and unify
+df['po_creator'] = df['po_creator'].replace({'': 'Unknown', 'N/A': 'Unknown', 'NA': 'Unknown', 'nan': 'Unknown'})
+# final buyer display: prefer mapped po_creator; if Unknown use buyer_type; fallback to 'Unknown'
+if 'buyer_type' not in df.columns:
+    df['buyer_type'] = 'Unknown'
+
+df['buyer_display'] = np.where(
+    df['po_creator'].isin(['', 'Unknown', 'N/A', 'NA']),
+    df['buyer_type'].fillna('Unknown').astype(str),
+    df['po_creator'].astype(str)
+)
+
 
 # ----------------- Sidebar filters -----------------
 st.sidebar.header('Filters')
