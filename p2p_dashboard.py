@@ -246,7 +246,6 @@ if st.sidebar.button('Reset Filters'):
 T = st.tabs(['KPIs & Spend','PR/PO Timing','PO Approval','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search','Full Data'])
 
 # ----------------- KPIs & Spend -----------------
-# (Buyer-wise Spend moved under Entity Spend section) -----------------
 with T[0]:
     st.header('P2P Dashboard — Indirect (KPIs & Spend)')
     c1,c2,c3,c4,c5 = st.columns(5)
@@ -260,21 +259,7 @@ with T[0]:
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
     st.markdown('---')
-    # Buyer-wise Spend
-    st.subheader('Buyer-wise Spend (Cr)')
-    if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
-        buyer_spend = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
-        buyer_spend['cr'] = buyer_spend[net_amount_col] / 1e7
-        buyer_spend = buyer_spend.sort_values('cr', ascending=False)
-        fig_buyer = px.bar(buyer_spend, x='buyer_display', y='cr', text='cr', title='Buyer-wise Spend (Cr)')
-        fig_buyer.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-        fig_buyer.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig_buyer, use_container_width=True)
-        st.dataframe(buyer_spend, use_container_width=True)
-    else:
-        st.info('Buyer display or Net Amount column missing — cannot compute buyer-wise spend.')
 
-    st.markdown('---')
     # Monthly spend + cumulative
     dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
     st.subheader('Monthly Total Spend + Cumulative')
@@ -308,6 +293,21 @@ with T[0]:
                     st.plotly_chart(fig_e, use_container_width=True)
     except Exception as e:
         st.error(f'Could not render Entity Trend: {e}')
+
+    # Buyer-wise Spend (moved to be displayed after Entity Trend)
+    st.markdown('---')
+    st.subheader('Buyer-wise Spend (Cr)')
+    if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
+        buyer_spend = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
+        buyer_spend['cr'] = buyer_spend[net_amount_col] / 1e7
+        buyer_spend = buyer_spend.sort_values('cr', ascending=False)
+        fig_buyer = px.bar(buyer_spend, x='buyer_display', y='cr', text='cr', title='Buyer-wise Spend (Cr)')
+        fig_buyer.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_buyer.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_buyer, use_container_width=True)
+        st.dataframe(buyer_spend, use_container_width=True)
+    else:
+        st.info('Buyer display or Net Amount column missing — cannot compute buyer-wise spend.')
 
 # ----------------- PR/PO Timing -----------------
 with T[1]:
