@@ -272,64 +272,56 @@ with T[0]:
     if dcol and net_amount_col and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
-
         me = t.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
         if me.empty:
             st.info('No monthly/entity data to plot.')
         else:
             pivot = me.pivot(index='month', columns='entity', values=net_amount_col).fillna(0).sort_index()
-
             fixed_entities = ['MEPL','MLPL','MMW','MMPL']
             colors = {'MEPL':'#1f77b4','MLPL':'#ff7f0e','MMW':'#2ca02c','MMPL':'#d62728'}
-
             for ent in fixed_entities:
                 if ent not in pivot.columns:
                     pivot[ent] = 0.0
-
             other_entities = [c for c in pivot.columns if c not in fixed_entities]
             ordered_entities = [e for e in fixed_entities if e in pivot.columns] + other_entities
             pivot = pivot[ordered_entities]
-
             pivot_cr = pivot / 1e7
             total_cr = pivot_cr.sum(axis=1)
             cum_cr = total_cr.cumsum()
-
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-
+            xaxis_labels = pivot_cr.index.strftime('%b-%Y')
             for ent in ordered_entities:
                 ent_vals = pivot_cr[ent].values
                 text_vals = [f"{v:.2f}" if v>0 else '' for v in ent_vals]
                 fig.add_trace(
                     go.Bar(
-                        x=pivot_cr.index.strftime('%b-%Y'),
+                        x=xaxis_labels,
                         y=ent_vals,
                         name=ent,
                         marker_color=colors.get(ent, None),
                         text=text_vals,
-                        textposition='inside'
-                    ),
-                    secondary_y=False
+                        textposition='inside',
+                        hovertemplate='%{x}<br>'+ent+': %{y:.2f} Cr<extra></extra>'
+                    ), secondary_y=False
                 )
-
             fig.add_trace(
                 go.Scatter(
-                    x=total_cr.index.strftime('%b-%Y'),
-                    y=cum_cr,
+                    x=xaxis_labels,
+                    y=cum_cr.values,
                     mode='lines+markers',
                     name='Cumulative (Cr)',
-                    line=dict(color='black', width=2)
-                ),
-                secondary_y=True
+                    line=dict(color='black', width=2),
+                    hovertemplate='%{x}<br>Cumulative: %{y:.2f} Cr<extra></extra>'
+                ), secondary_y=True
             )
-
             fig.update_layout(
                 barmode='stack',
                 xaxis_tickangle=-45,
-                title='Monthly Spend (stacked by Entity) + Cumulative'
+                title='Monthly Spend (stacked by Entity) + Cumulative',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
             )
             fig.update_yaxes(title_text='Monthly Spend (Cr)', secondary_y=False)
             fig.update_yaxes(title_text='Cumulative (Cr)', secondary_y=True)
-
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info('Monthly Spend not available — need date and Net Amount columns.')
