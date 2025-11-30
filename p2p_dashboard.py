@@ -204,7 +204,7 @@ if purchase_doc_col and purchase_doc_col in fil.columns:
 else:
     fil['has_po'] = False
 fil['effective_buyer_type'] = np.where(fil['has_po'], fil['po_buyer_type'].fillna('Indirect'), fil['buyer_type'].fillna('Indirect'))
-fil['effective_buyer_type'] = fil['effective_buyer_type'].astype(str).str.strip().str.title()
+fil['effective_buyer_type'] = fil['effective_buyer_type'].astype(str).str.strip()
 fil.loc[~fil['effective_buyer_type'].isin(['Direct','Indirect']), 'effective_buyer_type'] = 'Indirect'
 
 # Entity + PO ordered by filters
@@ -267,31 +267,40 @@ with T[0]:
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
     st.markdown('---')
+
+    # ---------------- Monthly stacked entity spend + cumulative ----------------
     dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
     st.subheader('Monthly Total Spend + Cumulative')
     if dcol and net_amount_col and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
+
         me = t.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
         if me.empty:
             st.info('No monthly/entity data to plot.')
         else:
             pivot = me.pivot(index='month', columns='entity', values=net_amount_col).fillna(0).sort_index()
+
+            # Fixed order + colors (Option B)
             fixed_entities = ['MEPL','MLPL','MMW','MMPL']
             colors = {'MEPL':'#1f77b4','MLPL':'#ff7f0e','MMW':'#2ca02c','MMPL':'#d62728'}
+
+            # Ensure fixed columns exist (zero if missing)
             for ent in fixed_entities:
                 if ent not in pivot.columns:
                     pivot[ent] = 0.0
+
             other_entities = [c for c in pivot.columns if c not in fixed_entities]
             ordered_entities = [e for e in fixed_entities if e in pivot.columns] + other_entities
             pivot = pivot[ordered_entities]
+
             pivot_cr = pivot / 1e7
             total_cr = pivot_cr.sum(axis=1)
             cum_cr = total_cr.cumsum()
+
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             xaxis_labels = pivot_cr.index.strftime('%b-%Y')
 
-            # Add stacked bars for each entity
             for ent in ordered_entities:
                 ent_vals = pivot_cr[ent].values
                 text_vals = [f"{v:.2f}" if v > 0 else '' for v in ent_vals]
@@ -339,10 +348,9 @@ with T[0]:
     else:
         st.info('Monthly Spend not available — need date and Net Amount columns.')
 
-    else:
-        st.info('Monthly Spend not available — need date and Net Amount columns.')
-
     st.markdown('---')
+
+    # ---------------- Entity Trend (line) ----------------
     st.subheader('Entity Trend')
     try:
         if dcol and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
@@ -358,26 +366,28 @@ with T[0]:
         st.error(f'Could not render Entity Trend: {e}')
 
     st.markdown('---')
+
+    # ---------------- Buyer-wise Spend (bar) + Buyer Trend (line) ----------------
     st.subheader('Buyer-wise Spend (Cr)')
     if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
         buyer_spend = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
         buyer_spend['cr'] = buyer_spend[net_amount_col] / 1e7
         buyer_spend = buyer_spend.sort_values('cr', ascending=False)
+
         fig_buyer = px.bar(buyer_spend, x='buyer_display', y='cr', text='cr', title='Buyer-wise Spend (Cr)')
         fig_buyer.update_traces(texttemplate='%{text:.2f}', textposition='outside')
         fig_buyer.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig_buyer, use_container_width=True)
         st.dataframe(buyer_spend, use_container_width=True)
 
-        # --- Buyer Trend (line chart) — similar to Entity Trend but for selected buyers ---
+        # Buyer trend similar to Entity trend
         try:
             if dcol and net_amount_col and net_amount_col in fil.columns:
                 bt = fil.dropna(subset=[dcol]).copy()
                 bt['month'] = bt[dcol].dt.to_period('M').dt.to_timestamp()
-                # determine default buyers to show: top 5 by spend
                 top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
-                pick_buyers = st.selectbox('Drill: Buyer trend — pick preselected group or choose specific buyer', ['Top 5 by Spend', '-- pick buyers --'])
-                if pick_buyers == '-- pick buyers --':
+                pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
+                if pick_mode == 'Choose buyers':
                     chosen = st.multiselect('Pick buyers to show on trend', sorted(buyer_spend['buyer_display'].astype(str).unique().tolist()), default=top_buyers)
                 else:
                     chosen = top_buyers
@@ -604,3 +614,4 @@ with T[10]:
         st.error(f'Could not display full data: {e}')
 
 # EOF
+
