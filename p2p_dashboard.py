@@ -130,7 +130,14 @@ else:
 o_created_by_map = {
     'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
     'MMW2021181': 'Nayan', 'MMW2223014': 'Aatish', 'MMW_EXT_002': 'Deepakex', 'MMW2425024': 'Kamlesh',
-    'MMW2021184': 'Suresh', 'N/A': 'Dilip'
+    'MMW2021184': 'Suresh', 'N/A': 'Dilip',
+    # Newly added mapped names
+    'MMW2526019': 'Vraj', 'MMW2223240': 'Vatsal', 'MMW2223219': '', 'MMW2021115': 'Priyam',
+    'MMW2425031': 'Preet', 'MMW222360IN': 'Ayush', 'MMW2425132': 'Prateek.B', 'MMW2425025': 'Jaymin',
+    'MMW2425092': 'Suresh', 'MMW252617IN': 'Akaash', 'MMW1920052': 'Nirmal', '2425036': '',
+    'MMW222355IN': 'Jaymin', 'MMW2324060': 'Chetan', 'MMW222347IN': 'Vaibhav', 'MMW2425011': '',
+    'MMW1920036': 'Ankit', 'MMW2425143': 'Prateek.K', '2425027': '', 'MMW2223017': 'Umesh',
+    'MMW2021214': 'Raunak', 'Intechuser1': 'Intesh Data'
 }
 upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
 # derive PO.Creator
