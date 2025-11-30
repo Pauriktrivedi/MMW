@@ -456,19 +456,36 @@ with T[1]:
             st.info('PR Number or Purchase Doc column missing — cannot show monthly PR/PO trend.')
 
         # ------------------------------------
-        # 16) Open PRs (Approved / InReview)
+        # 16) Open PRs (Approved / InReview) — hybrid behavior
         # ------------------------------------
         st.subheader("⚠️ Open PRs (Approved/InReview)")
-        # use filtered dataset `fil` (already filtered by sidebar selections)
+        # prefer filtered dataset `fil` but fall back to global `df` when no rows match
         pr_status_col = safe_col(fil, ['pr_status','pr status','status','prstatus','pr_status'])
         pr_date_col = pr_col if pr_col in fil.columns else safe_col(fil, ['pr_date_submitted','pr date submitted','pr_date','pr date'])
         pr_number_col_local = pr_number_col if pr_number_col in fil.columns else safe_col(fil, ['pr_number','pr number','pr_no','pr no'])
 
         if pr_status_col and pr_status_col in fil.columns:
-            # Use original df instead of filtered df
-            open_df = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+            # try filtered first
+            open_df_filtered = fil[fil[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+            using_global = False
+            if open_df_filtered.empty:
+                # fallback to full dataset
+                open_df_global = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+                if not open_df_global.empty:
+                    open_df = open_df_global
+                    using_global = True
+                else:
+                    open_df = open_df_filtered
+            else:
+                open_df = open_df_filtered
 
-            if not open_df.empty:
+            if open_df.empty:
+                st.warning('⚠️ No open PRs found (neither filtered nor global).')
+            else:
+                if using_global:
+                    st.info('Showing ALL Open PRs from the full dataset (no Open PRs matched the current filters).')
+
+                # compute pending age if PR date exists
                 if pr_date_col and pr_date_col in open_df.columns:
                     open_df["Pending Age (Days)"] = (
                         pd.to_datetime(pd.Timestamp.today().date())
@@ -477,41 +494,28 @@ with T[1]:
                 else:
                     open_df["Pending Age (Days)"] = np.nan
 
-                # prepare summary aggregation — fall back to common column names if originals missing
+                # aggregation map
                 agg_map = {}
-                # PR Date
                 if pr_date_col and pr_date_col in open_df.columns:
                     agg_map[pr_date_col] = 'first'
-                # Pending Age present
                 agg_map['Pending Age (Days)'] = 'first'
-                # procurement category
                 pc_col = safe_col(open_df, ['procurement_category','procurement category','procurement_category'])
                 if pc_col: agg_map[pc_col] = 'first'
-                # product name
                 pn_col = safe_col(open_df, ['product_name','product name','productname'])
                 if pn_col: agg_map[pn_col] = 'first'
-                # net amount
                 if net_amount_col and net_amount_col in open_df.columns:
                     agg_map[net_amount_col] = 'sum'
-                # po/pr budget code
                 pcode_col = safe_col(open_df, ['po_budget_code','po budget code','pr_budget_code','pr budget code'])
                 if pcode_col: agg_map[pcode_col] = 'first'
-                # pr status
                 agg_map[pr_status_col] = 'first'
-                # buyer group / buyer.type
                 bg_col = safe_col(open_df, ['buyer_group','buyer group','buyer_group'])
                 if bg_col: agg_map[bg_col] = 'first'
-                # buyer type
-                bt_col = safe_col(open_df, ['buyer_type','buyer.type','buyer.type','buyer.type'])
+                bt_col = safe_col(open_df, ['buyer_type','buyer.type','buyer.type'])
                 if bt_col: agg_map[bt_col] = 'first'
-                # entity
                 if 'entity' in open_df.columns: agg_map['entity'] = 'first'
-                # po creator
                 if 'po_creator' in open_df.columns: agg_map['po_creator'] = 'first'
-                # purchase doc
                 if purchase_doc_col and purchase_doc_col in open_df.columns: agg_map[purchase_doc_col] = 'first'
 
-                # group by PR Number if available, else by index
                 group_by_col = pr_number_col_local if pr_number_col_local and pr_number_col_local in open_df.columns else None
                 if group_by_col:
                     open_summary = (
@@ -520,7 +524,6 @@ with T[1]:
                         .reset_index()
                     )
                 else:
-                    # fallback: create a PR Number column if missing
                     open_df = open_df.reset_index().rename(columns={'index':'_row_id'})
                     open_summary = (
                         open_df.groupby('_row_id')
@@ -528,13 +531,9 @@ with T[1]:
                         .reset_index()
                     )
 
-                # show KPIs and charts
-                try:
-                    st.metric("🔢 Open PRs", open_summary.shape[0])
-                except Exception:
-                    pass
+                # show count and charts
+                st.metric("🔢 Open PRs", open_summary.shape[0])
 
-                # monthly counts (by PR Date if present)
                 if pr_date_col and pr_date_col in open_summary.columns:
                     open_monthly_counts = (
                         pd.to_datetime(open_summary[pr_date_col], errors='coerce')
@@ -551,20 +550,19 @@ with T[1]:
                     except Exception:
                         return ''
 
-                # display styled dataframe
                 try:
                     styled = open_summary.copy()
-                    # rename some columns to friendly names if present
                     rename_map = {}
                     if group_by_col: rename_map[group_by_col] = 'PR Number'
                     if pr_date_col and pr_date_col in styled.columns: rename_map[pr_date_col] = 'PR Date Submitted'
                     if net_amount_col and net_amount_col in styled.columns: rename_map[net_amount_col] = 'Net Amount'
                     styled = styled.rename(columns=rename_map)
 
-                    st.dataframe(
-                        styled.style.applymap(highlight_age, subset=[col for col in styled.columns if 'Pending Age' in col or 'Pending Age (Days)'==col]),
-                        use_container_width=True,
-                    )
+                    highlight_cols = [c for c in styled.columns if 'Pending Age' in c or c == 'Pending Age (Days)']
+                    if highlight_cols:
+                        st.dataframe(styled.style.applymap(highlight_age, subset=highlight_cols), use_container_width=True)
+                    else:
+                        st.dataframe(styled, use_container_width=True)
                 except Exception:
                     st.dataframe(open_summary, use_container_width=True)
 
@@ -575,10 +573,9 @@ with T[1]:
                     st.bar_chart(ent_counts.set_index('Entity'), use_container_width=True)
                 else:
                     st.info('Entity column not found in Open PRs summary.')
-            else:
-                st.warning('⚠️ No open PRs match the current filters.')
         else:
             st.info("ℹ️ 'PR Status' column not found.")
+
     else:
         st.info('Need both PR Date and PO Create Date columns to compute SLA and lead times.')
 
