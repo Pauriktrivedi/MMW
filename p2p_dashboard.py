@@ -146,7 +146,7 @@ df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
 
 indirect_buyers = [
     'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
-    'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh'
+    'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
 ]
 df['po_buyer_type'] = df['po_creator'].apply(lambda x: 'Indirect' if str(x).strip() in indirect_buyers else 'Direct')
 
@@ -175,6 +175,7 @@ else:
 st.sidebar.header('Filters')
 FY = {
     'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
+    '2022': (pd.Timestamp('2022-04-01'), pd.Timestamp('2023-03-31')),
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-03-31')),
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-03-31')),
     '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-03-31'))
