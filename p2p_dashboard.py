@@ -272,15 +272,51 @@ with T[0]:
     if dcol and net_amount_col and net_amount_col in fil.columns:
         t = fil.dropna(subset=[dcol]).copy()
         t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
-        agg = t.groupby('month')[net_amount_col].sum().reset_index().sort_values('month')
-        agg['cr'] = agg[net_amount_col]/1e7
-        agg['cum'] = agg['cr'].cumsum()
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_bar(x=agg['month'].dt.strftime('%b-%Y'), y=agg['cr'], name='Monthly Spend (Cr)', text=agg['cr'])
-        fig.add_scatter(x=agg['month'].dt.strftime('%b-%Y'), y=agg['cum'], name='Cumulative (Cr)', mode='lines+markers', secondary_y=True)
-        fig.update_traces(texttemplate='%{text:.2f}', textposition='outside', selector=dict(type='bar'))
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        # Aggregate by month and entity
+        me = t.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+        if me.empty:
+            st.info('No monthly/entity data to plot.')
+        else:
+            # Pivot so each entity becomes a column (fill missing with 0)
+            pivot = me.pivot(index='month', columns='entity', values=net_amount_col).fillna(0).sort_index()
+            # Define fixed entity order and colors (Option B - fixed 4 entities)
+            fixed_entities = ['MEPL','MLPL','MMW','MMPL']
+            colors = {'MEPL':'#1f77b4','MLPL':'#ff7f0e','MMW':'#2ca02c','MMPL':'#d62728'}
+            # Ensure pivot has those columns (add missing as zeros) and keep additional entities appended after fixed ones
+            for ent in fixed_entities:
+                if ent not in pivot.columns:
+                    pivot[ent] = 0.0
+            # preserve other entities (if any) after the fixed ones
+            other_entities = [c for c in pivot.columns if c not in fixed_entities]
+            ordered_entities = [e for e in fixed_entities if e in pivot.columns] + other_entities
+            pivot = pivot[ordered_entities]
+
+            # Convert to Cr for plotting and labels
+            pivot_cr = pivot / 1e7
+            total_cr = pivot_cr.sum(axis=1)
+            cum_cr = total_cr.cumsum()
+
+            # Build stacked bar traces
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            for ent in ordered_entities:
+                ent_vals = pivot_cr[ent].values
+                # show text only for segments > 0
+                text_vals = [f"{v:.2f}" if v>0 else '' for v in ent_vals]
+                fig.add_trace(go.Bar(x=pivot_cr.index.strftime('%b-%Y'), y=ent_vals, name=ent, marker_color=colors.get(ent, None), text=text_vals, textposition='inside'), secondary_y=False)
+
+            # Add cumulative line on secondary y-axis
+            fig.add_trace(go.Scatter(x=total_cr.index.strftime('%b-%Y'), y=cum_cr, mode='lines+markers', name='Cumulative (Cr)', line=dict(color='black', width=2)), secondary_y=True)
+
+            # Layout tweaks
+            fig.update_layout(barmode='stack', xaxis_tickangle=-45, title='Monthly Spend (stacked by Entity) + Cumulative')
+            # Y-axis titles
+            fig.update_yaxes(title_text='Monthly Spend (Cr)', secondary_y=False)
+            fig.update_yaxes(title_text='Cumulative (Cr)', secondary_y=True)
+
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info('Monthly Spend not available — need date and Net Amount columns.')
+
     else:
         st.info('Monthly Spend not available — need date and Net Amount columns.')
 
@@ -318,8 +354,8 @@ with T[0]:
                 bt['month'] = bt[dcol].dt.to_period('M').dt.to_timestamp()
                 # determine default buyers to show: top 5 by spend
                 top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
-                pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
-                if pick_mode == 'Choose buyers':
+                pick_buyers = st.selectbox('Drill: Buyer trend — pick preselected group or choose specific buyer', ['Top 5 by Spend', '-- pick buyers --'])
+                if pick_buyers == '-- pick buyers --':
                     chosen = st.multiselect('Pick buyers to show on trend', sorted(buyer_spend['buyer_display'].astype(str).unique().tolist()), default=top_buyers)
                 else:
                     chosen = top_buyers
