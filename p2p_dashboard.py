@@ -202,19 +202,38 @@ for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
     if c not in fil.columns:
         fil[c] = ''
 
-choices_bt = sorted([str(c) for c in fil['buyer_type'].dropna().unique().tolist() if str(c).strip().lower() != 'other']) if 'buyer_type' in fil.columns else ['Direct','Indirect']
+# ---- Buyer type normalization & robust sidebar choices ----
+# Ensure buyer_type exists and is normalized for reliable filtering
+# Prefer buyer_type, else fall back to po_buyer_type if present
+if 'buyer_type' not in fil.columns or fil['buyer_type'].isna().all():
+    if 'po_buyer_type' in fil.columns:
+        fil['buyer_type'] = fil['po_buyer_type']
+    else:
+        fil['buyer_type'] = ''
+
+# Normalize values: strip whitespace, title case (Direct / Indirect), and coerce unexpected values to 'Indirect'
+fil['buyer_type'] = fil['buyer_type'].fillna('').astype(str).str.strip().str.title()
+
+# Map common variants to Direct/Indirect (defensive)
+fil.loc[fil['buyer_type'].str.lower().isin(['direct', 'd']), 'buyer_type'] = 'Direct'
+fil.loc[fil['buyer_type'].str.lower().isin(['indirect', 'i', 'in']), 'buyer_type'] = 'Indirect'
+
+# Any remaining empty or unknown values -> Indirect (safe default)
+fil.loc[~fil['buyer_type'].isin(['Direct', 'Indirect']), 'buyer_type'] = 'Indirect'
+
+# --- Sidebar debug table to inspect buyer_type distribution ---
+st.sidebar.markdown('**Buyer Type — Debug**')
+vc = fil['buyer_type'].value_counts(dropna=False).rename_axis('buyer_type').reset_index(name='count')
+# show small table in sidebar so user can inspect values quickly
+st.sidebar.dataframe(vc, use_container_width=True)
+
+# Now compute sidebar choices from the normalized column
+choices_bt = sorted(fil['buyer_type'].dropna().unique().tolist())
+# show all by default
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
-
-entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip() != '']) if 'entity' in fil.columns else []
-sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
-sel_o = st.sidebar.multiselect('PO Ordered By', sorted([str(x) for x in fil['po_creator'].dropna().unique().tolist() if str(x).strip()!='']), default=sorted([str(x) for x in fil['po_creator'].dropna().unique().tolist() if str(x).strip()!='']))
-
+# apply filter (only if user selected something)
 if sel_b:
     fil = fil[fil['buyer_type'].isin(sel_b)]
-if sel_e and 'entity' in fil.columns:
-    fil = fil[fil['entity'].isin(sel_e)]
-if sel_o:
-    fil = fil[fil['po_creator'].isin(sel_o)]
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
