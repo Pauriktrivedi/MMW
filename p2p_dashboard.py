@@ -119,38 +119,54 @@ if not df.empty:
 else:
     df['buyer_type'] = pd.Series(dtype=object)
 
-# PO orderer -> creator mapping (example mapping) -- robust and case-insensitive
+# PO orderer -> creator mapping (example mapping)
 map_orderer = {
     'mmw2324030': 'Dhruv', 'mmw2324062': 'Deepak', 'mmw2425154': 'Mukul', 'mmw2223104': 'Paurik',
     'mmw2021181': 'Nayan', 'mmw2223014': 'Aatish', 'mmw_ext_002': 'Deepakex', 'mmw2425024': 'Kamlesh',
 }
-# Normalize po_orderer values and build po_creator with fallbacks
+# canonicalize raw po_orderer then map
 if 'po_orderer' in df.columns:
-    # keep raw original trimmed
-    df['po_orderer_raw'] = df['po_orderer'].fillna('').astype(str).str.strip()
-    # normalized key used for mapping (lowercase, remove spaces)
-    df['po_orderer_norm'] = df['po_orderer_raw'].str.lower().str.replace('\s+','', regex=True)
-    # lower-case map keys for case-insensitive matching
-    map_orderer_l = { str(k).lower().replace(' ',''): v for k,v in map_orderer.items() }
-    # map and fallback to original raw value when not found
-    df['po_creator'] = df['po_orderer_norm'].map(map_orderer_l).fillna(df['po_orderer_raw'])
+    df['po_orderer_raw'] = df['po_orderer'].fillna('').astype(str)
+    df['po_orderer_key'] = df['po_orderer_raw'].str.lower().str.replace(r"\s+", "", regex=True)
+    df['po_creator'] = df['po_orderer_key'].map(map_orderer).fillna(df['po_orderer_raw'])
 else:
-    df['po_orderer_raw'] = ''
-    df['po_orderer_norm'] = ''
     df['po_creator'] = pd.Series('', index=df.index)
 
-# clean up common missing tokens and unify
-df['po_creator'] = df['po_creator'].replace({'': 'Unknown', 'N/A': 'Unknown', 'NA': 'Unknown', 'nan': 'Unknown'})
-# final buyer display: prefer mapped po_creator; if Unknown use buyer_type; fallback to 'Unknown'
-if 'buyer_type' not in df.columns:
-    df['buyer_type'] = 'Unknown'
+# ----------------- PR requester detection (for PR-only rows) -----------------
+# try to find columns that indicate who created/raised the PR
+pr_requester_col = safe_col(df, ['pr_created_by','pr_creator','requested_by','created_by','pr raiser','pr raised by'])
 
-df['buyer_display'] = np.where(
-    df['po_creator'].isin(['', 'Unknown', 'N/A', 'NA']),
-    df['buyer_type'].fillna('Unknown').astype(str),
-    df['po_creator'].astype(str)
-)
+# ----------------- buyer_display logic (FIX for unknown mapping)
+# Priority:
+# 1. If Purchase Doc exists and po_creator is non-empty -> use po_creator
+# 2. Else if pr requester exists -> use that
+# 3. Else if buyer_group mapped name exists -> use it
+# 4. Else fallback to 'Unknown (PR only)'
 
+def compute_buyer_display(row):
+    po = row.get(purchase_doc_col, None) if purchase_doc_col else None
+    po_creator = str(row.get('po_creator', '')).strip()
+    if pd.notna(po) and str(po).strip() != '' and po_creator:
+        return po_creator
+    # try PR requester
+    if pr_requester_col and pr_requester_col in row.index:
+        val = str(row.get(pr_requester_col, '')).strip()
+        if val:
+            return val
+    # try buyer_group name or buyer_type
+    bg = str(row.get('buyer_group', '')).strip()
+    if bg and bg.lower() not in ['na','not available','n/a']:
+        return bg
+    bt = str(row.get('buyer_type', '')).strip()
+    if bt:
+        return bt
+    return 'Unknown (PR only)'
+
+# compute into dataframe
+if not df.empty:
+    df['buyer_display'] = df.apply(compute_buyer_display, axis=1)
+else:
+    df['buyer_display'] = pd.Series(dtype=object)
 
 # ----------------- Sidebar filters -----------------
 st.sidebar.header('Filters')
@@ -179,7 +195,7 @@ if date_basis:
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
 
 # defensive creation of filter columns
-for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
+for c in ['buyer_display', 'po_creator', 'po_vendor', 'entity']:
     if c not in fil.columns:
         fil[c] = ''
 
@@ -242,6 +258,13 @@ with T[0]:
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
+    # Buyer-wise spend (new)
+    st.markdown('---')
+    if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
+        b = fil.groupby('buyer_display')[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+        b['cr'] = b[net_amount_col]/1e7
+        st.plotly_chart(px.bar(b.head(20), x='buyer_display', y='cr', text='cr', labels={'buyer_display':'Buyer','cr':'Cr'}).update_traces(texttemplate='%{text:.2f}', textposition='outside').update_layout(xaxis_tickangle=-45), use_container_width=True)
+
     st.markdown('---')
     # Monthly spend + cumulative
     dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
@@ -275,28 +298,9 @@ with T[0]:
                 fig_e.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig_e, use_container_width=True)
 
-    st.markdown('---')
-    # ----------------- Buyer-wise Spend -----------------
-    st.subheader('Buyer-wise Spend (Top 20)')
-    if net_amount_col and net_amount_col in fil.columns:
-        bw = fil.copy()
-        # prefer po_creator (ordered by) for buyer; fallback to buyer_type or generic 'Unknown'
-        bw['buyer_display'] = bw.get('po_creator', bw.get('buyer_type', pd.Series(['Unknown']*len(bw)))).fillna('Unknown').astype(str)
-        bwagg = bw.groupby('buyer_display', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        bwagg['cr'] = bwagg[net_amount_col]/1e7
-        if not bwagg.empty:
-            fig_b = px.bar(bwagg.head(20), x='buyer_display', y='cr', text='cr', labels={'buyer_display':'Buyer','cr':'Cr'})
-            fig_b.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-            fig_b.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_b, use_container_width=True)
-            st.dataframe(bwagg.head(200).rename(columns={net_amount_col:'net_amount', 'cr':'cr_in_cr'}), use_container_width=True)
-    else:
-        st.info('Net Amount column not present — cannot compute buyer-wise spend.')
-
 # ----------------- PR/PO Timing -----------------
 with T[1]:
     st.subheader('SLA (PR→PO leadtime)')
-    # SLA gauge + lead time buckets
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
         ld = fil.dropna(subset=[pr_col, po_create_col]).copy()
         ld['lead_time'] = (ld[po_create_col] - ld[pr_col]).dt.days
@@ -304,100 +308,15 @@ with T[1]:
         fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
         st.plotly_chart(fig, use_container_width=True)
 
-        # lead time distribution buckets
-        bins = [0,7,15,30,60,90,9999]
-        labels = ['0-7','8-15','16-30','31-60','61-90','90+']
-        ld['lt_bucket'] = pd.cut(ld['lead_time'], bins=bins, labels=labels)
-        bucket_pct = ld['lt_bucket'].value_counts(normalize=True).reindex(labels, fill_value=0).reset_index()
-        bucket_pct.columns = ['Bucket','Pct']
-        bucket_pct['Pct'] = bucket_pct['Pct']*100
-        st.plotly_chart(px.bar(bucket_pct, x='Bucket', y='Pct', text='Pct').update_traces(texttemplate='%{text:.1f}%', textposition='outside'), use_container_width=True)
-    else:
-        st.info('Need PR Date and PO Create Date to compute lead times.')
+    # Open PRs (PRs without a PO) — new addition
+    st.markdown('---')
+    st.subheader('Open PRs (PR present, no PO)')
+    if pr_number_col and purchase_doc_col:
+        open_prs = fil[fil[pr_number_col].notna() & fil[purchase_doc_col].isna()].copy()
+        show_cols = [c for c in [pr_number_col, pr_col, 'buyer_display', pr_budget_code_col, pr_budget_desc_col, net_amount_col] if c and c in open_prs.columns]
+        st.dataframe(open_prs[show_cols].sort_values(pr_col, ascending=False).head(500), use_container_width=True)
 
-    # PR & PO per Month
-    st.subheader('PR & PO per Month')
-    tmp = fil.copy()
-    if pr_col and pr_col in tmp.columns:
-        tmp['pr_month'] = tmp[pr_col].dt.to_period('M')
-    else:
-        tmp['pr_month'] = pd.NaT
-    if po_create_col and po_create_col in tmp.columns:
-        tmp['po_month'] = tmp[po_create_col].dt.to_period('M')
-    else:
-        tmp['po_month'] = pd.NaT
-    try:
-        if pr_number_col and purchase_doc_col:
-            ms = tmp.groupby('pr_month').agg({pr_number_col:'count', purchase_doc_col:'count'}).reset_index()
-            ms.columns=['Month','PR Count','PO Count']
-            ms['Month'] = ms['Month'].astype(str)
-            if not ms.empty:
-                st.line_chart(ms.set_index('Month'), use_container_width=True)
-    except Exception:
-        pass
-
-    # Weekday split for PR and PO
-    st.subheader('Weekday Split')
-    wd = fil.copy()
-    if pr_col and pr_col in wd.columns:
-        wd['pr_wk'] = wd[pr_col].dt.day_name()
-    else:
-        wd['pr_wk'] = ''
-    if po_create_col and po_create_col in wd.columns:
-        wd['po_wk'] = wd[po_create_col].dt.day_name()
-    else:
-        wd['po_wk'] = ''
-    order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-    prc = wd['pr_wk'].value_counts().reindex(order, fill_value=0)
-    poc = wd['po_wk'].value_counts().reindex(order, fill_value=0)
-    c1,c2 = st.columns(2)
-    c1.bar_chart(prc)
-    c2.bar_chart(poc)
-
-    # Open PRs (status-based) — show table and aging
-    st.subheader('Open PRs')
-    pr_status_col = safe_col(fil, ['pr_status','pr status','prstatus'])
-    if pr_status_col and pr_status_col in fil.columns and pr_col and pr_col in fil.columns:
-        op = fil[fil[pr_status_col].astype(str).isin(['Approved','InReview','In Review','Open','Raised','Submitted'])].copy()
-        if not op.empty:
-            op['pending_age_d'] = (pd.Timestamp.now().normalize() - op[pr_col]).dt.days
-            cols = [c for c in [pr_number_col, pr_col, 'pending_age_d', pr_budget_code_col, pr_budget_desc_col, 'product_name', net_amount_col, 'pr_status', 'entity', 'po_creator', purchase_doc_col] if c and c in op.columns]
-            st.dataframe(op[cols].sort_values('pending_age_d', ascending=False).head(500), use_container_width=True)
-        else:
-            st.info('No open PRs found with expected PR status values.')
-    else:
-        st.info('PR Status or PR Date column not found to show Open PRs.')
-
-    # Lead time by Buyer Type & Buyer
-    st.subheader('Lead Time by Buyer Type & Buyer')
-    if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
-        ld2 = fil.dropna(subset=[pr_col, po_create_col]).copy()
-        ld2['lead_time'] = (ld2[po_create_col] - ld2[pr_col]).dt.days
-        if 'buyer_type' in ld2.columns:
-            st.dataframe(ld2.groupby('buyer_type')['lead_time'].mean().round(1).reset_index().sort_values('lead_time'), use_container_width=True)
-        if 'po_creator' in ld2.columns:
-            st.dataframe(ld2.groupby('po_creator')['lead_time'].mean().round(1).reset_index().sort_values('lead_time'), use_container_width=True)
-
-    # Daily PR Trends
-    st.subheader('Daily PR Submissions')
-    if pr_col and pr_col in fil.columns:
-        daily = fil.copy()
-        daily['pr_date_only'] = pd.to_datetime(daily[pr_col], errors='coerce')
-        dtrend = daily.groupby('pr_date_only').size().reset_index(name='PR Count')
-        if not dtrend.empty:
-            st.plotly_chart(px.line(dtrend, x='pr_date_only', y='PR Count', title='Daily PRs'), use_container_width=True)
-
-    # Monthly Unique PO Generation
-    st.subheader('Monthly Unique PO Generation')
-    if purchase_doc_col and po_create_col and purchase_doc_col in fil.columns and po_create_col in fil.columns:
-        pm = fil.dropna(subset=[po_create_col, purchase_doc_col]).copy()
-        pm['po_month'] = pm[po_create_col].dt.to_period('M')
-        mcount = pm.groupby('po_month')[purchase_doc_col].nunique().reset_index(name='Unique PO Count')
-        mcount['po_month'] = mcount['po_month'].astype(str)
-        if not mcount.empty:
-            st.plotly_chart(px.bar(mcount, x='po_month', y='Unique PO Count', text='Unique PO Count', title='Unique POs per Month').update_traces(textposition='outside'), use_container_width=True)
-
-# ----------------- PO Approval Summary -----------------
+# ----------------- PO Approval -----------------
 with T[2]:
     st.subheader('📋 PO Approval Summary')
     po_create = po_create_col
