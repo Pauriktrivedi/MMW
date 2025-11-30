@@ -173,18 +173,6 @@ else:
 
 # ----------------- Sidebar filters -----------------
 st.sidebar.header('Filters')
-# Explanation of Direct vs Indirect Buyers
-st.sidebar.markdown("""
-### 🧾 Buyer Type Logic
-- **Indirect Buyers** → A predefined list of strategic procurement users:
-  **Aatish, Deepak, Deepakex, Dhruv, Dilip, Mukul, Nayan, Paurik, Kamlesh, Suresh, Priyam**
-- **Direct Buyers** → Anyone **not** in the above list.
-
-This classification controls:
-- Buyer-wise spend
-- PR/PO timing analysis
-- Filters & scorecard logic
-""")
 FY = {
     'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-03-31')),
@@ -258,6 +246,7 @@ if st.sidebar.button('Reset Filters'):
 T = st.tabs(['KPIs & Spend','PR/PO Timing','PO Approval','Delivery','Vendors','Dept & Services','Unit-rate Outliers','Forecast','Scorecards','Search','Full Data'])
 
 # ----------------- KPIs & Spend -----------------
+# (Buyer-wise Spend moved under Entity Spend section) -----------------
 with T[0]:
     st.header('P2P Dashboard — Indirect (KPIs & Spend)')
     c1,c2,c3,c4,c5 = st.columns(5)
