@@ -55,6 +55,8 @@ def load_all(file_list=None):
     return x
 
 
+# load data
+
 df = load_all()
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
@@ -327,9 +329,11 @@ with T[0]:
                     name='Cumulative (Cr)',
                     line=dict(color=highlight_color, width=3),
                     marker=dict(color=highlight_color, size=6),
-                    text=[f"{v:.2f}" for v in cum_cr.values],
+                    # round to 0 decimals and show as integers
+                    text=[f"{int(round(v, 0))}" for v in cum_cr.values],
+                    # position and slightly smaller font to avoid overlap
                     textposition='top center',
-                    textfont=dict(color=highlight_color, size=11),
+                    textfont=dict(color=highlight_color, size=9),
                     hovertemplate='%{x}<br>Cumulative: %{y:.2f} Cr<extra></extra>'
                 ),
                 secondary_y=True
@@ -614,4 +618,3 @@ with T[10]:
         st.error(f'Could not display full data: {e}')
 
 # EOF
-
