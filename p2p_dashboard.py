@@ -465,7 +465,9 @@ with T[1]:
         pr_number_col_local = pr_number_col if pr_number_col in fil.columns else safe_col(fil, ['pr_number','pr number','pr_no','pr no'])
 
         if pr_status_col and pr_status_col in fil.columns:
-            open_df = fil[fil[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+            # Use original df instead of filtered df
+            open_df = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+
             if not open_df.empty:
                 if pr_date_col and pr_date_col in open_df.columns:
                     open_df["Pending Age (Days)"] = (
