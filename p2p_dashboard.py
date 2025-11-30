@@ -92,7 +92,8 @@ for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_
     if c and c not in df.columns:
         df[c] = ''
 
-# ----------------- Buyer/PO creator mapping -----------------
+# ----------------- Buyer/PO creator mapping (UPDATED) -----------------
+# Map buyer group code if present
 if 'buyer_group' in df.columns:
     try:
         df['buyer_group_code'] = df['buyer_group'].astype(str).str.extract('([0-9]+)')[0].astype(float)
@@ -119,52 +120,51 @@ if not df.empty:
 else:
     df['buyer_type'] = pd.Series(dtype=object)
 
-# PO orderer -> creator mapping (example mapping)
-map_orderer = {
-    'mmw2324030': 'Dhruv', 'mmw2324062': 'Deepak', 'mmw2425154': 'Mukul', 'mmw2223104': 'Paurik',
-    'mmw2021181': 'Nayan', 'mmw2223014': 'Aatish', 'mmw_ext_002': 'Deepakex', 'mmw2425024': 'Kamlesh',
-}
-# canonicalize raw po_orderer then map
-if 'po_orderer' in df.columns:
-    df['po_orderer_raw'] = df['po_orderer'].fillna('').astype(str)
-    df['po_orderer_key'] = df['po_orderer_raw'].str.lower().str.replace(r"\s+", "", regex=True)
-    df['po_creator'] = df['po_orderer_key'].map(map_orderer).fillna(df['po_orderer_raw'])
+# PO Orderer -> PO.Creator mapping (robust, upper-case-aware) and buyer_display creation
+po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
+if po_orderer_col and po_orderer_col in df.columns:
+    df[po_orderer_col] = df[po_orderer_col].fillna('N/A').astype(str).str.strip()
 else:
-    df['po_creator'] = pd.Series('', index=df.index)
+    df['po_orderer'] = 'N/A'
+    po_orderer_col = 'po_orderer'
 
-# ----------------- PR requester detection (for PR-only rows) -----------------
-# try to find columns that indicate who created/raised the PR
-pr_requester_col = safe_col(df, ['pr_created_by','pr_creator','requested_by','created_by','pr raiser','pr raised by'])
+# mapping dictionary (kept upper-case keys for robust mapping)
+o_created_by_map = {
+    'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
+    'MMW2021181': 'Nayan', 'MMW2223014': 'Aatish', 'MMW_EXT_002': 'Deepakex', 'MMW2425024': 'Kamlesh',
+    'MMW2021184': 'Suresh', 'N/A': 'Dilip'
+}
 
-# ----------------- buyer_display logic (FIX for unknown mapping)
-# Priority:
-# 1. If Purchase Doc exists and po_creator is non-empty -> use po_creator
-# 2. Else if pr requester exists -> use that
-# 3. Else if buyer_group mapped name exists -> use it
-# 4. Else fallback to 'Unknown (PR only)'
+# build normalized mapping (upper-case keys)
+upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
+# derive PO.Creator
+df['po_creator'] = df[po_orderer_col].astype(str).str.upper().map(upper_map).fillna(df[po_orderer_col].astype(str))
+# force N/A -> Dilip
+df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
 
-def compute_buyer_display(row):
-    po = row.get(purchase_doc_col, None) if purchase_doc_col else None
-    po_creator = str(row.get('po_creator', '')).strip()
-    if pd.notna(po) and str(po).strip() != '' and po_creator:
-        return po_creator
-    # try PR requester
-    if pr_requester_col and pr_requester_col in row.index:
-        val = str(row.get(pr_requester_col, '')).strip()
-        if val:
-            return val
-    # try buyer_group name or buyer_type
-    bg = str(row.get('buyer_group', '')).strip()
-    if bg and bg.lower() not in ['na','not available','n/a']:
-        return bg
-    bt = str(row.get('buyer_type', '')).strip()
-    if bt:
-        return bt
-    return 'Unknown (PR only)'
+# indirect buyers list
+indirect_buyers = [
+    'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
+    'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh'
+]
+# PO BuyerType
+df['po_buyer_type'] = df['po_creator'].apply(lambda x: 'Indirect' if str(x).strip() in indirect_buyers else 'Direct')
 
-# compute into dataframe
+# Create buyer_display: prefer PO creator if PO exists, else PR requester if available, else "PR only - Unassigned"
+pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name','pr_requester_name'])
+
+def resolve_buyer(row):
+    # if purchase doc / PO exists, prefer PO creator
+    if purchase_doc_col and pd.notna(row.get(purchase_doc_col)) and str(row.get(purchase_doc_col)).strip() != '':
+        return row.get('po_creator', 'Unknown')
+    # else PR-only: try pr_requester
+    if pr_requester_col and pd.notna(row.get(pr_requester_col)) and str(row.get(pr_requester_col)).strip() != '':
+        return row.get(pr_requester_col)
+    return 'PR only - Unassigned'
+
+# apply
 if not df.empty:
-    df['buyer_display'] = df.apply(compute_buyer_display, axis=1)
+    df['buyer_display'] = df.apply(resolve_buyer, axis=1)
 else:
     df['buyer_display'] = pd.Series(dtype=object)
 
@@ -195,7 +195,7 @@ if date_basis:
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
 
 # defensive creation of filter columns
-for c in ['buyer_display', 'po_creator', 'po_vendor', 'entity']:
+for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity']:
     if c not in fil.columns:
         fil[c] = ''
 
@@ -258,13 +258,6 @@ with T[0]:
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
     c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
 
-    # Buyer-wise spend (new)
-    st.markdown('---')
-    if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
-        b = fil.groupby('buyer_display')[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        b['cr'] = b[net_amount_col]/1e7
-        st.plotly_chart(px.bar(b.head(20), x='buyer_display', y='cr', text='cr', labels={'buyer_display':'Buyer','cr':'Cr'}).update_traces(texttemplate='%{text:.2f}', textposition='outside').update_layout(xaxis_tickangle=-45), use_container_width=True)
-
     st.markdown('---')
     # Monthly spend + cumulative
     dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
@@ -308,15 +301,7 @@ with T[1]:
         fig = go.Figure(go.Indicator(mode='gauge+number', value=float(avg), number={'suffix':' d'}, gauge={'axis':{'range':[0,max(14,avg*1.2 if avg else 14)]}}))
         st.plotly_chart(fig, use_container_width=True)
 
-    # Open PRs (PRs without a PO) — new addition
-    st.markdown('---')
-    st.subheader('Open PRs (PR present, no PO)')
-    if pr_number_col and purchase_doc_col:
-        open_prs = fil[fil[pr_number_col].notna() & fil[purchase_doc_col].isna()].copy()
-        show_cols = [c for c in [pr_number_col, pr_col, 'buyer_display', pr_budget_code_col, pr_budget_desc_col, net_amount_col] if c and c in open_prs.columns]
-        st.dataframe(open_prs[show_cols].sort_values(pr_col, ascending=False).head(500), use_container_width=True)
-
-# ----------------- PO Approval -----------------
+# ----------------- PO Approval Summary -----------------
 with T[2]:
     st.subheader('📋 PO Approval Summary')
     po_create = po_create_col
