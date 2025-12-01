@@ -448,18 +448,53 @@ with T[0]:
                     bt['month'] = bt['_month_bucket']
                     return bt.groupby(['month','buyer_display'], dropna=False)[net_amount_col].sum().reset_index()
                 bt_grouped = memoized_compute('buyer_trend', filter_signature, build_buyer_trend)
-                top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
-                pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
-                if pick_mode == 'Choose buyers':
-                    chosen = st.multiselect('Pick buyers to show on trend', sorted(buyer_spend['buyer_display'].astype(str).unique().tolist()), default=top_buyers)
+                if bt_grouped.empty:
+                    st.info('No buyer trend data for the current filters.')
                 else:
-                    chosen = top_buyers
-                if chosen:
-                    g_b = bt_grouped[bt_grouped['buyer_display'].isin(chosen)].copy()
-                    if not g_b.empty:
-                        fig_b_trend = px.line(g_b, x=g_b['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='buyer_display', labels={net_amount_col:'Net Amount','x':'Month'}, title='Buyer-wise Monthly Trend')
-                        fig_b_trend.update_layout(xaxis_tickangle=-45)
-                        st.plotly_chart(fig_b_trend, use_container_width=True)
+                    top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
+                    pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
+                    if pick_mode == 'Choose buyers':
+                        chosen = st.multiselect('Pick buyers to show on trend', sorted(buyer_spend['buyer_display'].astype(str).unique().tolist()), default=top_buyers)
+                    else:
+                        chosen = top_buyers
+
+                    if chosen:
+                        g_b = bt_grouped[bt_grouped['buyer_display'].isin(chosen)].copy()
+                        if not g_b.empty:
+                            g_b['month'] = g_b['month'].dt.to_period('M').dt.to_timestamp()
+                            full_range = pd.period_range(g_b['month'].min().to_period('M'), g_b['month'].max().to_period('M'), freq='M').to_timestamp()
+                            pivot = (
+                                g_b.pivot_table(index='month', columns='buyer_display', values=net_amount_col, aggfunc='sum')
+                                  .reindex(full_range, fill_value=0)
+                                  .rename_axis('month')
+                                  .reset_index()
+                            )
+                            trend_long = pivot.melt(id_vars='month', var_name='buyer_display', value_name='value')
+                            rolling_window = st.slider('Smooth buyer trend (months)', 1, 6, 1, key='buyer_trend_smooth')
+                            if rolling_window > 1:
+                                trend_long['value'] = (
+                                    trend_long.sort_values(['buyer_display','month'])
+                                              .groupby('buyer_display')['value']
+                                              .transform(lambda s: s.rolling(rolling_window, min_periods=1).mean())
+                                )
+                            trend_long = trend_long[trend_long['buyer_display'].isin(chosen)]
+                            fig_b_trend = px.line(
+                                trend_long,
+                                x='month',
+                                y='value',
+                                color='buyer_display',
+                                labels={'value':'Net Amount','month':'Month','buyer_display':'Buyer'},
+                                title='Buyer-wise Monthly Trend'
+                            )
+                            fig_b_trend.update_layout(
+                                xaxis_tickformat='%b-%Y',
+                                hovermode='x unified',
+                                legend_title_text='Buyer'
+                            )
+                            fig_b_trend.update_traces(mode='lines+markers')
+                            st.plotly_chart(fig_b_trend, use_container_width=True)
+                        else:
+                            st.info('No buyer trend rows for the selected buyers.')
         except Exception as e:
             st.error(f'Could not render Buyer Trend: {e}')
     else:
