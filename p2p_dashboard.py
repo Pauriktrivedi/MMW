@@ -517,66 +517,41 @@ with T[1]:
         pr_number_col_local = pr_number_col if pr_number_col in df.columns else safe_col(df, ['pr_number','pr number','pr_no','pr no'])
 
         if pr_status_col and pr_status_col in df.columns:
-            # prefer filtered first
-            open_df_filtered = fil[fil[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
-            using_global = False
-            if open_df_filtered.empty:
-                # fallback to full dataset
-                open_df_global = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
-                if not open_df_global.empty:
-                    try:
-                        # 1) Ensure buyer_group_code exists on global and map PR-level buyer_type from BG code (same logic as main dataset)
-                        if 'buyer_group' in open_df_global.columns:
-                            try:
-                                open_df_global['buyer_group_code'] = open_df_global['buyer_group'].astype(str).str.extract('([0-9]+)')[0].astype(float)
-                            except Exception:
-                                open_df_global['buyer_group_code'] = np.nan
-
-                        def _map_buyer_type_pr(row_val, row_code):
-                            try:
-                                if pd.isna(row_val) or str(row_val).strip() == '' or str(row_val).strip().lower() in ['not available','na','n/a']:
-                                    return 'Indirect'
-                                if str(row_val).strip().upper() in ['ME_BG17','MLBG16']:
-                                    return 'Direct'
-                                if not pd.isna(row_code) and 1 <= int(row_code) <= 9:
-                                    return 'Direct'
-                                if not pd.isna(row_code) and 10 <= int(row_code) <= 18:
-                                    return 'Indirect'
-                            except Exception:
-                                pass
-                            return 'Indirect'
-
-                        open_df_global['buyer_type_pr'] = open_df_global.apply(lambda r: _map_buyer_type_pr(r.get('buyer_group', ''), r.get('buyer_group_code', np.nan)), axis=1)
-
-                        # 2) Build effective_buyer_type: if PR has a PO use po_buyer_type else use PR-level mapping
-                        open_df_global['po_buyer_type'] = open_df_global.get('po_buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
-                        open_df_global['buyer_type'] = open_df_global.get('buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna(open_df_global['buyer_type_pr'])
-
-                        has_po_mask = (open_df_global[purchase_doc_col].astype(str).fillna('').str.strip() != '') if (purchase_doc_col and purchase_doc_col in open_df_global.columns) else pd.Series(False, index=open_df_global.index)
-                        open_df_global['effective_buyer_type'] = np.where(has_po_mask, open_df_global['po_buyer_type'].astype(str).str.title(), open_df_global['buyer_type_pr'].astype(str).str.title())
-
-                        # apply buyer-type sidebar selection if any
-                        if sel_b:
-                            open_df_global = open_df_global[open_df_global['effective_buyer_type'].isin(sel_b)].copy()
-                    except Exception:
-                        pass
-
-                    if not open_df_global.empty:
-                        open_df = open_df_global
-                        using_global = True
+            def prepare_open_source(source_df: pd.DataFrame) -> pd.DataFrame:
+                """Ensure buyer columns exist and re-apply Buyer Type selection locally."""
+                base = source_df.copy()
+                if 'buyer_type' not in base.columns or base['buyer_type'].isna().all():
+                    base['buyer_type'] = compute_buyer_type_vectorized(base)
+                if 'po_buyer_type' not in base.columns or base['po_buyer_type'].isna().all():
+                    creator_clean = base.get('po_creator', pd.Series('', index=base.index)).fillna('').astype(str).str.strip()
+                    base['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+                if 'has_po' not in base.columns:
+                    if purchase_doc_col and purchase_doc_col in base.columns:
+                        base['has_po'] = base[purchase_doc_col].astype(str).fillna('').str.strip() != ''
                     else:
-                        open_df = open_df_filtered
-                else:
-                    open_df = open_df_filtered
-            else:
-                # already filtered version has open PRs; ensure buyer-type filter already applied via fil
-                open_df = open_df_filtered
+                        base['has_po'] = False
+                eff = np.where(base['has_po'], base['po_buyer_type'].fillna('Indirect'), base['buyer_type'].fillna('Indirect'))
+                base['effective_buyer_type'] = pd.Series(eff, index=base.index).astype(str).str.title()
+                base.loc[~base['effective_buyer_type'].isin(['Direct','Indirect']), 'effective_buyer_type'] = 'Indirect'
+                if sel_b:
+                    base = base[base['effective_buyer_type'].isin(sel_b)]
+                return base
+
+            using_global = False
+            scoped_df = prepare_open_source(fil)
+            open_df = scoped_df[scoped_df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
 
             if open_df.empty:
-                st.warning('⚠️ No open PRs found (neither filtered nor global).')
+                global_df = prepare_open_source(df)
+                open_df = global_df[global_df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
+                if not open_df.empty:
+                    using_global = True
+
+            if open_df.empty:
+                st.warning('⚠️ No open PRs match the current filters.')
             else:
                 if using_global:
-                    st.info('Showing ALL Open PRs from the full dataset (after applying Buyer Type if selected).')
+                    st.info('No filtered Open PRs were found — showing all Open PRs after applying only the Buyer Type selection.')
 
                 # compute pending age if PR date exists
                 if pr_date_col and pr_date_col in open_df.columns:
@@ -603,6 +578,7 @@ with T[1]:
                 bt_col = safe_col(open_df, ['buyer_type','buyer.type','buyer.type'])
                 if bt_col: agg_map[bt_col] = 'first'
                 if 'entity' in open_df.columns: agg_map['entity'] = 'first'
+                if 'effective_buyer_type' in open_df.columns: agg_map['effective_buyer_type'] = 'first'
                 if 'po_creator' in open_df.columns: agg_map['po_creator'] = 'first'
                 if purchase_doc_col and purchase_doc_col in open_df.columns: agg_map[purchase_doc_col] = 'first'
 
