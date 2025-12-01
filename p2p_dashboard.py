@@ -655,6 +655,8 @@ with T[2]:
         st.subheader('📄 PO Approval Details')
         show_cols = [col for col in [ 'po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if col]
         po_detail = po_app_df[show_cols].sort_values('approval_lead_time', ascending=False)
+        if purchase_doc_col and purchase_doc_col in po_detail.columns:
+            po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
         st.dataframe(po_detail, use_container_width=True)
     else:
         st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
