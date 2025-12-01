@@ -50,12 +50,18 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     """Classify PRs into Direct/Indirect using Buyer Group + numeric code."""
     if df.empty:
         return pd.Series(dtype=object)
-    if 'buyer_group' not in df.columns:
+
+    group_col = safe_col(df, ['buyer_group', 'Buyer Group', 'buyer group'])
+    if not group_col:
         st.warning("⚠️ 'Buyer Group' column not found. All Buyer.Type set to 'Unknown'.")
         return pd.Series('Unknown', index=df.index, dtype=object)
 
-    bg_raw = df['buyer_group'].fillna('').astype(str).str.strip()
-    codes = pd.to_numeric(df.get('buyer_group_code', pd.Series(np.nan, index=df.index)), errors='coerce')
+    bg_raw = df[group_col].fillna('').astype(str).str.strip()
+    code_series = pd.to_numeric(bg_raw.str.extract(r'(\d+)')[0], errors='coerce')
+
+    # Keep both normalized and user-facing code columns for downstream use.
+    df['buyer_group_code'] = code_series
+    df['Buyer Group Code'] = code_series
 
     buyer_type = pd.Series('Other', index=df.index, dtype=object)
 
@@ -65,8 +71,8 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     not_available = bg_raw.eq('') | bg_raw.str.lower().isin(['not available', 'na', 'n/a'])
     buyer_type[not_available] = 'Indirect'
 
-    buyer_type[(codes >= 1) & (codes <= 9)] = 'Direct'
-    buyer_type[(codes >= 10) & (codes <= 18)] = 'Indirect'
+    buyer_type[(code_series >= 1) & (code_series <= 9)] = 'Direct'
+    buyer_type[(code_series >= 10) & (code_series <= 18)] = 'Indirect'
 
     buyer_type = buyer_type.fillna('Other')
     return buyer_type
@@ -158,8 +164,7 @@ if 'buyer_group' in df.columns:
     except Exception:
         df['buyer_group_code'] = np.nan
 
-df['buyer_type'] = compute_buyer_type_vectorized(df)
-df['Buyer.Type'] = df['buyer_type']
+df['Buyer.Type'] = compute_buyer_type_vectorized(df)
 
 # normalize po_creator
 po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
@@ -223,30 +228,17 @@ if date_basis:
             date_range_key = (sdt.isoformat(), edt.isoformat())
 
 # defensive columns
-for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
+for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
     if c not in fil.columns:
         fil[c] = ''
 
-# Ensure po_buyer_type exists
-if 'po_buyer_type' not in fil.columns or fil['po_buyer_type'].isna().all():
-    fil_creator = fil['po_creator'].fillna('').astype(str).str.strip()
-    fil['po_buyer_type'] = np.where(fil_creator.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
-
-# Normalize PR-level buyer_type
-fil['buyer_type'] = fil.get('buyer_type', fil.get('po_buyer_type', pd.Series('Indirect')))
-fil['buyer_type'] = fil['buyer_type'].fillna('').astype(str).str.strip().str.title()
-fil.loc[fil['buyer_type'].str.lower().isin(['direct','d']), 'buyer_type'] = 'Direct'
-fil.loc[fil['buyer_type'].str.lower().isin(['indirect','i','in']), 'buyer_type'] = 'Indirect'
-fil.loc[~fil['buyer_type'].isin(['Direct','Indirect']), 'buyer_type'] = 'Indirect'
-
-# has_po and effective_buyer_type
-if purchase_doc_col and purchase_doc_col in fil.columns:
-    fil['has_po'] = fil[purchase_doc_col].astype(str).fillna('').str.strip() != ''
-else:
-    fil['has_po'] = False
-fil['effective_buyer_type'] = np.where(fil['has_po'], fil['po_buyer_type'].fillna('Indirect'), fil['buyer_type'].fillna('Indirect'))
-fil['effective_buyer_type'] = fil['effective_buyer_type'].astype(str).str.strip()
-fil.loc[~fil['effective_buyer_type'].isin(['Direct','Indirect']), 'effective_buyer_type'] = 'Indirect'
+# Ensure PR-level Buyer.Type is tidy
+if 'Buyer.Type' not in fil.columns:
+    fil['Buyer.Type'] = compute_buyer_type_vectorized(fil)
+fil['Buyer.Type'] = fil['Buyer.Type'].fillna('Unknown').astype(str).str.strip().str.title()
+fil.loc[fil['Buyer.Type'].str.lower().isin(['direct', 'd']), 'Buyer.Type'] = 'Direct'
+fil.loc[fil['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type'] = 'Indirect'
+fil.loc[~fil['Buyer.Type'].isin(['Direct', 'Indirect']), 'Buyer.Type'] = 'Other'
 
 # Entity + PO ordered by filters
 entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip() != '']) if 'entity' in fil.columns else []
@@ -254,12 +246,12 @@ sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 sel_o = st.sidebar.multiselect('PO Ordered By', sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)).dropna().unique().tolist() if str(x).strip()!='']), default=sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)).dropna().unique().tolist() if str(x).strip()!='']))
 
 # Buyer Type choices from effective buyer type
-choices_bt = sorted(fil['effective_buyer_type'].dropna().unique().tolist())
+choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist())
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
 # Apply filters: effective buyer type -> entity -> po_creator
 if sel_b:
-    fil = fil[fil['effective_buyer_type'].isin(sel_b)]
+    fil = fil[fil['Buyer.Type'].isin(sel_b)]
 if sel_e and 'entity' in fil.columns:
     fil = fil[fil['entity'].isin(sel_e)]
 if sel_o:
@@ -489,8 +481,8 @@ with T[1]:
         st.caption(f"Current Avg Lead Time: {avg_lead:.1f} days   •   Target ≤ {SLA_DAYS} days")
 
         st.subheader('⏱️ PR to PO Lead Time by Buyer Type & by Buyer')
-        if 'buyer_type' in lead_df.columns:
-            lead_avg_by_type = lead_df.groupby('buyer_type')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'buyer_type':'Buyer.Type'})
+        if 'Buyer.Type' in lead_df.columns:
+            lead_avg_by_type = lead_df.groupby('Buyer.Type')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'Buyer.Type':'Buyer Type'})
         else:
             lead_avg_by_type = pd.DataFrame()
         if 'po_creator' in lead_df.columns:
@@ -532,24 +524,13 @@ with T[1]:
 
         if pr_status_col and pr_status_col in df.columns:
             def prepare_open_source(source_df: pd.DataFrame) -> pd.DataFrame:
-                """Ensure buyer columns exist and re-apply Buyer Type selection locally."""
+                """Ensure Buyer.Type exists and re-apply Buyer Type selection locally."""
                 base = source_df.copy()
-                if 'buyer_type' not in base.columns or base['buyer_type'].isna().all():
-                    base['buyer_type'] = compute_buyer_type_vectorized(base)
-                if 'po_buyer_type' not in base.columns or base['po_buyer_type'].isna().all():
-                    creator_clean = base.get('po_creator', pd.Series('', index=base.index)).fillna('').astype(str).str.strip()
-                    base['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
-                if 'has_po' not in base.columns:
-                    if purchase_doc_col and purchase_doc_col in base.columns:
-                        base['has_po'] = base[purchase_doc_col].astype(str).fillna('').str.strip() != ''
-                    else:
-                        base['has_po'] = False
-                eff = np.where(base['has_po'], base['po_buyer_type'].fillna('Indirect'), base['buyer_type'].fillna('Indirect'))
-                base['effective_buyer_type'] = pd.Series(eff, index=base.index).astype(str).str.title()
-                base.loc[~base['effective_buyer_type'].isin(['Direct','Indirect']), 'effective_buyer_type'] = 'Indirect'
-                base['buyer_type'] = base['effective_buyer_type']
+                if 'Buyer.Type' not in base.columns:
+                    base['Buyer.Type'] = compute_buyer_type_vectorized(base)
+                base['Buyer.Type'] = base['Buyer.Type'].fillna('Other').astype(str).str.title()
                 if sel_b:
-                    base = base[base['effective_buyer_type'].isin(sel_b)]
+                    base = base[base['Buyer.Type'].isin(sel_b)]
                 return base
 
             using_global = False
@@ -590,10 +571,9 @@ with T[1]:
                 agg_map[pr_status_col] = 'first'
                 bg_col = safe_col(open_df, ['buyer_group','buyer group','buyer_group'])
                 if bg_col: agg_map[bg_col] = 'first'
-                bt_col = safe_col(open_df, ['buyer_type','buyer.type','buyer.type'])
+                bt_col = safe_col(open_df, ['Buyer.Type','buyer_type','buyer.type'])
                 if bt_col: agg_map[bt_col] = 'first'
                 if 'entity' in open_df.columns: agg_map['entity'] = 'first'
-                if 'effective_buyer_type' in open_df.columns: agg_map['effective_buyer_type'] = 'first'
                 if 'po_creator' in open_df.columns: agg_map['po_creator'] = 'first'
                 if purchase_doc_col and purchase_doc_col in open_df.columns: agg_map[purchase_doc_col] = 'first'
 
@@ -602,6 +582,8 @@ with T[1]:
                     open_summary = open_df.groupby(group_by_col).agg(agg_map).reset_index()
                 else:
                     open_summary = open_df.reset_index().groupby('_row_id' if '_row_id' in open_df.columns else open_df.index.name or 'index').agg(agg_map).reset_index()
+
+                open_summary = open_summary.drop(columns=['buyer_type','effective_buyer_type'], errors='ignore')
 
                 # show count and charts
                 st.metric("🔢 Open PRs", open_summary.shape[0])
@@ -838,4 +820,3 @@ with T[10]:
         st.error(f'Could not display full data: {e}')
 
 # EOF
-
