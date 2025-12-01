@@ -4,7 +4,16 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from pathlib import Path
 from plotly.subplots import make_subplots
+
+DATA_DIR = Path(__file__).resolve().parent
+RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
+MAX_TABLE_ROWS = 250
+INDIRECT_BUYERS = {
+    'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
+    'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
+}
 
 # Run with: streamlit run p2p_dashboard_indirect_final.py
 st.set_page_config(page_title="P2P Dashboard — Indirect (Final)", layout="wide", initial_sidebar_state="expanded")
@@ -29,20 +38,62 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
-@st.cache_data(show_spinner=False)
-def load_all(file_list=None):
-    if file_list is None:
-        file_list = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
-    frames = []
-    for fn, ent in file_list:
+def limit_table(df: pd.DataFrame, rows: int = MAX_TABLE_ROWS) -> pd.DataFrame:
+    """Return a truncated dataframe and show a caption when rows are trimmed."""
+    if len(df) > rows:
+        st.caption(f"Showing first {rows:,} of {len(df):,} rows.")
+    return df.head(rows)
+
+def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=object)
+    buyer_type = pd.Series('Indirect', index=df.index, dtype=object)
+    bg_raw = df.get('buyer_group', pd.Series('', index=df.index)).fillna('').astype(str).str.strip()
+    codes = pd.to_numeric(df.get('buyer_group_code', pd.Series(np.nan, index=df.index)), errors='coerce')
+    direct_alias = bg_raw.str.upper().isin({'ME_BG17', 'MLBG16'})
+    buyer_type[direct_alias] = 'Direct'
+    buyer_type[(codes >= 1) & (codes <= 9)] = 'Direct'
+    buyer_type[(codes >= 10) & (codes <= 18)] = 'Indirect'
+    return buyer_type
+
+def compute_buyer_display(df: pd.DataFrame, purchase_doc_col: str | None, requester_col: str | None) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=object)
+    po_creator = df.get('po_creator', pd.Series('', index=df.index)).fillna('').astype(str).str.strip()
+    requester = df.get(requester_col, pd.Series('', index=df.index)).fillna('').astype(str).str.strip() if requester_col else pd.Series('', index=df.index)
+    has_po = pd.Series(False, index=df.index)
+    if purchase_doc_col and purchase_doc_col in df.columns:
+        has_po = df[purchase_doc_col].fillna('').astype(str).str.strip() != ''
+    buyer_display = np.where(has_po & (po_creator != ''), po_creator, '')
+    buyer_display = np.where((buyer_display == '') & (requester != ''), requester, buyer_display)
+    buyer_display = np.where(buyer_display == '', 'PR only - Unassigned', buyer_display)
+    return pd.Series(buyer_display, index=df.index, dtype=object)
+
+def _resolve_path(fn: str) -> Path:
+    path = Path(fn)
+    if path.exists():
+        return path
+    candidate = DATA_DIR / fn
+    return candidate
+
+def _read_excel(path: Path, entity: str) -> pd.DataFrame:
+    df = pd.read_excel(path, skiprows=1)
+    df['entity_source_file'] = entity
+    return df
+
+def _load_uploaded(files) -> list[pd.DataFrame]:
+    frames: list[pd.DataFrame] = []
+    for upl in files:
         try:
-            df = pd.read_excel(fn, skiprows=1)
-            df['entity_source_file'] = ent
+            df = pd.read_excel(upl, skiprows=1)
+            stem = Path(upl.name).stem.upper()
+            df['entity_source_file'] = stem
             frames.append(df)
-        except FileNotFoundError:
-            continue
-        except Exception:
-            continue
+        except Exception as exc:
+            st.warning(f"Could not read {upl.name}: {exc}")
+    return frames
+
+def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     x = pd.concat(frames, ignore_index=True)
@@ -52,8 +103,35 @@ def load_all(file_list=None):
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
+@st.cache_data(show_spinner=False)
+def load_all(file_list=None):
+    if file_list is None:
+        file_list = RAW_FILES
+    frames: list[pd.DataFrame] = []
+    for fn, ent in file_list:
+        path = _resolve_path(fn)
+        if not path.exists():
+            continue
+        try:
+            frames.append(_read_excel(path, ent))
+        except Exception as exc:
+            st.warning(f"Failed to read {path.name}: {exc}")
+    return _finalize_frames(frames)
+
 # ----------------- Load Data -----------------
-df = load_all()
+uploaded_sources = st.sidebar.file_uploader(
+    'Upload Excel snapshots (optional)',
+    type=['xlsx'],
+    accept_multiple_files=True,
+    help='Drop a few filtered workbooks here to iterate faster without re-running big files.'
+)
+if uploaded_sources:
+    df = _finalize_frames(_load_uploaded(uploaded_sources))
+    if df.empty:
+        st.warning("Uploaded files could not be read; falling back to packaged workbooks.")
+        df = load_all()
+else:
+    df = load_all()
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
@@ -89,24 +167,7 @@ if 'buyer_group' in df.columns:
     except Exception:
         df['buyer_group_code'] = np.nan
 
-def map_buyer_type_generic(val, code):
-    if pd.isna(val) or str(val).strip() == '' or str(val).strip().lower() in ['not available','na','n/a']:
-        return 'Indirect'
-    try:
-        if str(val).strip().upper() in ['ME_BG17','MLBG16']:
-            return 'Direct'
-        if not pd.isna(code) and 1 <= int(code) <= 9:
-            return 'Direct'
-        if not pd.isna(code) and 10 <= int(code) <= 18:
-            return 'Indirect'
-    except Exception:
-        pass
-    return 'Indirect'
-
-if not df.empty:
-    df['buyer_type'] = df.apply(lambda r: map_buyer_type_generic(r.get('buyer_group', ''), r.get('buyer_group_code', np.nan)), axis=1)
-else:
-    df['buyer_type'] = pd.Series(dtype=object)
+df['buyer_type'] = compute_buyer_type_vectorized(df)
 
 # normalize po_creator
 po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
@@ -132,26 +193,11 @@ upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
 df['po_creator'] = df[po_orderer_col].astype(str).str.upper().map(upper_map).fillna(df[po_orderer_col].astype(str))
 df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
 
-indirect_buyers = [
-    'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
-    'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
-]
-df['po_buyer_type'] = df['po_creator'].apply(lambda x: 'Indirect' if str(x).strip() in indirect_buyers else 'Direct')
+creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
+df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
 
 pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name','pr_requester_name','requester_name'])
-def resolve_buyer(row):
-    if purchase_doc_col and purchase_doc_col in row.index and pd.notna(row.get(purchase_doc_col)) and str(row.get(purchase_doc_col)).strip() != '':
-        pc = row.get('po_creator')
-        if pd.notna(pc) and str(pc).strip() != '':
-            return pc
-    if pr_requester_col and pr_requester_col in row.index and pd.notna(row.get(pr_requester_col)) and str(row.get(pr_requester_col)).strip() != '':
-        return row.get(pr_requester_col)
-    return 'PR only - Unassigned'
-
-if not df.empty:
-    df['buyer_display'] = df.apply(resolve_buyer, axis=1)
-else:
-    df['buyer_display'] = pd.Series(dtype=object)
+df['buyer_display'] = compute_buyer_display(df, purchase_doc_col, pr_requester_col)
 
 # ----------------- Sidebar filters -----------------
 st.sidebar.header('Filters')
@@ -186,7 +232,8 @@ for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
 
 # Ensure po_buyer_type exists
 if 'po_buyer_type' not in fil.columns or fil['po_buyer_type'].isna().all():
-    fil['po_buyer_type'] = fil['po_creator'].fillna('').astype(str).apply(lambda x: 'Indirect' if x.strip() in indirect_buyers else 'Direct')
+    fil_creator = fil['po_creator'].fillna('').astype(str).str.strip()
+    fil['po_buyer_type'] = np.where(fil_creator.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
 
 # Normalize PR-level buyer_type
 fil['buyer_type'] = fil.get('buyer_type', fil.get('po_buyer_type', pd.Series('Indirect')))
@@ -239,6 +286,13 @@ if sel_v:
 if sel_i:
     fil = fil[fil['product_name'].isin(sel_i)]
 
+# Precompute month bucket once to avoid repeated conversions downstream
+trend_date_col = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
+if trend_date_col:
+    fil['_month_bucket'] = fil[trend_date_col].dt.to_period('M').dt.to_timestamp()
+else:
+    fil['_month_bucket'] = pd.NaT
+
 if st.sidebar.button('Reset Filters'):
     for k in list(st.session_state.keys()):
         try:
@@ -266,11 +320,10 @@ with T[0]:
     st.markdown('---')
 
     # ---------------- Monthly stacked entity spend + cumulative ----------------
-    dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
     st.subheader('Monthly Total Spend + Cumulative')
-    if dcol and net_amount_col and net_amount_col in fil.columns:
-        t = fil.dropna(subset=[dcol]).copy()
-        t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+        t = fil.dropna(subset=['_month_bucket']).copy()
+        t['month'] = t['_month_bucket']
 
         me = t.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
         if me.empty:
@@ -352,9 +405,9 @@ with T[0]:
     # ---------------- Entity Trend (line) ----------------
     st.subheader('Entity Trend')
     try:
-        if dcol and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
-            x = fil.dropna(subset=[dcol]).copy()
-            x['month'] = x[dcol].dt.to_period('M').dt.to_timestamp()
+        if trend_date_col and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
+            x = fil.dropna(subset=['_month_bucket']).copy()
+            x['month'] = x['_month_bucket']
             x['entity'] = x['entity'].fillna('Unmapped')
             g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
             if not g.empty:
@@ -377,13 +430,13 @@ with T[0]:
         fig_buyer.update_traces(texttemplate='%{text:.2f}', textposition='outside')
         fig_buyer.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig_buyer, use_container_width=True)
-        st.dataframe(buyer_spend, use_container_width=True)
+        st.dataframe(limit_table(buyer_spend), use_container_width=True)
 
         # Buyer trend similar to Entity trend
         try:
-            if dcol and net_amount_col and net_amount_col in fil.columns:
-                bt = fil.dropna(subset=[dcol]).copy()
-                bt['month'] = bt[dcol].dt.to_period('M').dt.to_timestamp()
+            if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+                bt = fil.dropna(subset=['_month_bucket']).copy()
+                bt['month'] = bt['_month_bucket']
                 top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
                 pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
                 if pick_mode == 'Choose buyers':
@@ -621,7 +674,8 @@ with T[2]:
         c1.metric('Total POs', total_pos); c2.metric('Approved POs', approved_pos); c3.metric('Pending Approval', pending_pos); c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
         st.subheader('📄 PO Approval Details')
         show_cols = [col for col in [ 'po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if col]
-        st.dataframe(po_app_df[show_cols].sort_values('approval_lead_time', ascending=False), use_container_width=True)
+        po_detail = po_app_df[show_cols].sort_values('approval_lead_time', ascending=False)
+        st.dataframe(limit_table(po_detail), use_container_width=True)
     else:
         st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
 
@@ -635,7 +689,7 @@ with T[3]:
         dv['received_f'] = dv[received_col].fillna(0).astype(float)
         dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
         ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
-        st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
+        st.dataframe(limit_table(ag.sort_values('po_qty_f', ascending=False)), use_container_width=True)
     else:
         st.info('Delivery columns (PO Qty / Received QTY) not found.')
 
@@ -644,7 +698,7 @@ with T[4]:
     if po_vendor_col and net_amount_col and po_vendor_col in fil.columns and net_amount_col in fil.columns:
         vs = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
         vs['cr'] = vs[net_amount_col]/1e7
-        st.dataframe(vs.head(50), use_container_width=True)
+        st.dataframe(limit_table(vs), use_container_width=True)
     else:
         st.info('Vendor / Net Amount columns not present.')
 
@@ -670,7 +724,7 @@ with T[5]:
             if pick_desc and pick_desc != '-- none --':
                 sub = dept_df[dept_df[pr_budget_desc_col].astype(str) == pick_desc].copy()
                 show_cols = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub.columns]
-                st.dataframe(sub[show_cols].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
+                st.dataframe(limit_table(sub[show_cols].sort_values(net_amount_col, ascending=False)), use_container_width=True)
     else:
         st.info('PR Budget description or Net Amount column not found to show PR Budget Description spend.')
     st.markdown('---')
@@ -686,7 +740,7 @@ with T[5]:
             if pick_code and pick_code != '-- none --':
                 sub2 = dept_df[dept_df[pr_budget_code_col].astype(str) == pick_code].copy()
                 show_cols2 = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub2.columns]
-                st.dataframe(sub2[show_cols2].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
+                st.dataframe(limit_table(sub2[show_cols2].sort_values(net_amount_col, ascending=False)), use_container_width=True)
     else:
         st.info('PR Budget code or Net Amount column not found to show PR Budget Code spend.')
 
@@ -702,14 +756,13 @@ with T[6]:
         thr = st.slider('Outlier threshold (±%)', 10, 300, 50, 5)
         out = z[abs(z['pctdev']) >= thr/100.0].copy()
         out['pctdev%'] = (out['pctdev']*100).round(1)
-        st.dataframe(out.sort_values('pctdev%', ascending=False), use_container_width=True)
+        st.dataframe(limit_table(out.sort_values('pctdev%', ascending=False)), use_container_width=True)
 
 with T[7]:
     st.subheader('Forecast Next Month Spend (SMA)')
-    dcol = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
-    if dcol and net_amount_col and net_amount_col in fil.columns:
-        t = fil.dropna(subset=[dcol]).copy()
-        t['month'] = t[dcol].dt.to_period('M').dt.to_timestamp()
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+        t = fil.dropna(subset=['_month_bucket']).copy()
+        t['month'] = t['_month_bucket']
         m = t.groupby('month')[net_amount_col].sum().sort_index()
         m_cr = m/1e7
         k = st.slider('Window (months)', 3, 12, 6)
@@ -732,15 +785,17 @@ with T[8]:
         spend = vd.get(net_amount_col, pd.Series(0)).sum()/1e7 if net_amount_col else 0
         upos = int(vd.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
         k1,k2 = st.columns(2); k1.metric('Spend (Cr)', f"{spend:.2f}"); k2.metric('Unique POs', upos)
-        st.dataframe(vd.head(200), use_container_width=True)
+        st.dataframe(limit_table(vd), use_container_width=True)
 
 with T[9]:
     st.subheader('🔍 Keyword Search')
     valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in df.columns]
-    query = st.text_input('Type vendor, product, PO, PR, etc.', '')
-    cat_sel = st.multiselect('Filter by Procurement Category', sorted(df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in df.columns else []
-    vend_sel = st.multiselect('Filter by Vendor', sorted(df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in df.columns else []
-    if query and valid_cols:
+    with st.form('keyword_search'):
+        query = st.text_input('Type vendor, product, PO, PR, etc.', '')
+        cat_sel = st.multiselect('Filter by Procurement Category', sorted(df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in df.columns else []
+        vend_sel = st.multiselect('Filter by Vendor', sorted(df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in df.columns else []
+        submitted = st.form_submit_button('Search')
+    if submitted and query and valid_cols:
         mask = pd.Series(False, index=df.index)
         q = query.lower()
         for c in valid_cols:
@@ -751,15 +806,18 @@ with T[9]:
         if vend_sel and po_vendor_col in df.columns:
             res = res[res[po_vendor_col].astype(str).isin(vend_sel)]
         st.write(f'Found {len(res)} rows')
-        st.dataframe(res, use_container_width=True)
+        st.dataframe(limit_table(res), use_container_width=True)
         st.download_button('⬇️ Download Search Results', res.to_csv(index=False), file_name='search_results.csv', mime='text/csv')
+    elif submitted:
+        st.info('Enter a keyword to search.')
     else:
-        st.caption('Start typing to search…')
+        st.caption('Start typing to search and click Search…')
 
 with T[10]:
     st.subheader('Full Data — all filtered rows')
     try:
-        st.dataframe(fil.reset_index(drop=True), use_container_width=True)
+        trimmed = limit_table(fil.reset_index(drop=True))
+        st.dataframe(trimmed, use_container_width=True)
         csv = fil.to_csv(index=False)
         st.download_button('⬇️ Download full filtered data (CSV)', csv, file_name='p2p_full_filtered.csv', mime='text/csv')
     except Exception as e:
