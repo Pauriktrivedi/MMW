@@ -533,6 +533,7 @@ with T[1]:
                 eff = np.where(base['has_po'], base['po_buyer_type'].fillna('Indirect'), base['buyer_type'].fillna('Indirect'))
                 base['effective_buyer_type'] = pd.Series(eff, index=base.index).astype(str).str.title()
                 base.loc[~base['effective_buyer_type'].isin(['Direct','Indirect']), 'effective_buyer_type'] = 'Indirect'
+                base['buyer_type'] = base['effective_buyer_type']
                 if sel_b:
                     base = base[base['effective_buyer_type'].isin(sel_b)]
                 return base
