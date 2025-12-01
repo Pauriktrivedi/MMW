@@ -592,11 +592,6 @@ with T[1]:
                 # show count and charts
                 st.metric("🔢 Open PRs", open_summary.shape[0])
 
-                if pr_date_col and pr_date_col in open_summary.columns:
-                    open_monthly_counts = pd.to_datetime(open_summary[pr_date_col], errors='coerce').dt.to_period('M').value_counts().sort_index()
-                    if not open_monthly_counts.empty:
-                        st.bar_chart(open_monthly_counts, use_container_width=True)
-
                 # highlight overdue
                 def highlight_age(val):
                     try:
