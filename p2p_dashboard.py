@@ -472,9 +472,14 @@ with T[1]:
                 # fallback to full dataset
                 open_df_global = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
                 if not open_df_global.empty:
-                    # if buyer-type sidebar selection exists, apply same filter to the global open PRs
+                    # apply buyer-type filter to global open PRs if sidebar selection exists
                     try:
-                        if 'effective_buyer_type' in open_df_global.columns and sel_b:
+                        if sel_b:
+                            # ensure columns exist on the global DF and compute effective buyer type same as 'fil'
+                            open_df_global['po_buyer_type'] = open_df_global.get('po_buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
+                            open_df_global['buyer_type'] = open_df_global.get('buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
+                            has_po_mask = (open_df_global[purchase_doc_col].astype(str).fillna('').str.strip() != '') if (purchase_doc_col and purchase_doc_col in open_df_global.columns) else pd.Series(False, index=open_df_global.index)
+                            open_df_global['effective_buyer_type'] = np.where(has_po_mask, open_df_global['po_buyer_type'].astype(str).str.title(), open_df_global['buyer_type'].astype(str).str.title())
                             open_df_global = open_df_global[open_df_global['effective_buyer_type'].isin(sel_b)].copy()
                     except Exception:
                         pass
