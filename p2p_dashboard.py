@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 
 DATA_DIR = Path(__file__).resolve().parent
 RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
-LOGO_PATH = DATA_DIR / "Matter_logo.png"
+LOGO_PATH = DATA_DIR / "matter_logo.png"
 INDIRECT_BUYERS = {
     'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
     'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
