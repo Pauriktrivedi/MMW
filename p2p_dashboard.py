@@ -53,8 +53,8 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
 
     group_col = safe_col(df, ['buyer_group', 'Buyer Group', 'buyer group'])
     if not group_col:
-        st.warning("⚠️ 'Buyer Group' column not found. All Buyer.Type set to 'Unknown'.")
-        return pd.Series('Unknown', index=df.index, dtype=object)
+        st.warning("⚠️ 'Buyer Group' column not found. Defaulting Buyer.Type to 'Indirect'.")
+        return pd.Series('Indirect', index=df.index, dtype=object)
 
     bg_raw = df[group_col].fillna('').astype(str).str.strip()
     code_series = pd.to_numeric(bg_raw.str.extract(r'(\d+)')[0], errors='coerce')
@@ -63,7 +63,7 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     df['buyer_group_code'] = code_series
     df['Buyer Group Code'] = code_series
 
-    buyer_type = pd.Series('Other', index=df.index, dtype=object)
+    buyer_type = pd.Series('Direct', index=df.index, dtype=object)
 
     alias_direct = bg_raw.str.upper().isin({'ME_BG17', 'MLBG16'})
     buyer_type[alias_direct] = 'Direct'
@@ -74,7 +74,7 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     buyer_type[(code_series >= 1) & (code_series <= 9)] = 'Direct'
     buyer_type[(code_series >= 10) & (code_series <= 18)] = 'Indirect'
 
-    buyer_type = buyer_type.fillna('Other')
+    buyer_type = buyer_type.fillna('Direct')
     return buyer_type
 
 def compute_buyer_display(df: pd.DataFrame, purchase_doc_col: str | None, requester_col: str | None) -> pd.Series:
@@ -235,10 +235,10 @@ for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
 # Ensure PR-level Buyer.Type is tidy
 if 'Buyer.Type' not in fil.columns:
     fil['Buyer.Type'] = compute_buyer_type_vectorized(fil)
-fil['Buyer.Type'] = fil['Buyer.Type'].fillna('Unknown').astype(str).str.strip().str.title()
+fil['Buyer.Type'] = fil['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
 fil.loc[fil['Buyer.Type'].str.lower().isin(['direct', 'd']), 'Buyer.Type'] = 'Direct'
 fil.loc[fil['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type'] = 'Indirect'
-fil.loc[~fil['Buyer.Type'].isin(['Direct', 'Indirect']), 'Buyer.Type'] = 'Other'
+fil.loc[~fil['Buyer.Type'].isin(['Direct', 'Indirect']), 'Buyer.Type'] = 'Direct'
 
 # Entity + PO ordered by filters
 entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip() != '']) if 'entity' in fil.columns else []
@@ -528,7 +528,10 @@ with T[1]:
                 base = source_df.copy()
                 if 'Buyer.Type' not in base.columns:
                     base['Buyer.Type'] = compute_buyer_type_vectorized(base)
-                base['Buyer.Type'] = base['Buyer.Type'].fillna('Other').astype(str).str.title()
+                base['Buyer.Type'] = base['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
+                base.loc[base['Buyer.Type'].str.lower().isin(['direct', 'd']), 'Buyer.Type'] = 'Direct'
+                base.loc[base['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type'] = 'Indirect'
+                base.loc[~base['Buyer.Type'].isin(['Direct','Indirect']), 'Buyer.Type'] = 'Direct'
                 if sel_b:
                     base = base[base['Buyer.Type'].isin(sel_b)]
                 return base
