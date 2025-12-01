@@ -746,8 +746,12 @@ with T[10]:
         st.dataframe(fil.reset_index(drop=True), use_container_width=True)
         csv = fil.to_csv(index=False)
         st.download_button(
-    '⬇️ Download full filtered data (CSV)',
-    csv,
-    file_name='p2p_full_filtered.csv',
-    mime='text/csv'
-)
+            '⬇️ Download full filtered data (CSV)',
+            csv,
+            file_name='p2p_full_filtered.csv',
+            mime='text/csv'
+        )
+    except Exception as e:
+        st.error(f'Could not display full data: {e}')
+
+# EOF
