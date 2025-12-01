@@ -472,23 +472,50 @@ with T[1]:
                 # fallback to full dataset
                 open_df_global = df[df[pr_status_col].astype(str).isin(["Approved", "InReview"])].copy()
                 if not open_df_global.empty:
-                    # apply buyer-type filter to global open PRs if sidebar selection exists
                     try:
+                        # 1) Ensure buyer_group_code exists on global and map PR-level buyer_type from BG code (same logic as main dataset)
+                        if 'buyer_group' in open_df_global.columns:
+                            try:
+                                open_df_global['buyer_group_code'] = open_df_global['buyer_group'].astype(str).str.extract('([0-9]+)')[0].astype(float)
+                            except Exception:
+                                open_df_global['buyer_group_code'] = np.nan
+
+                        def _map_buyer_type_pr(row_val, row_code):
+                            try:
+                                if pd.isna(row_val) or str(row_val).strip() == '' or str(row_val).strip().lower() in ['not available','na','n/a']:
+                                    return 'Indirect'
+                                if str(row_val).strip().upper() in ['ME_BG17','MLBG16']:
+                                    return 'Direct'
+                                if not pd.isna(row_code) and 1 <= int(row_code) <= 9:
+                                    return 'Direct'
+                                if not pd.isna(row_code) and 10 <= int(row_code) <= 18:
+                                    return 'Indirect'
+                            except Exception:
+                                pass
+                            return 'Indirect'
+
+                        open_df_global['buyer_type_pr'] = open_df_global.apply(lambda r: _map_buyer_type_pr(r.get('buyer_group', ''), r.get('buyer_group_code', np.nan)), axis=1)
+
+                        # 2) Build effective_buyer_type: if PR has a PO use po_buyer_type else use PR-level mapping
+                        open_df_global['po_buyer_type'] = open_df_global.get('po_buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
+                        open_df_global['buyer_type'] = open_df_global.get('buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna(open_df_global['buyer_type_pr'])
+
+                        has_po_mask = (open_df_global[purchase_doc_col].astype(str).fillna('').str.strip() != '') if (purchase_doc_col and purchase_doc_col in open_df_global.columns) else pd.Series(False, index=open_df_global.index)
+                        open_df_global['effective_buyer_type'] = np.where(has_po_mask, open_df_global['po_buyer_type'].astype(str).str.title(), open_df_global['buyer_type_pr'].astype(str).str.title())
+
+                        # apply buyer-type sidebar selection if any
                         if sel_b:
-                            # ensure columns exist on the global DF and compute effective buyer type same as 'fil'
-                            open_df_global['po_buyer_type'] = open_df_global.get('po_buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
-                            open_df_global['buyer_type'] = open_df_global.get('buyer_type', pd.Series(np.nan, index=open_df_global.index)).fillna('Indirect')
-                            has_po_mask = (open_df_global[purchase_doc_col].astype(str).fillna('').str.strip() != '') if (purchase_doc_col and purchase_doc_col in open_df_global.columns) else pd.Series(False, index=open_df_global.index)
-                            open_df_global['effective_buyer_type'] = np.where(has_po_mask, open_df_global['po_buyer_type'].astype(str).str.title(), open_df_global['buyer_type'].astype(str).str.title())
                             open_df_global = open_df_global[open_df_global['effective_buyer_type'].isin(sel_b)].copy()
                     except Exception:
                         pass
+
                     if not open_df_global.empty:
                         open_df = open_df_global
                         using_global = True
                     else:
-                        # no global rows after applying buyer-type filter — keep empty result
                         open_df = open_df_filtered
+                else:
+                    open_df = open_df_filtered
                 else:
                     open_df = open_df_filtered
             else:
@@ -760,4 +787,3 @@ with T[10]:
         st.error(f'Could not display full data: {e}')
 
 # EOF
-
