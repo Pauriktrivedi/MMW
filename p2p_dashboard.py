@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 
 DATA_DIR = Path(__file__).resolve().parent
 RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
+LOGO_PATH = DATA_DIR / "Matter_logo.png"
 INDIRECT_BUYERS = {
     'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
     'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
@@ -177,6 +178,8 @@ pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name',
 df['buyer_display'] = compute_buyer_display(df, purchase_doc_col, pr_requester_col)
 
 # ----------------- Sidebar filters -----------------
+if LOGO_PATH.exists():
+    st.sidebar.image(str(LOGO_PATH), use_column_width=True)
 st.sidebar.header('Filters')
 FY = {
     'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
