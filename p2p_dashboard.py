@@ -9,7 +9,6 @@ from plotly.subplots import make_subplots
 
 DATA_DIR = Path(__file__).resolve().parent
 RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
-MAX_TABLE_ROWS = 250
 INDIRECT_BUYERS = {
     'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip',
     'Mukul', 'Nayan', 'Paurik', 'Kamlesh', 'Suresh', 'Priyam'
@@ -38,11 +37,13 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
-def limit_table(df: pd.DataFrame, rows: int = MAX_TABLE_ROWS) -> pd.DataFrame:
-    """Return a truncated dataframe and show a caption when rows are trimmed."""
-    if len(df) > rows:
-        st.caption(f"Showing first {rows:,} of {len(df):,} rows.")
-    return df.head(rows)
+def memoized_compute(namespace: str, signature: tuple, compute_fn):
+    """Simple session-state memoization keyed by the active filter tuple."""
+    store = st.session_state.setdefault('_memo_cache', {})
+    key = (namespace, signature)
+    if key not in store:
+        store[key] = compute_fn()
+    return store[key]
 
 def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     if df.empty:
@@ -81,18 +82,6 @@ def _read_excel(path: Path, entity: str) -> pd.DataFrame:
     df['entity_source_file'] = entity
     return df
 
-def _load_uploaded(files) -> list[pd.DataFrame]:
-    frames: list[pd.DataFrame] = []
-    for upl in files:
-        try:
-            df = pd.read_excel(upl, skiprows=1)
-            stem = Path(upl.name).stem.upper()
-            df['entity_source_file'] = stem
-            frames.append(df)
-        except Exception as exc:
-            st.warning(f"Could not read {upl.name}: {exc}")
-    return frames
-
 def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
@@ -119,19 +108,7 @@ def load_all(file_list=None):
     return _finalize_frames(frames)
 
 # ----------------- Load Data -----------------
-uploaded_sources = st.sidebar.file_uploader(
-    'Upload Excel snapshots (optional)',
-    type=['xlsx'],
-    accept_multiple_files=True,
-    help='Drop a few filtered workbooks here to iterate faster without re-running big files.'
-)
-if uploaded_sources:
-    df = _finalize_frames(_load_uploaded(uploaded_sources))
-    if df.empty:
-        st.warning("Uploaded files could not be read; falling back to packaged workbooks.")
-        df = load_all()
-else:
-    df = load_all()
+df = load_all()
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
@@ -216,6 +193,8 @@ if pr_col and pr_col in fil.columns:
 
 # Date range filter
 date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+dr = None
+date_range_key = None
 if date_basis:
     mindt = fil[date_basis].dropna().min()
     maxdt = fil[date_basis].dropna().max()
@@ -224,6 +203,7 @@ if date_basis:
         if isinstance(dr, tuple) and len(dr) == 2:
             sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
+            date_range_key = (sdt.isoformat(), edt.isoformat())
 
 # defensive columns
 for c in ['buyer_type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
@@ -286,6 +266,19 @@ if sel_v:
 if sel_i:
     fil = fil[fil['product_name'].isin(sel_i)]
 
+def _sel_key(values):
+    return tuple(sorted(str(v) for v in values)) if values else ()
+
+filter_signature = (
+    fy_key,
+    date_range_key,
+    _sel_key(sel_b),
+    _sel_key(sel_e),
+    _sel_key(sel_o),
+    _sel_key(sel_v),
+    _sel_key(sel_i),
+)
+
 # Precompute month bucket once to avoid repeated conversions downstream
 trend_date_col = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
 if trend_date_col:
@@ -319,13 +312,20 @@ with T[0]:
 
     st.markdown('---')
 
+    def build_monthly():
+        if not (trend_date_col and net_amount_col and net_amount_col in fil.columns):
+            return pd.DataFrame()
+        if 'entity' not in fil.columns:
+            return pd.DataFrame()
+        z = fil.dropna(subset=['_month_bucket']).copy()
+        z['month'] = z['_month_bucket']
+        z['entity'] = z['entity'].fillna('Unmapped')
+        return z.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+
     # ---------------- Monthly stacked entity spend + cumulative ----------------
     st.subheader('Monthly Total Spend + Cumulative')
     if trend_date_col and net_amount_col and net_amount_col in fil.columns:
-        t = fil.dropna(subset=['_month_bucket']).copy()
-        t['month'] = t['_month_bucket']
-
-        me = t.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+        me = memoized_compute('monthly_entity', filter_signature, build_monthly)
         if me.empty:
             st.info('No monthly/entity data to plot.')
         else:
@@ -406,10 +406,7 @@ with T[0]:
     st.subheader('Entity Trend')
     try:
         if trend_date_col and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
-            x = fil.dropna(subset=['_month_bucket']).copy()
-            x['month'] = x['_month_bucket']
-            x['entity'] = x['entity'].fillna('Unmapped')
-            g = x.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
+            g = memoized_compute('monthly_entity', filter_signature, build_monthly)
             if not g.empty:
                 fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
                 fig_e.update_layout(xaxis_tickangle=-45)
@@ -422,21 +419,26 @@ with T[0]:
     # ---------------- Buyer-wise Spend (bar) + Buyer Trend (line) ----------------
     st.subheader('Buyer-wise Spend (Cr)')
     if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
-        buyer_spend = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
-        buyer_spend['cr'] = buyer_spend[net_amount_col] / 1e7
-        buyer_spend = buyer_spend.sort_values('cr', ascending=False)
+        def build_buyer_spend():
+            grp = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
+            grp['cr'] = grp[net_amount_col] / 1e7
+            return grp.sort_values('cr', ascending=False)
+        buyer_spend = memoized_compute('buyer_spend', filter_signature, build_buyer_spend)
 
         fig_buyer = px.bar(buyer_spend, x='buyer_display', y='cr', text='cr', title='Buyer-wise Spend (Cr)')
         fig_buyer.update_traces(texttemplate='%{text:.2f}', textposition='outside')
         fig_buyer.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig_buyer, use_container_width=True)
-        st.dataframe(limit_table(buyer_spend), use_container_width=True)
+        st.dataframe(buyer_spend, use_container_width=True)
 
         # Buyer trend similar to Entity trend
         try:
             if trend_date_col and net_amount_col and net_amount_col in fil.columns:
-                bt = fil.dropna(subset=['_month_bucket']).copy()
-                bt['month'] = bt['_month_bucket']
+                def build_buyer_trend():
+                    bt = fil.dropna(subset=['_month_bucket']).copy()
+                    bt['month'] = bt['_month_bucket']
+                    return bt.groupby(['month','buyer_display'], dropna=False)[net_amount_col].sum().reset_index()
+                bt_grouped = memoized_compute('buyer_trend', filter_signature, build_buyer_trend)
                 top_buyers = buyer_spend['buyer_display'].head(5).astype(str).tolist()
                 pick_mode = st.selectbox('Buyer trend: show', ['Top 5 by Spend', 'Choose buyers'], index=0)
                 if pick_mode == 'Choose buyers':
@@ -444,8 +446,7 @@ with T[0]:
                 else:
                     chosen = top_buyers
                 if chosen:
-                    bt = bt[bt['buyer_display'].isin(chosen)].copy()
-                    g_b = bt.groupby(['month','buyer_display'], dropna=False)[net_amount_col].sum().reset_index()
+                    g_b = bt_grouped[bt_grouped['buyer_display'].isin(chosen)].copy()
                     if not g_b.empty:
                         fig_b_trend = px.line(g_b, x=g_b['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='buyer_display', labels={net_amount_col:'Net Amount','x':'Month'}, title='Buyer-wise Monthly Trend')
                         fig_b_trend.update_layout(xaxis_tickangle=-45)
@@ -459,10 +460,11 @@ with T[0]:
 with T[1]:
     st.subheader('PR/PO Timing')
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
-        lead_df = fil.copy()
-        lead_df = lead_df[lead_df[pr_col].notna()].copy()
-        lead_df = lead_df[lead_df[po_create_col].notna()].copy()
-        lead_df['Lead Time (Days)'] = (pd.to_datetime(lead_df[po_create_col]) - pd.to_datetime(lead_df[pr_col])).dt.days
+        def build_lead_df():
+            lead = fil.dropna(subset=[pr_col, po_create_col]).copy()
+            lead['Lead Time (Days)'] = (pd.to_datetime(lead[po_create_col]) - pd.to_datetime(lead[pr_col])).dt.days
+            return lead
+        lead_df = memoized_compute('lead_df', filter_signature, build_lead_df)
         SLA_DAYS = 7
         avg_lead = float(lead_df['Lead Time (Days)'].mean().round(1)) if not lead_df.empty else 0.0
         gauge_fig = go.Figure(go.Indicator(mode='gauge+number', value=avg_lead, number={'suffix':' days'}, gauge={'axis':{'range':[0, max(14, avg_lead * 1.2 if avg_lead else 14)]}, 'bar':{'color':'darkblue'}, 'steps':[{'range':[0,SLA_DAYS],'color':'lightgreen'},{'range':[SLA_DAYS,max(14, avg_lead * 1.2 if avg_lead else 14)],'color':'lightcoral'}], 'threshold':{'line':{'color':'red','width':4}, 'value':SLA_DAYS}}))
@@ -663,19 +665,22 @@ with T[2]:
     po_create = po_create_col
     po_approved = safe_col(fil, ['po_approved_date','po approved date','po_approved_date'])
     if po_approved and po_create and po_create in fil.columns and purchase_doc_col:
-        po_app_df = fil[fil[po_create].notna()].copy()
-        po_app_df[po_approved] = pd.to_datetime(po_app_df[po_approved], errors='coerce')
+        def build_po_approval():
+            df_ = fil[fil[po_create].notna()].copy()
+            df_[po_approved] = pd.to_datetime(df_[po_approved], errors='coerce')
+            df_['approval_lead_time'] = (df_[po_approved] - df_[po_create]).dt.days
+            return df_
+        po_app_df = memoized_compute('po_approval', filter_signature, build_po_approval)
         total_pos = po_app_df[purchase_doc_col].nunique()
         approved_pos = po_app_df[po_app_df[po_approved].notna()][purchase_doc_col].nunique()
         pending_pos = total_pos - approved_pos
-        po_app_df['approval_lead_time'] = (po_app_df[po_approved] - po_app_df[po_create]).dt.days
         avg_approval = po_app_df['approval_lead_time'].mean()
         c1,c2,c3,c4 = st.columns(4)
         c1.metric('Total POs', total_pos); c2.metric('Approved POs', approved_pos); c3.metric('Pending Approval', pending_pos); c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
         st.subheader('📄 PO Approval Details')
         show_cols = [col for col in [ 'po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if col]
         po_detail = po_app_df[show_cols].sort_values('approval_lead_time', ascending=False)
-        st.dataframe(limit_table(po_detail), use_container_width=True)
+        st.dataframe(po_detail, use_container_width=True)
     else:
         st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
 
@@ -685,20 +690,26 @@ with T[3]:
     po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity','po qty'])
     received_col = safe_col(dv, ['receivedqty','received_qty','received qty','received_qty'])
     if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
-        dv['po_qty_f'] = dv[po_qty_col].fillna(0).astype(float)
-        dv['received_f'] = dv[received_col].fillna(0).astype(float)
-        dv['pct_received'] = np.where(dv['po_qty_f']>0, dv['received_f']/dv['po_qty_f']*100, 0)
-        ag = dv.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
-        st.dataframe(limit_table(ag.sort_values('po_qty_f', ascending=False)), use_container_width=True)
+        def build_delivery():
+            tmp = dv[[po_qty_col, received_col, purchase_doc_col, po_vendor_col]].copy()
+            tmp['po_qty_f'] = tmp[po_qty_col].fillna(0).astype(float)
+            tmp['received_f'] = tmp[received_col].fillna(0).astype(float)
+            tmp['pct_received'] = np.where(tmp['po_qty_f']>0, tmp['received_f']/tmp['po_qty_f']*100, 0)
+            return tmp.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg({'po_qty_f':'sum','received_f':'sum','pct_received':'mean'}).reset_index()
+        ag = memoized_compute('delivery_summary', filter_signature, build_delivery)
+        st.dataframe(ag.sort_values('po_qty_f', ascending=False).head(200), use_container_width=True)
     else:
         st.info('Delivery columns (PO Qty / Received QTY) not found.')
 
 with T[4]:
     st.subheader('Top Vendors by Spend')
     if po_vendor_col and net_amount_col and po_vendor_col in fil.columns and net_amount_col in fil.columns:
-        vs = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        vs['cr'] = vs[net_amount_col]/1e7
-        st.dataframe(limit_table(vs), use_container_width=True)
+        def build_vendor_spend():
+            df_ = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_['cr'] = df_[net_amount_col]/1e7
+            return df_
+        vs = memoized_compute('vendor_spend', filter_signature, build_vendor_spend)
+        st.dataframe(vs.head(50), use_container_width=True)
     else:
         st.info('Vendor / Net Amount columns not present.')
 
@@ -711,10 +722,17 @@ with T[5]:
             if c and c in r.index and pd.notna(r[c]) and str(r[c]).strip()!='':
                 candidates.append(str(r[c]).strip())
         return candidates[0] if candidates else 'Unmapped / Missing'
-    dept_df['pr_department_unified'] = dept_df.apply(pick_pr_dept, axis=1)
+    def build_dept_df():
+        dept = fil.copy()
+        dept['pr_department_unified'] = dept.apply(pick_pr_dept, axis=1)
+        return dept
+    dept_df = memoized_compute('dept_df', filter_signature, build_dept_df)
     if pr_budget_desc_col and pr_budget_desc_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
-        agg_desc = dept_df.groupby(pr_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        agg_desc['cr'] = agg_desc[net_amount_col]/1e7
+        def build_desc():
+            df_ = dept_df.groupby(pr_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_['cr'] = df_[net_amount_col]/1e7
+            return df_
+        agg_desc = memoized_compute('dept_desc', filter_signature, build_desc)
         top_desc = agg_desc.head(30)
         if not top_desc.empty:
             fig_desc = px.bar(top_desc, x=pr_budget_desc_col, y='cr', title='PR Budget Description Spend (Top 30)', labels={pr_budget_desc_col: 'PR Budget Description', 'cr':'Cr'}, text='cr')
@@ -724,13 +742,16 @@ with T[5]:
             if pick_desc and pick_desc != '-- none --':
                 sub = dept_df[dept_df[pr_budget_desc_col].astype(str) == pick_desc].copy()
                 show_cols = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub.columns]
-                st.dataframe(limit_table(sub[show_cols].sort_values(net_amount_col, ascending=False)), use_container_width=True)
+                st.dataframe(sub[show_cols].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
     else:
         st.info('PR Budget description or Net Amount column not found to show PR Budget Description spend.')
     st.markdown('---')
     if pr_budget_code_col and pr_budget_code_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
-        agg_code = dept_df.groupby(pr_budget_code_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-        agg_code['cr'] = agg_code[net_amount_col]/1e7
+        def build_code():
+            df_ = dept_df.groupby(pr_budget_code_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_['cr'] = df_[net_amount_col]/1e7
+            return df_
+        agg_code = memoized_compute('dept_code', filter_signature, build_code)
         top_code = agg_code.head(30)
         if not top_code.empty:
             fig_code = px.bar(top_code, x=pr_budget_code_col, y='cr', title='PR Budget Code Spend (Top 30)', labels={pr_budget_code_col: 'PR Budget Code', 'cr':'Cr'}, text='cr')
@@ -740,7 +761,7 @@ with T[5]:
             if pick_code and pick_code != '-- none --':
                 sub2 = dept_df[dept_df[pr_budget_code_col].astype(str) == pick_code].copy()
                 show_cols2 = [c for c in [pr_number_col, purchase_doc_col, pr_budget_code_col, pr_budget_desc_col, net_amount_col, po_vendor_col] if c in sub2.columns]
-                st.dataframe(limit_table(sub2[show_cols2].sort_values(net_amount_col, ascending=False)), use_container_width=True)
+                st.dataframe(sub2[show_cols2].sort_values(net_amount_col, ascending=False).head(500), use_container_width=True)
     else:
         st.info('PR Budget code or Net Amount column not found to show PR Budget Code spend.')
 
@@ -749,21 +770,28 @@ with T[6]:
     grp_candidates = [c for c in ['product_name','item_code','product name','item code'] if c in fil.columns]
     grp_by = st.selectbox('Group by', grp_candidates) if grp_candidates else None
     if grp_by and po_unit_rate_col and po_unit_rate_col in fil.columns:
-        z = fil[[grp_by, po_unit_rate_col, purchase_doc_col, pr_number_col, po_vendor_col, 'item_description', po_create_col, net_amount_col]].dropna(subset=[grp_by, po_unit_rate_col]).copy()
-        med = z.groupby(grp_by)[po_unit_rate_col].median().rename('median_rate')
-        z = z.join(med, on=grp_by)
-        z['pctdev'] = (z[po_unit_rate_col] - z['median_rate']) / z['median_rate'].replace(0, np.nan)
+        cols_needed = [grp_by, po_unit_rate_col, purchase_doc_col, pr_number_col, po_vendor_col, 'item_description', po_create_col, net_amount_col]
+        available_cols = [c for c in cols_needed if c in fil.columns]
+        def build_unit_base():
+            z = fil[available_cols].dropna(subset=[grp_by, po_unit_rate_col]).copy()
+            med = z.groupby(grp_by)[po_unit_rate_col].median().rename('median_rate')
+            z = z.join(med, on=grp_by)
+            z['pctdev'] = (z[po_unit_rate_col] - z['median_rate']) / z['median_rate'].replace(0, np.nan)
+            return z
+        z = memoized_compute('unit_outlier', filter_signature + (grp_by,), build_unit_base)
         thr = st.slider('Outlier threshold (±%)', 10, 300, 50, 5)
         out = z[abs(z['pctdev']) >= thr/100.0].copy()
         out['pctdev%'] = (out['pctdev']*100).round(1)
-        st.dataframe(limit_table(out.sort_values('pctdev%', ascending=False)), use_container_width=True)
+        st.dataframe(out.sort_values('pctdev%', ascending=False), use_container_width=True)
 
 with T[7]:
     st.subheader('Forecast Next Month Spend (SMA)')
     if trend_date_col and net_amount_col and net_amount_col in fil.columns:
-        t = fil.dropna(subset=['_month_bucket']).copy()
-        t['month'] = t['_month_bucket']
-        m = t.groupby('month')[net_amount_col].sum().sort_index()
+        def build_monthly_total():
+            t = fil.dropna(subset=['_month_bucket']).copy()
+            t['month'] = t['_month_bucket']
+            return t.groupby('month')[net_amount_col].sum().sort_index()
+        m = memoized_compute('monthly_total', filter_signature, build_monthly_total)
         m_cr = m/1e7
         k = st.slider('Window (months)', 3, 12, 6)
         sma = m_cr.rolling(k).mean()
@@ -785,17 +813,15 @@ with T[8]:
         spend = vd.get(net_amount_col, pd.Series(0)).sum()/1e7 if net_amount_col else 0
         upos = int(vd.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
         k1,k2 = st.columns(2); k1.metric('Spend (Cr)', f"{spend:.2f}"); k2.metric('Unique POs', upos)
-        st.dataframe(limit_table(vd), use_container_width=True)
+        st.dataframe(vd.head(200), use_container_width=True)
 
 with T[9]:
     st.subheader('🔍 Keyword Search')
     valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in df.columns]
-    with st.form('keyword_search'):
-        query = st.text_input('Type vendor, product, PO, PR, etc.', '')
-        cat_sel = st.multiselect('Filter by Procurement Category', sorted(df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in df.columns else []
-        vend_sel = st.multiselect('Filter by Vendor', sorted(df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in df.columns else []
-        submitted = st.form_submit_button('Search')
-    if submitted and query and valid_cols:
+    query = st.text_input('Type vendor, product, PO, PR, etc.', '')
+    cat_sel = st.multiselect('Filter by Procurement Category', sorted(df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in df.columns else []
+    vend_sel = st.multiselect('Filter by Vendor', sorted(df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in df.columns else []
+    if query and valid_cols:
         mask = pd.Series(False, index=df.index)
         q = query.lower()
         for c in valid_cols:
@@ -806,18 +832,15 @@ with T[9]:
         if vend_sel and po_vendor_col in df.columns:
             res = res[res[po_vendor_col].astype(str).isin(vend_sel)]
         st.write(f'Found {len(res)} rows')
-        st.dataframe(limit_table(res), use_container_width=True)
+        st.dataframe(res, use_container_width=True)
         st.download_button('⬇️ Download Search Results', res.to_csv(index=False), file_name='search_results.csv', mime='text/csv')
-    elif submitted:
-        st.info('Enter a keyword to search.')
     else:
-        st.caption('Start typing to search and click Search…')
+        st.caption('Start typing to search…')
 
 with T[10]:
     st.subheader('Full Data — all filtered rows')
     try:
-        trimmed = limit_table(fil.reset_index(drop=True))
-        st.dataframe(trimmed, use_container_width=True)
+        st.dataframe(fil.reset_index(drop=True), use_container_width=True)
         csv = fil.to_csv(index=False)
         st.download_button('⬇️ Download full filtered data (CSV)', csv, file_name='p2p_full_filtered.csv', mime='text/csv')
     except Exception as e:
