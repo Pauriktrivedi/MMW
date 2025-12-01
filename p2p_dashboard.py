@@ -745,4 +745,9 @@ with T[10]:
     try:
         st.dataframe(fil.reset_index(drop=True), use_container_width=True)
         csv = fil.to_csv(index=False)
-        st.download_button('⬇️ Download full filtered data (CSV)', csv, file_name='p2p_full_filtered.csv', mime=
+        st.download_button(
+    '⬇️ Download full filtered data (CSV)',
+    csv,
+    file_name='p2p_full_filtered.csv',
+    mime='text/csv'
+)
