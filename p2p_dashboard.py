@@ -47,15 +47,28 @@ def memoized_compute(namespace: str, signature: tuple, compute_fn):
     return store[key]
 
 def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
+    """Classify PRs into Direct/Indirect using Buyer Group + numeric code."""
     if df.empty:
         return pd.Series(dtype=object)
-    buyer_type = pd.Series('Indirect', index=df.index, dtype=object)
-    bg_raw = df.get('buyer_group', pd.Series('', index=df.index)).fillna('').astype(str).str.strip()
+    if 'buyer_group' not in df.columns:
+        st.warning("⚠️ 'Buyer Group' column not found. All Buyer.Type set to 'Unknown'.")
+        return pd.Series('Unknown', index=df.index, dtype=object)
+
+    bg_raw = df['buyer_group'].fillna('').astype(str).str.strip()
     codes = pd.to_numeric(df.get('buyer_group_code', pd.Series(np.nan, index=df.index)), errors='coerce')
-    direct_alias = bg_raw.str.upper().isin({'ME_BG17', 'MLBG16'})
-    buyer_type[direct_alias] = 'Direct'
+
+    buyer_type = pd.Series('Other', index=df.index, dtype=object)
+
+    alias_direct = bg_raw.str.upper().isin({'ME_BG17', 'MLBG16'})
+    buyer_type[alias_direct] = 'Direct'
+
+    not_available = bg_raw.eq('') | bg_raw.str.lower().isin(['not available', 'na', 'n/a'])
+    buyer_type[not_available] = 'Indirect'
+
     buyer_type[(codes >= 1) & (codes <= 9)] = 'Direct'
     buyer_type[(codes >= 10) & (codes <= 18)] = 'Indirect'
+
+    buyer_type = buyer_type.fillna('Other')
     return buyer_type
 
 def compute_buyer_display(df: pd.DataFrame, purchase_doc_col: str | None, requester_col: str | None) -> pd.Series:
@@ -146,6 +159,7 @@ if 'buyer_group' in df.columns:
         df['buyer_group_code'] = np.nan
 
 df['buyer_type'] = compute_buyer_type_vectorized(df)
+df['Buyer.Type'] = df['buyer_type']
 
 # normalize po_creator
 po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
