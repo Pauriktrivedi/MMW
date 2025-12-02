@@ -234,69 +234,95 @@ if date_basis:
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
             date_range_key = (sdt.isoformat(), edt.isoformat())
 
-# Ensure certain columns exist cheaply
-for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
-    if c not in fil.columns:
-        fil[c] = ''
+# ---- FAST FILTERING: replace old filter code with this block ----
 
-# Tidy Buyer.Type once for filtered view
-if 'Buyer.Type' not in fil.columns:
-    fil['Buyer.Type'] = compute_buyer_type_vectorized(fil)
-fil['Buyer.Type'] = fil['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
-fil.loc[fil['Buyer.Type'].str.lower().isin(['direct', 'd']), 'Buyer.Type'] = 'Direct'
-fil.loc[fil['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type'] = 'Indirect'
-fil.loc[~fil['Buyer.Type'].isin(['Direct', 'Indirect']), 'Buyer.Type'] = 'Direct'
+# Helper: cached unique list retriever to avoid recalculation on every rerun
+@st.cache_data
+def cached_unique_sorted(series: pd.Series, limit: int = None):
+    vals = series.dropna().unique().tolist()
+    if limit and len(vals) > limit:
+        vals = vals[:limit]  # don't sort giant lists every time
+    try:
+        return sorted([str(v) for v in vals if str(v).strip() != ''])
+    except Exception:
+        return [str(v) for v in vals if str(v).strip() != '']
 
-# filters
-entity_choices = sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip()]) if 'entity' in fil.columns else []
-sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
-po_creators = sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)).dropna().unique().tolist() if str(x).strip()!=''])
-sel_o = st.sidebar.multiselect('PO Ordered By', po_creators, default=po_creators)
+# Convert large text columns to categorical once (fast comparisons & small memory)
+cat_cols = []
+for col in ['entity', 'po_creator', 'po_vendor', 'product_name', 'buyer_display', 'Buyer.Type']:
+    if col in fil.columns:
+        fil[col] = fil[col].fillna('').astype(str)
+        if not pd.api.types.is_categorical_dtype(fil[col].dtype):
+            fil[col] = fil[col].astype('category')
+        cat_cols.append(col)
 
-choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist())
+# Build sidebar choices (cached). Avoid sorting huge lists unnecessarily.
+entity_choices = cached_unique_sorted(fil['entity']) if 'entity' in fil.columns else []
+sel_e_default = entity_choices if len(entity_choices) <= 200 else entity_choices[:50]
+sel_e = st.sidebar.multiselect('Entity', entity_choices, default=sel_e_default)
+
+po_creator_choices = cached_unique_sorted(fil['po_creator'])
+sel_o_default = po_creator_choices if len(po_creator_choices) <= 200 else po_creator_choices[:50]
+sel_o = st.sidebar.multiselect('PO Ordered By', po_creator_choices, default=sel_o_default)
+
+choices_bt = cached_unique_sorted(fil['Buyer.Type']) if 'Buyer.Type' in fil.columns else []
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
-# Vendor + Item filters
-if po_vendor_col and po_vendor_col in fil.columns:
-    fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
-else:
-    fil['po_vendor'] = ''
-if 'product_name' not in fil.columns:
-    fil['product_name'] = ''
-vendor_choices = sorted([v for v in fil['po_vendor'].dropna().unique().tolist() if str(v).strip()!=''])
-item_choices = sorted([v for v in fil['product_name'].dropna().unique().tolist() if str(v).strip()!=''])
-sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=vendor_choices)
-sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=item_choices)
+vendor_choices = cached_unique_sorted(fil.get('po_vendor', pd.Series(dtype=object)))
+sel_v_default = vendor_choices if len(vendor_choices) <= 200 else vendor_choices[:100]
+sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=sel_v_default)
 
-# apply filters with boolean masks (faster than chained indexing)
-mask = pd.Series(True, index=fil.index)
-if sel_b:
-    mask &= fil['Buyer.Type'].isin(sel_b)
-if sel_e and 'entity' in fil.columns:
-    mask &= fil['entity'].isin(sel_e)
-if sel_o:
-    mask &= fil['po_creator'].isin(sel_o)
-if sel_v:
-    mask &= fil['po_vendor'].isin(sel_v)
-if sel_i:
-    mask &= fil['product_name'].isin(sel_i)
+item_choices = cached_unique_sorted(fil.get('product_name', pd.Series(dtype=object)))
+sel_i_default = item_choices if len(item_choices) <= 200 else item_choices[:100]
+sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=sel_i_default)
+
+# Convert selections into category codes (fast integer ops)
+cat_mappings = {}
+for col, sel in [('entity', sel_e), ('po_creator', sel_o), ('Buyer.Type', sel_b), ('po_vendor', sel_v), ('product_name', sel_i)]:
+    if col in fil.columns:
+        cat = fil[col].cat.categories
+        map_dict = {str(cat_val): i for i, cat_val in enumerate(cat)}
+        cat_mappings[col] = (map_dict, fil[col].cat.codes)
+
+# Build single boolean mask using integer comparisons where possible
+mask = np.ones(len(fil), dtype=bool)
+
+# Fast helper to apply selection via category codes
+def apply_cat_selection(col, selection):
+    global mask
+    if not selection:
+        return
+    map_dict, codes_series = cat_mappings[col]
+    sel_codes = [map_dict[s] for s in selection if s in map_dict]
+    if not sel_codes:
+        mask &= False
+    else:
+        mask &= np.isin(codes_series.values, sel_codes)
+
+# apply filters
+if 'Buyer.Type' in cat_mappings:
+    apply_cat_selection('Buyer.Type', sel_b)
+if 'entity' in cat_mappings:
+    apply_cat_selection('entity', sel_e)
+if 'po_creator' in cat_mappings:
+    apply_cat_selection('po_creator', sel_o)
+if 'po_vendor' in cat_mappings:
+    apply_cat_selection('po_vendor', sel_v)
+if 'product_name' in cat_mappings:
+    apply_cat_selection('product_name', sel_i)
+
+# Now reduce fil to filtered view in one operation (no chained copies)
 fil = fil.loc[mask]
 
-# signature for memoization
-def _sel_key(values):
-    return tuple(sorted(str(v) for v in values)) if values else ()
-
-filter_signature = (
-    fy_key, date_range_key, _sel_key(sel_b), _sel_key(sel_e), _sel_key(sel_o), _sel_key(sel_v), _sel_key(sel_i),
-)
-
-# Precompute month bucket once
-trend_date_col = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
-if trend_date_col:
-    fil['_month_bucket'] = fil[trend_date_col].dt.to_period('M').dt.to_timestamp()
+# If fil is very large, avoid full dataframe rendering — show a head and let users download full CSV
+MAX_PREVIEW = 5000
+if len(fil) > MAX_PREVIEW:
+    st.warning(f"Filtered result has {len(fil)} rows — showing top {MAX_PREVIEW} rows. Use download to get full CSV.")
+    st.dataframe(fil.head(MAX_PREVIEW), use_container_width=True)
 else:
-    fil['_month_bucket'] = pd.NaT
+    st.dataframe(fil, use_container_width=True)
 
+# Reset filters button
 if st.sidebar.button('Reset Filters'):
     for k in list(st.session_state.keys()):
         try:
