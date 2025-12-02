@@ -234,101 +234,98 @@ if date_basis:
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
             date_range_key = (sdt.isoformat(), edt.isoformat())
 
-# ---- FAST FILTERING: replace old filter code with this block ----
+# ---- ULTRA-FAST FILTERING USING INDEX MAPS ----
 
-# Helper: cached unique list retriever to avoid recalculation on every rerun
+# Build reusable index maps (cached): each unique value -> row indices
 @st.cache_data
-def cached_unique_sorted(series: pd.Series, limit: int = None):
-    vals = series.dropna().unique().tolist()
-    if limit and len(vals) > limit:
-        vals = vals[:limit]  # don't sort giant lists every time
-    try:
-        return sorted([str(v) for v in vals if str(v).strip() != ''])
-    except Exception:
-        return [str(v) for v in vals if str(v).strip() != '']
+def build_index_map(series: pd.Series):
+    index_map = {}
+    for val, idx in series.groupby(series).groups.items():
+        index_map[str(val)] = np.fromiter(idx, dtype=int)
+    return index_map
 
-# Convert large text columns to categorical once (fast comparisons & small memory)
-cat_cols = []
-for col in ['entity', 'po_creator', 'po_vendor', 'product_name', 'buyer_display', 'Buyer.Type']:
+# Convert relevant columns to string
+for col in ['entity','po_creator','po_vendor','product_name','buyer_display','Buyer.Type']:
     if col in fil.columns:
         fil[col] = fil[col].fillna('').astype(str)
-        if not pd.api.types.is_categorical_dtype(fil[col].dtype):
-            fil[col] = fil[col].astype('category')
-        cat_cols.append(col)
 
-# Build sidebar choices (cached). Avoid sorting huge lists unnecessarily.
-entity_choices = cached_unique_sorted(fil['entity']) if 'entity' in fil.columns else []
-sel_e_default = entity_choices if len(entity_choices) <= 200 else entity_choices[:50]
-sel_e = st.sidebar.multiselect('Entity', entity_choices, default=sel_e_default)
+# Sidebar choices
+entity_choices = sorted(fil['entity'].unique().tolist()) if 'entity' in fil.columns else []
+sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 
-po_creator_choices = cached_unique_sorted(fil['po_creator'])
-sel_o_default = po_creator_choices if len(po_creator_choices) <= 200 else po_creator_choices[:50]
-sel_o = st.sidebar.multiselect('PO Ordered By', po_creator_choices, default=sel_o_default)
+creator_choices = sorted(fil['po_creator'].unique().tolist())
+sel_o = st.sidebar.multiselect('PO Ordered By', creator_choices, default=creator_choices)
 
-choices_bt = cached_unique_sorted(fil['Buyer.Type']) if 'Buyer.Type' in fil.columns else []
-sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
+bt_choices = sorted(fil['Buyer.Type'].unique().tolist()) if 'Buyer.Type' in fil.columns else []
+sel_b = st.sidebar.multiselect('Buyer Type', bt_choices, default=bt_choices)
 
-vendor_choices = cached_unique_sorted(fil.get('po_vendor', pd.Series(dtype=object)))
-sel_v_default = vendor_choices if len(vendor_choices) <= 200 else vendor_choices[:100]
-sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=sel_v_default)
+vendor_choices = sorted(fil['po_vendor'].unique().tolist())
+sel_v = st.sidebar.multiselect('Vendor', vendor_choices, default=vendor_choices)
 
-item_choices = cached_unique_sorted(fil.get('product_name', pd.Series(dtype=object)))
-sel_i_default = item_choices if len(item_choices) <= 200 else item_choices[:100]
-sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=sel_i_default)
+item_choices = sorted(fil['product_name'].unique().tolist())
+sel_i = st.sidebar.multiselect('Item', item_choices, default=item_choices)
 
-# Convert selections into category codes (fast integer ops)
-cat_mappings = {}
-for col, sel in [('entity', sel_e), ('po_creator', sel_o), ('Buyer.Type', sel_b), ('po_vendor', sel_v), ('product_name', sel_i)]:
-    if col in fil.columns:
-        cat = fil[col].cat.categories
-        map_dict = {str(cat_val): i for i, cat_val in enumerate(cat)}
-        cat_mappings[col] = (map_dict, fil[col].cat.codes)
+# Build maps
+idx_entity = build_index_map(fil['entity']) if 'entity' in fil.columns else {}
+idx_creator = build_index_map(fil['po_creator'])
+idx_bt = build_index_map(fil['Buyer.Type']) if 'Buyer.Type' in fil.columns else {}
+idx_vendor = build_index_map(fil['po_vendor'])
+idx_item = build_index_map(fil['product_name'])
 
-# Build single boolean mask using integer comparisons where possible
-mask = np.ones(len(fil), dtype=bool)
+# Fast intersection helper
+@st.cache_data
+def intersect_arrays(list_of_arrays):
+    if not list_of_arrays:
+        return np.array([], dtype=int)
+    res = list_of_arrays[0]
+    for arr in list_of_arrays[1:]:
+        res = np.intersect1d(res, arr, assume_sorted=False)
+        if res.size == 0:
+            break
+    return res
 
-# Fast helper to apply selection via category codes
-def apply_cat_selection(col, selection):
-    global mask
-    if not selection:
-        return
-    map_dict, codes_series = cat_mappings[col]
-    sel_codes = [map_dict[s] for s in selection if s in map_dict]
-    if not sel_codes:
-        mask &= False
-    else:
-        mask &= np.isin(codes_series.values, sel_codes)
+# Collect arrays for selected filters
+arrays = []
+if sel_e:
+    arrays += [idx_entity.get(x, np.array([],dtype=int)) for x in sel_e]
+if sel_o:
+    arrays += [idx_creator.get(x, np.array([],dtype=int)) for x in sel_o]
+if sel_b:
+    arrays += [idx_bt.get(x, np.array([],dtype=int)) for x in sel_b]
+if sel_v:
+    arrays += [idx_vendor.get(x, np.array([],dtype=int)) for x in sel_v]
+if sel_i:
+    arrays += [idx_item.get(x, np.array([],dtype=int)) for x in sel_i]
 
-# apply filters
-if 'Buyer.Type' in cat_mappings:
-    apply_cat_selection('Buyer.Type', sel_b)
-if 'entity' in cat_mappings:
-    apply_cat_selection('entity', sel_e)
-if 'po_creator' in cat_mappings:
-    apply_cat_selection('po_creator', sel_o)
-if 'po_vendor' in cat_mappings:
-    apply_cat_selection('po_vendor', sel_v)
-if 'product_name' in cat_mappings:
-    apply_cat_selection('product_name', sel_i)
+# Compute final filtered index
+final_idx = intersect_arrays([arr for arr in arrays if arr.size > 0])
 
-# Now reduce fil to filtered view in one operation (no chained copies)
-fil = fil.loc[mask]
+# If no filter intersection, use empty
+if final_idx.size == 0:
+    fil = fil.iloc[0:0]
+else:
+    fil = fil.iloc[final_idx]
 
-# If fil is very large, avoid full dataframe rendering — show a head and let users download full CSV
+# Safety for trend_date_col
+trend_date_col = None
+if po_create_col and po_create_col in fil.columns:
+    trend_date_col = po_create_col
+elif pr_col and pr_col in fil.columns:
+    trend_date_col = pr_col
+
+# Preview
 MAX_PREVIEW = 5000
 if len(fil) > MAX_PREVIEW:
-    st.warning(f"Filtered result has {len(fil)} rows — showing top {MAX_PREVIEW} rows. Use download to get full CSV.")
+    st.warning(f"Filtered result has {len(fil)} rows — showing top {MAX_PREVIEW} rows.")
     st.dataframe(fil.head(MAX_PREVIEW), use_container_width=True)
 else:
     st.dataframe(fil, use_container_width=True)
 
-# Reset filters button
+# Reset button
 if st.sidebar.button('Reset Filters'):
     for k in list(st.session_state.keys()):
-        try:
-            del st.session_state[k]
-        except Exception:
-            pass
+        try: del st.session_state[k]
+        except: pass
     st.experimental_rerun()
 
 # ----------------- Tabs -----------------
