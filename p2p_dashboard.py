@@ -1,4 +1,4 @@
-# paste from line 1 into p2p_dashboard_indirect_final.py
+  # paste from line 1 into p2p_dashboard_indirect_final.py
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -63,7 +63,6 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
     df['buyer_group_code'] = code_series
     df['Buyer Group Code'] = code_series
 
-    # default direct
     buyer_type = pd.Series('Direct', index=df.index, dtype=object)
 
     alias_direct = bg_raw.str.upper().isin({'ME_BG17', 'MLBG16'})
@@ -81,13 +80,11 @@ def compute_buyer_type_vectorized(df: pd.DataFrame) -> pd.Series:
 def compute_buyer_display(df: pd.DataFrame, purchase_doc_col: str | None, requester_col: str | None) -> pd.Series:
     if df.empty:
         return pd.Series(dtype=object)
-    # vectorized path: po_creator already exists
     po_creator = df.get('po_creator', pd.Series('', index=df.index)).fillna('').astype(str).str.strip()
     requester = df.get(requester_col, pd.Series('', index=df.index)).fillna('').astype(str).str.strip() if requester_col else pd.Series('', index=df.index)
     has_po = pd.Series(False, index=df.index)
     if purchase_doc_col and purchase_doc_col in df.columns:
         has_po = df[purchase_doc_col].fillna('').astype(str).str.strip() != ''
-    # if PO exists and po_creator not empty -> po_creator; else requester; else fallback
     buyer_display = np.where(has_po & (po_creator != ''), po_creator, '')
     buyer_display = np.where((buyer_display == '') & (requester != ''), requester, buyer_display)
     buyer_display = np.where(buyer_display == '', 'PR only - Unassigned', buyer_display)
@@ -135,7 +132,7 @@ df = load_all()
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
-# canonical column detection (do once)
+# canonical column detection
 pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
 po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
 net_amount_col = safe_col(df, ['net_amount', 'net amount', 'net_amount_inr', 'amount'])
@@ -160,14 +157,13 @@ for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_
     if c and c not in df.columns:
         df[c] = ''
 
-# buyer group code extraction (keep, but vectorized)
+# buyer group code extraction
 if 'buyer_group' in df.columns:
     try:
         df['buyer_group_code'] = df['buyer_group'].astype(str).str.extract('([0-9]+)')[0].astype(float)
     except Exception:
         df['buyer_group_code'] = np.nan
 
-# compute Buyer.Type ONCE (vectorized)
 df['Buyer.Type'] = compute_buyer_type_vectorized(df)
 
 # normalize po_creator
@@ -191,10 +187,8 @@ o_created_by_map = {
     'MMW2021214': 'Raunak', 'Intechuser1': 'Intesh Data'
 }
 upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
-# Map using vectorized .map on uppercased values to avoid per-row operations
-orig_po = df[po_orderer_col].astype(str).fillna('').str.upper()
-mapped = orig_po.map(upper_map).fillna(df[po_orderer_col].astype(str).fillna(''))
-df['po_creator'] = mapped.replace({'N/A': 'Dilip', '': 'Dilip'}).astype(str).str.strip()
+df['po_creator'] = df[po_orderer_col].astype(str).str.upper().map(upper_map).fillna(df[po_orderer_col].astype(str))
+df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
 
 creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
 df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
@@ -215,8 +209,7 @@ FY = {
 fy_key = st.sidebar.selectbox('Financial Year', list(FY))
 pr_start, pr_end = FY[fy_key]
 
-# Work on a filtered view (avoid unnecessary deep copies)
-fil = df
+fil = df.copy()
 if pr_col and pr_col in fil.columns:
     fil = fil[(fil[pr_col] >= pr_start) & (fil[pr_col] <= pr_end)]
 
@@ -225,11 +218,9 @@ date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_co
 dr = None
 date_range_key = None
 if date_basis:
-    # operate on series to avoid copying whole frame
-    s_nonnull = fil[date_basis].dropna()
-    if not s_nonnull.empty:
-        mindt = s_nonnull.min()
-        maxdt = s_nonnull.max()
+    mindt = fil[date_basis].dropna().min()
+    maxdt = fil[date_basis].dropna().max()
+    if pd.notna(mindt) and pd.notna(maxdt):
         dr = st.sidebar.date_input('Date range', (mindt.date(), maxdt.date()), key='date_range')
         if isinstance(dr, tuple) and len(dr) == 2:
             sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
@@ -241,7 +232,7 @@ for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
     if c not in fil.columns:
         fil[c] = ''
 
-# Ensure PR-level Buyer.Type is tidy (use existing column where possible)
+# Ensure PR-level Buyer.Type is tidy
 if 'Buyer.Type' not in fil.columns:
     fil['Buyer.Type'] = compute_buyer_type_vectorized(fil)
 fil['Buyer.Type'] = fil['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
@@ -266,7 +257,7 @@ if sel_e and 'entity' in fil.columns:
 if sel_o:
     fil = fil[fil['po_creator'].isin(sel_o)]
 
-# Vendor + Item filters (build choices on the filtered frame)
+# Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
     fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
 else:
@@ -300,7 +291,6 @@ filter_signature = (
 # Precompute month bucket once to avoid repeated conversions downstream
 trend_date_col = po_create_col if (po_create_col and po_create_col in fil.columns) else (pr_col if (pr_col and pr_col in fil.columns) else None)
 if trend_date_col:
-    # convert once
     fil['_month_bucket'] = fil[trend_date_col].dt.to_period('M').dt.to_timestamp()
 else:
     fil['_month_bucket'] = pd.NaT
@@ -336,9 +326,8 @@ with T[0]:
             return pd.DataFrame()
         if 'entity' not in fil.columns:
             return pd.DataFrame()
-        # minimize temporary copies, only keep necessary columns
-        z = fil.loc[fil['_month_bucket'].notna(), ['_month_bucket', 'entity', net_amount_col]].copy()
-        z = z.rename(columns={'_month_bucket':'month'})
+        z = fil.dropna(subset=['_month_bucket']).copy()
+        z['month'] = z['_month_bucket']
         z['entity'] = z['entity'].fillna('Unmapped')
         return z.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
 
@@ -371,7 +360,6 @@ with T[0]:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             xaxis_labels = pivot_cr.index.strftime('%b-%Y')
 
-            # build traces
             for ent in ordered_entities:
                 ent_vals = pivot_cr[ent].values
                 text_vals = [f"{v:.2f}" if v > 0 else '' for v in ent_vals]
@@ -388,8 +376,8 @@ with T[0]:
                     secondary_y=False
                 )
 
-            # cumulative line
-            highlight_color = '#FFD700'
+            # cumulative line — highlighted color + per-point labels in same color
+            highlight_color = '#FFD700'  # gold highlight — change if you prefer a different color
             fig.add_trace(
                 go.Scatter(
                     x=xaxis_labels,
@@ -398,7 +386,9 @@ with T[0]:
                     name='Cumulative (Cr)',
                     line=dict(color=highlight_color, width=3),
                     marker=dict(color=highlight_color, size=6),
+                    # round to 0 decimals and show as integers
                     text=[f"{int(round(v, 0))}" for v in cum_cr.values],
+                    # position and slightly smaller font to avoid overlap
                     textposition='top center',
                     textfont=dict(color=highlight_color, size=9),
                     hovertemplate='%{x}<br>Cumulative: %{y:.2f} Cr<extra></extra>'
@@ -439,7 +429,7 @@ with T[0]:
     st.subheader('Buyer-wise Spend (Cr)')
     if 'buyer_display' in fil.columns and net_amount_col in fil.columns:
         def build_buyer_spend():
-            grp = fil.groupby('buyer_display', sort=False)[net_amount_col].sum().reset_index()
+            grp = fil.groupby('buyer_display')[net_amount_col].sum().reset_index()
             grp['cr'] = grp[net_amount_col] / 1e7
             return grp.sort_values('cr', ascending=False)
         buyer_spend = memoized_compute('buyer_spend', filter_signature, build_buyer_spend)
@@ -450,13 +440,13 @@ with T[0]:
         st.plotly_chart(fig_buyer, use_container_width=True)
         st.dataframe(buyer_spend, use_container_width=True)
 
-        # Buyer trend
+        # Buyer trend similar to Entity trend
         try:
             if trend_date_col and net_amount_col and net_amount_col in fil.columns:
                 def build_buyer_trend():
-                    bt = fil.loc[fil['_month_bucket'].notna(), ['_month_bucket', 'buyer_display', net_amount_col]].copy()
-                    bt = bt.rename(columns={'_month_bucket':'month'})
-                    return bt.groupby(['month','buyer_display'], sort=False)[net_amount_col].sum().reset_index()
+                    bt = fil.dropna(subset=['_month_bucket']).copy()
+                    bt['month'] = bt['_month_bucket']
+                    return bt.groupby(['month','buyer_display'], dropna=False)[net_amount_col].sum().reset_index()
                 bt_grouped = memoized_compute('buyer_trend', filter_signature, build_buyer_trend)
                 if bt_grouped.empty:
                     st.info('No buyer trend data for the current filters.')
@@ -471,7 +461,6 @@ with T[0]:
                     if chosen:
                         g_b = bt_grouped[bt_grouped['buyer_display'].isin(chosen)].copy()
                         if not g_b.empty:
-                            # create full monthly index once
                             g_b['month'] = g_b['month'].dt.to_period('M').dt.to_timestamp()
                             full_range = pd.period_range(g_b['month'].min().to_period('M'), g_b['month'].max().to_period('M'), freq='M').to_timestamp()
                             pivot = (
@@ -481,7 +470,6 @@ with T[0]:
                                   .reset_index()
                             )
                             trend_long = pivot.melt(id_vars='month', var_name='buyer_display', value_name='value')
-                            # smoothing via groupby transform (vectorized)
                             rolling_window = st.slider('Smooth buyer trend (months)', 1, 6, 1, key='buyer_trend_smooth')
                             if rolling_window > 1:
                                 trend_long['value'] = (
@@ -517,7 +505,7 @@ with T[1]:
     st.subheader('PR/PO Timing')
     if pr_col and po_create_col and pr_col in fil.columns and po_create_col in fil.columns:
         def build_lead_df():
-            lead = fil.loc[fil[pr_col].notna() & fil[po_create_col].notna(), [pr_col, po_create_col, 'Buyer.Type', 'po_creator']].copy()
+            lead = fil.dropna(subset=[pr_col, po_create_col]).copy()
             lead['Lead Time (Days)'] = (pd.to_datetime(lead[po_create_col]) - pd.to_datetime(lead[pr_col])).dt.days
             return lead
         lead_df = memoized_compute('lead_df', filter_signature, build_lead_df)
@@ -529,11 +517,11 @@ with T[1]:
 
         st.subheader('⏱️ PR to PO Lead Time by Buyer Type & by Buyer')
         if 'Buyer.Type' in lead_df.columns:
-            lead_avg_by_type = lead_df.groupby('Buyer.Type', sort=False)['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'Buyer.Type':'Buyer Type'})
+            lead_avg_by_type = lead_df.groupby('Buyer.Type')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'Buyer.Type':'Buyer Type'})
         else:
             lead_avg_by_type = pd.DataFrame()
         if 'po_creator' in lead_df.columns:
-            lead_avg_by_buyer = lead_df.groupby('po_creator', sort=False)['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'po_creator':'PO.Creator'})
+            lead_avg_by_buyer = lead_df.groupby('po_creator')['Lead Time (Days)'].mean().round(0).reset_index().rename(columns={'po_creator':'PO.Creator'})
         else:
             lead_avg_by_buyer = pd.DataFrame()
         c1,c2 = st.columns(2)
@@ -541,15 +529,15 @@ with T[1]:
         c2.dataframe(lead_avg_by_buyer, use_container_width=True)
 
         st.subheader('📅 Monthly PR & PO Trends')
-        tmp = fil
+        tmp = fil.copy()
         if pr_col in tmp.columns:
-            tmp = tmp.assign(**{'PR Month': pd.to_datetime(tmp[pr_col], errors='coerce').dt.to_period('M')})
+            tmp['PR Month'] = pd.to_datetime(tmp[pr_col], errors='coerce').dt.to_period('M')
         else:
-            tmp = tmp.assign(**{'PR Month': pd.NaT})
+            tmp['PR Month'] = pd.NaT
         if po_create_col in tmp.columns:
-            tmp = tmp.assign(**{'PO Month': pd.to_datetime(tmp[po_create_col], errors='coerce').dt.to_period('M')})
+            tmp['PO Month'] = pd.to_datetime(tmp[po_create_col], errors='coerce').dt.to_period('M')
         else:
-            tmp = tmp.assign(**{'PO Month': pd.NaT})
+            tmp['PO Month'] = pd.NaT
         pr_col_name = pr_number_col if pr_number_col else None
         po_col_name = purchase_doc_col if purchase_doc_col else None
         if pr_col_name and po_col_name and pr_col_name in tmp.columns:
@@ -571,16 +559,14 @@ with T[1]:
 
         if pr_status_col and pr_status_col in df.columns:
             def prepare_open_source(source_df: pd.DataFrame) -> pd.DataFrame:
-                """Ensure Buyer.Type exists and re-apply Buyer Type selection locally (vectorized)."""
-                base = source_df
+                """Ensure Buyer.Type exists and re-apply Buyer Type selection locally."""
+                base = source_df.copy()
                 if 'Buyer.Type' not in base.columns:
-                    base = base.assign(**{'Buyer.Type': compute_buyer_type_vectorized(base)})
-                # normalize values in vectorized manner
-                bt = base['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
-                bt = bt.mask(bt.str.lower().isin(['direct','d']), 'Direct')
-                bt = bt.mask(bt.str.lower().isin(['indirect','i','in']), 'Indirect')
-                bt = bt.where(bt.isin(['Direct','Indirect']), 'Direct')
-                base = base.assign(**{'Buyer.Type': bt})
+                    base['Buyer.Type'] = compute_buyer_type_vectorized(base)
+                base['Buyer.Type'] = base['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
+                base.loc[base['Buyer.Type'].str.lower().isin(['direct', 'd']), 'Buyer.Type'] = 'Direct'
+                base.loc[base['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type'] = 'Indirect'
+                base.loc[~base['Buyer.Type'].isin(['Direct','Indirect']), 'Buyer.Type'] = 'Direct'
                 if sel_b:
                     base = base[base['Buyer.Type'].isin(sel_b)]
                 return base
@@ -607,7 +593,7 @@ with T[1]:
                 else:
                     open_df["Pending Age (Days)"] = np.nan
 
-                # aggregation map (build once)
+                # aggregation map
                 agg_map = {}
                 if pr_date_col and pr_date_col in open_df.columns:
                     agg_map[pr_date_col] = 'first'
@@ -630,12 +616,10 @@ with T[1]:
                 if purchase_doc_col and purchase_doc_col in open_df.columns: agg_map[purchase_doc_col] = 'first'
 
                 group_by_col = pr_number_col_local if pr_number_col_local and pr_number_col_local in open_df.columns else None
-                # group using vectorized groupby
                 if group_by_col:
-                    open_summary = open_df.groupby(group_by_col, sort=False).agg(agg_map).reset_index()
+                    open_summary = open_df.groupby(group_by_col).agg(agg_map).reset_index()
                 else:
-                    # fallback grouping: use index if no PR number
-                    open_summary = open_df.reset_index().groupby('_row_id' if '_row_id' in open_df.columns else open_df.index.name or 'index', sort=False).agg(agg_map).reset_index()
+                    open_summary = open_df.reset_index().groupby('_row_id' if '_row_id' in open_df.columns else open_df.index.name or 'index').agg(agg_map).reset_index()
 
                 open_summary = open_summary.drop(columns=['buyer_type','effective_buyer_type'], errors='ignore')
 
@@ -691,7 +675,7 @@ with T[2]:
     po_approved = safe_col(fil, ['po_approved_date','po approved date','po_approved_date'])
     if po_approved and po_create and po_create in fil.columns and purchase_doc_col:
         def build_po_approval():
-            df_ = fil.loc[fil[po_create].notna(), [purchase_doc_col, po_create, po_approved, net_amount_col]].copy()
+            df_ = fil[fil[po_create].notna()].copy()
             df_[po_approved] = pd.to_datetime(df_[po_approved], errors='coerce')
             df_['approval_lead_time'] = (df_[po_approved] - df_[po_create]).dt.days
             return df_
@@ -713,12 +697,12 @@ with T[2]:
 
 with T[3]:
     st.subheader('Delivery Summary')
-    dv = fil
+    dv = fil.copy()
     po_qty_col = safe_col(dv, ['po_qty','po quantity','po_quantity','po qty'])
     received_col = safe_col(dv, ['receivedqty','received_qty','received qty','received_qty'])
     if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
         def build_delivery():
-            tmp = dv.loc[:, [po_qty_col, received_col, purchase_doc_col, po_vendor_col]].copy()
+            tmp = dv[[po_qty_col, received_col, purchase_doc_col, po_vendor_col]].copy()
             tmp['po_qty_f'] = tmp[po_qty_col].fillna(0).astype(float)
             tmp['received_f'] = tmp[received_col].fillna(0).astype(float)
             tmp['pct_received'] = np.where(tmp['po_qty_f']>0, tmp['received_f']/tmp['po_qty_f']*100, 0)
@@ -732,7 +716,7 @@ with T[4]:
     st.subheader('Top Vendors by Spend')
     if po_vendor_col and net_amount_col and po_vendor_col in fil.columns and net_amount_col in fil.columns:
         def build_vendor_spend():
-            df_ = fil.groupby(po_vendor_col, sort=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_ = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
             df_['cr'] = df_[net_amount_col]/1e7
             return df_
         vs = memoized_compute('vendor_spend', filter_signature, build_vendor_spend)
@@ -742,25 +726,21 @@ with T[4]:
 
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
-    dept_df = fil
-    # vectorized "pick first non-empty" across candidate columns to avoid per-row apply
+    dept_df = fil.copy()
+    def pick_pr_dept(r):
+        candidates = []
+        for c in [pr_bu_col, pr_budget_desc_col, po_bu_col, po_budget_desc_col, pr_budget_code_col]:
+            if c and c in r.index and pd.notna(r[c]) and str(r[c]).strip()!='':
+                candidates.append(str(r[c]).strip())
+        return candidates[0] if candidates else 'Unmapped / Missing'
     def build_dept_df():
-        candidates = [c for c in [pr_bu_col, pr_budget_desc_col, po_bu_col, po_budget_desc_col, pr_budget_code_col] if c]
-        # ensure candidates exist in frame
-        available = [c for c in candidates if c in dept_df.columns]
-        if not available:
-            dept_df_local = dept_df.assign(pr_department_unified='Unmapped / Missing')
-            return dept_df_local
-        # create a DataFrame of strings and replace empty with NaN for bfill
-        tmp = dept_df[available].astype(str).replace({'': np.nan, 'nan': np.nan})
-        # bfill along axis=1 to pick first non-null in candidate order
-        unified = tmp.bfill(axis=1).iloc[:, 0].fillna('Unmapped / Missing')
-        dept_df_local = dept_df.assign(pr_department_unified=unified.values)
-        return dept_df_local
+        dept = fil.copy()
+        dept['pr_department_unified'] = dept.apply(pick_pr_dept, axis=1)
+        return dept
     dept_df = memoized_compute('dept_df', filter_signature, build_dept_df)
     if pr_budget_desc_col and pr_budget_desc_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         def build_desc():
-            df_ = dept_df.groupby(pr_budget_desc_col, sort=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_ = dept_df.groupby(pr_budget_desc_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
             df_['cr'] = df_[net_amount_col]/1e7
             return df_
         agg_desc = memoized_compute('dept_desc', filter_signature, build_desc)
@@ -779,7 +759,7 @@ with T[5]:
     st.markdown('---')
     if pr_budget_code_col and pr_budget_code_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         def build_code():
-            df_ = dept_df.groupby(pr_budget_code_col, sort=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            df_ = dept_df.groupby(pr_budget_code_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
             df_['cr'] = df_[net_amount_col]/1e7
             return df_
         agg_code = memoized_compute('dept_code', filter_signature, build_code)
@@ -804,10 +784,9 @@ with T[6]:
         cols_needed = [grp_by, po_unit_rate_col, purchase_doc_col, pr_number_col, po_vendor_col, 'item_description', po_create_col, net_amount_col]
         available_cols = [c for c in cols_needed if c in fil.columns]
         def build_unit_base():
-            z = fil.loc[:, available_cols].dropna(subset=[grp_by, po_unit_rate_col]).copy()
-            # compute median per group
-            med = z.groupby(grp_by, sort=False)[po_unit_rate_col].median().rename('median_rate')
-            z = z.merge(med, left_on=grp_by, right_index=True, how='left')
+            z = fil[available_cols].dropna(subset=[grp_by, po_unit_rate_col]).copy()
+            med = z.groupby(grp_by)[po_unit_rate_col].median().rename('median_rate')
+            z = z.join(med, on=grp_by)
             z['pctdev'] = (z[po_unit_rate_col] - z['median_rate']) / z['median_rate'].replace(0, np.nan)
             return z
         z = memoized_compute('unit_outlier', filter_signature + (grp_by,), build_unit_base)
@@ -820,9 +799,9 @@ with T[7]:
     st.subheader('Forecast Next Month Spend (SMA)')
     if trend_date_col and net_amount_col and net_amount_col in fil.columns:
         def build_monthly_total():
-            t = fil.loc[fil['_month_bucket'].notna(), ['_month_bucket', net_amount_col]].copy()
-            t = t.rename(columns={'_month_bucket':'month'})
-            return t.groupby('month', sort=False)[net_amount_col].sum().sort_index()
+            t = fil.dropna(subset=['_month_bucket']).copy()
+            t['month'] = t['_month_bucket']
+            return t.groupby('month')[net_amount_col].sum().sort_index()
         m = memoized_compute('monthly_total', filter_signature, build_monthly_total)
         m_cr = m/1e7
         k = st.slider('Window (months)', 3, 12, 6)
@@ -841,7 +820,7 @@ with T[8]:
     st.subheader('Vendor Scorecard')
     if po_vendor_col and po_vendor_col in fil.columns:
         vendor = st.selectbox('Pick Vendor', sorted(fil[po_vendor_col].dropna().astype(str).unique().tolist()))
-        vd = fil[fil[po_vendor_col].astype(str) == str(vendor)]
+        vd = fil[fil[po_vendor_col].astype(str) == str(vendor)].copy()
         spend = vd.get(net_amount_col, pd.Series(0)).sum()/1e7 if net_amount_col else 0
         upos = int(vd.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
         k1,k2 = st.columns(2); k1.metric('Spend (Cr)', f"{spend:.2f}"); k2.metric('Unique POs', upos)
@@ -856,10 +835,9 @@ with T[9]:
     if query and valid_cols:
         mask = pd.Series(False, index=df.index)
         q = query.lower()
-        # vectorized search across selected columns
         for c in valid_cols:
-            mask |= df[c].astype(str).str.lower().str.contains(q, na=False)
-        res = df.loc[mask].copy()
+            mask = mask | df[c].astype(str).str.lower().str.contains(q, na=False)
+        res = df[mask].copy()
         if cat_sel:
             res = res[res['procurement_category'].astype(str).isin(cat_sel)]
         if vend_sel and po_vendor_col in df.columns:
