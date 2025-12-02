@@ -273,13 +273,15 @@ idx_vendor = build_index_map(fil['po_vendor'])
 idx_item = build_index_map(fil['product_name'])
 
 # Fast intersection helper
-@st.cache_data
 def intersect_arrays(list_of_arrays):
     if not list_of_arrays:
         return np.array([], dtype=int)
     res = list_of_arrays[0]
     for arr in list_of_arrays[1:]:
         res = np.intersect1d(res, arr, assume_sorted=False)
+        if res.size == 0:
+            break
+    return res(res, arr, assume_sorted=False)
         if res.size == 0:
             break
     return res
