@@ -274,13 +274,21 @@ idx_item = build_index_map(fil['product_name'])
 
 # Fast intersection helper
 def intersect_arrays(list_of_arrays):
+    """Intersect a list of integer index arrays and return the intersection.
+    Not cached because NumPy arrays are not hashable by Streamlit's cache system.
+    """
     if not list_of_arrays:
         return np.array([], dtype=int)
-    res = list_of_arrays[0]
+
+    # Start with the first array (make a copy to avoid mutating inputs)
+    res = np.array(list_of_arrays[0], copy=True)
+
+    # Iteratively intersect with remaining arrays
     for arr in list_of_arrays[1:]:
         res = np.intersect1d(res, arr, assume_sorted=False)
         if res.size == 0:
             break
+
     return res(res, arr, assume_sorted=False)
         if res.size == 0:
             break
