@@ -139,8 +139,95 @@ def compute_buyer_display(df: pd.DataFrame, purchase_doc_col: str | None, reques
     buyer_display = np.where(buyer_display == '', 'PR only - Unassigned', buyer_display)
     return pd.Series(buyer_display, index=df.index, dtype=object)
 
+
+@st.cache_data(show_spinner=False)
+def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
+    """Applies all expensive preprocessing steps to the raw dataframe."""
+    if _df.empty:
+        return _df
+    df = _df.copy()
+
+    # ensure entity
+    entity_col = safe_col(df, ['entity','company','brand','entity_name'])
+    if entity_col and entity_col in df.columns:
+        df['entity'] = df[entity_col].fillna('').astype(str).str.strip()
+    else:
+        df['entity'] = df.get('entity_source_file', '').fillna('').astype(str)
+
+    # defensive default columns
+    pr_budget_desc_col = safe_col(df, ['pr_budget_description', 'pr budget description', 'pr_budget_desc', 'pr budget description'])
+    pr_budget_code_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
+    po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget description', 'po_budget_desc'])
+    po_budget_code_col = safe_col(df, ['po_budget_code', 'po budget code', 'po_budgetcode'])
+    pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu','pr bussiness unit','pr business unit'])
+    po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu','po bussiness unit','po business unit'])
+    for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
+        if c and c not in df.columns:
+            df[c] = ''
+
+    # buyer group code extraction (fast)
+    if 'buyer_group' in df.columns:
+        try:
+            df['buyer_group_code'] = pd.to_numeric(df['buyer_group'].astype(str).str.extract('([0-9]+)')[0], errors='coerce')
+        except Exception:
+            df['buyer_group_code'] = np.nan
+
+    # Buyer.Type
+    if 'Buyer.Type' not in df.columns:
+        df['Buyer.Type'] = compute_buyer_type_vectorized(df)
+    df['Buyer.Type'] = df['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
+
+    # normalize po_creator using mapping
+    o_created_by_map = {
+        'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
+        'MMW2021181': 'Nayan', 'MMW2223014': 'Aatish', 'MMW_EXT_002': 'Deepakex', 'MMW2425024': 'Kamlesh',
+        'MMW2021184': 'Suresh', 'N/A': 'Dilip', 'MMW2526019': 'Vraj', 'MMW2223240': 'Vatsal',
+        'MMW2223219': '', 'MMW2021115': 'Priyam', 'MMW2425031': 'Preet', 'MMW222360IN': 'Ayush',
+        'MMW2425132': 'Prateek.B', 'MMW2425025': 'Jaymin', 'MMW2425092': 'Suresh', 'MMW252617IN': 'Akaash',
+        'MMW1920052': 'Nirmal', '2425036': '', 'MMW222355IN': 'Jaymin', 'MMW2324060': 'Chetan',
+        'MMW222347IN': 'Vaibhav', 'MMW2425011': '', 'MMW1920036': 'Ankit', 'MMW2425143': 'Prateek.K',
+        '2425027': '', 'MMW2223017': 'Umesh', 'MMW2021214': 'Raunak', 'Intechuser1': 'Intesh Data'
+    }
+    upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
+    po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
+    if po_orderer_col and po_orderer_col in df.columns:
+        df[po_orderer_col] = df[po_orderer_col].fillna('N/A').astype(str).str.strip()
+    else:
+        df['po_orderer'] = 'N/A'
+    po_orderer_col = 'po_orderer'
+
+    df['po_creator'] = df[po_orderer_col].astype(str).str.upper().map(upper_map).fillna(df[po_orderer_col].astype(str))
+    df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
+
+    # po_buyer_type
+    creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
+    df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+
+    # pr_requester column detection and buyer_display
+    purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchase doc'])
+    pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name','pr_requester_name','requester_name'])
+    df['buyer_display'] = compute_buyer_display(df, purchase_doc_col, pr_requester_col)
+
+    # Convert common columns to categorical to speed groupbys & joins
+    po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
+    if po_vendor_col and po_vendor_col in df.columns:
+        df[po_vendor_col] = df[po_vendor_col].fillna('').astype(str)
+    else:
+        df['po_vendor'] = ''
+        po_vendor_col = 'po_vendor'
+
+    if 'product_name' in df.columns:
+        df['product_name'] = df['product_name'].fillna('').astype(str)
+    else:
+        df['product_name'] = ''
+    for c in ['entity', 'po_creator', 'buyer_display', po_vendor_col]:
+        if c and c in df.columns:
+            to_cat(df, c)
+    return df
+
 # ---------- Load & preprocess ----------
-df = load_all()
+df_raw = load_all()
+df = preprocess_data(df_raw)
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
@@ -240,67 +327,7 @@ po_budget_desc_col = safe_col(df, ['po_budget_description', 'po budget descripti
 pr_bu_col = safe_col(df, ['pr_bussiness_unit','pr_business_unit','pr business unit','pr_bu','pr bussiness unit','pr business unit'])
 po_bu_col = safe_col(df, ['po_bussiness_unit','po_business_unit','po business unit','po_bu','po bussiness unit','po business unit'])
 entity_col = safe_col(df, ['entity','company','brand','entity_name'])
-
-# ensure entity
-if entity_col and entity_col in df.columns:
-    df['entity'] = df[entity_col].fillna('').astype(str).str.strip()
-else:
-    df['entity'] = df.get('entity_source_file', '').fillna('').astype(str)
-
-# defensive default columns
-for c in [pr_budget_desc_col, pr_budget_code_col, po_budget_desc_col, po_budget_code_col, pr_bu_col, po_bu_col]:
-    if c and c not in df.columns:
-        df[c] = ''
-
-# buyer group code extraction (fast)
-if 'buyer_group' in df.columns:
-    try:
-        df['buyer_group_code'] = pd.to_numeric(df['buyer_group'].astype(str).str.extract('([0-9]+)')[0], errors='coerce')
-    except Exception:
-        df['buyer_group_code'] = np.nan
-
-# Buyer.Type
-if 'Buyer.Type' not in df.columns:
-    df['Buyer.Type'] = compute_buyer_type_vectorized(df)
-
-# tidy
-df['Buyer.Type'] = df['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
-
-# normalize po_creator using mapping (use upper mapping once)
-o_created_by_map = {
-    'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
-    'MMW2021181': 'Nayan', 'MMW2223014': 'Aatish', 'MMW_EXT_002': 'Deepakex', 'MMW2425024': 'Kamlesh',
-    'MMW2021184': 'Suresh', 'N/A': 'Dilip', 'MMW2526019': 'Vraj', 'MMW2223240': 'Vatsal',
-    'MMW2223219': '', 'MMW2021115': 'Priyam', 'MMW2425031': 'Preet', 'MMW222360IN': 'Ayush',
-    'MMW2425132': 'Prateek.B', 'MMW2425025': 'Jaymin', 'MMW2425092': 'Suresh', 'MMW252617IN': 'Akaash',
-    'MMW1920052': 'Nirmal', '2425036': '', 'MMW222355IN': 'Jaymin', 'MMW2324060': 'Chetan',
-    'MMW222347IN': 'Vaibhav', 'MMW2425011': '', 'MMW1920036': 'Ankit', 'MMW2425143': 'Prateek.K',
-    '2425027': '', 'MMW2223017': 'Umesh', 'MMW2021214': 'Raunak', 'Intechuser1': 'Intesh Data'
-}
-upper_map = {k.upper(): v for k, v in o_created_by_map.items()}
-po_orderer_col = safe_col(df, ['po_orderer', 'po orderer', 'po_orderer_code'])
-if po_orderer_col and po_orderer_col in df.columns:
-    df[po_orderer_col] = df[po_orderer_col].fillna('N/A').astype(str).str.strip()
-else:
-    df['po_orderer'] = 'N/A'
-po_orderer_col = 'po_orderer'
-
-# map creator in one vectorized step
-df['po_creator'] = df[po_orderer_col].astype(str).str.upper().map(upper_map).fillna(df[po_orderer_col].astype(str))
-df['po_creator'] = df['po_creator'].replace({'N/A': 'Dilip', '': 'Dilip'})
-
-# po_buyer_type
-creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
-df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
-
-# pr_requester column detection and buyer_display
 pr_requester_col = safe_col(df, ['pr_requester','requester','pr_requester_name','pr_requester_name','requester_name'])
-df['buyer_display'] = compute_buyer_display(df, purchase_doc_col, pr_requester_col)
-
-# Convert common columns to categorical to speed groupbys & joins
-for c in ['entity', 'po_creator', 'buyer_display', po_vendor_col]:
-    if c and c in df.columns:
-        to_cat(df, c)
 
 # ----------------- Sidebar filters -----------------
 if LOGO_PATH.exists():
@@ -350,6 +377,7 @@ fil.loc[fil['Buyer.Type'].str.lower().isin(['indirect', 'i', 'in']), 'Buyer.Type
 fil.loc[~fil['Buyer.Type'].isin(['Direct', 'Indirect']), 'Buyer.Type'] = 'Direct'
 
 
+
 # Entity + PO ordered by filters (use categories for speed)
 entity_choices = sorted([e for e in fil['entity'].cat.categories.tolist() if str(e).strip() != '']) if 'entity' in fil.columns and fil['entity'].dtype.name=='category' else sorted([e for e in fil['entity'].dropna().unique().tolist() if str(e).strip() != ''])
 sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
@@ -365,23 +393,16 @@ sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
-    # If the source column is categorical, filling with a value not present in categories
-    # raises a TypeError. Convert to object first to avoid that.
-    if pd.api.types.is_categorical_dtype(fil[po_vendor_col]):
-        fil['po_vendor'] = fil[po_vendor_col].astype(object).fillna('').astype(str)
-    else:
-        fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
+    vendor_choices = sorted(fil[po_vendor_col].cat.categories) if fil[po_vendor_col].dtype.name == 'category' else sorted(fil[po_vendor_col].unique())
+    sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=vendor_choices)
 else:
-    fil['po_vendor'] = ''
+    sel_v = []
 
-if 'product_name' not in fil.columns:
-    fil['product_name'] = ''
-
-vendor_choices = sorted([v for v in fil['po_vendor'].dropna().unique().tolist() if str(v).strip()!=''])
-item_choices = sorted([v for v in fil['product_name'].dropna().unique().tolist() if str(v).strip()!=''])
-
-sel_v = st.sidebar.multiselect('Vendor (pick one or more)', vendor_choices, default=vendor_choices)
-sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=item_choices)
+if 'product_name' in fil.columns:
+    item_choices = sorted(fil['product_name'].unique())
+    sel_i = st.sidebar.multiselect('Item / Product (pick one or more)', item_choices, default=item_choices)
+else:
+    sel_i = []
 
 
 # Apply filters (order matters, do vectorized boolean masks)
@@ -420,7 +441,7 @@ if st.sidebar.button('Reset Filters'):
             del st.session_state[k]
         except Exception:
             pass
-    st.experimental_rerun()
+    st.rerun()
 
 
 # ----------------- Tabs (structure preserved) -----------------
@@ -505,6 +526,23 @@ with T[0]:
                 st.plotly_chart(fig_e, use_container_width=True)
     except Exception as e:
         st.error(f'Could not render Entity Trend: {e}')
+
+    # --- Procurement Category spend (new) ---
+    st.markdown('---')
+    st.subheader('Spend by Procurement Category')
+    if 'procurement_category' in fil.columns and net_amount_col and net_amount_col in fil.columns:
+        # build function for memoization
+        def build_proc_cat_spend():
+            pc = fil.groupby('procurement_category', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            pc['cr'] = pc[net_amount_col] / 1e7
+            return pc
+        pc_spend = memoized_compute('proc_cat_spend', filter_signature, build_proc_cat_spend)
+        fig_pc = px.bar(pc_spend, x='procurement_category', y='cr', text='cr', title='Procurement Category Spend (Cr)')
+        fig_pc.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_pc.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_pc, use_container_width=True)
+    else:
+        st.info('Procurement Category or Net Amount column not found — cannot show Procurement Category spend.')
 
 
     st.markdown('---')
@@ -614,18 +652,6 @@ with T[1]:
         else:
             st.info('PR Number or Purchase Doc column missing — cannot show monthly PR/PO trend.')
 
-        # --- Procurement Category spend (new) ---
-        st.markdown('---')
-        st.subheader('Spend by Procurement Category')
-        if 'procurement_category' in fil.columns and net_amount_col and net_amount_col in fil.columns:
-            pc = fil.groupby('procurement_category', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
-            pc['cr'] = pc[net_amount_col] / 1e7
-            fig_pc = px.bar(pc, x='procurement_category', y='cr', text='cr', title='Procurement Category Spend (Cr)')
-            fig_pc.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-            fig_pc.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_pc, use_container_width=True)
-        else:
-            st.info('Procurement Category or Net Amount column not found — cannot show Procurement Category spend.')
 
 
         # Open PRs
@@ -742,31 +768,35 @@ with T[1]:
 
 
 # ---- Defensive PO Approval details (final stable version) ----
-try:
-    st.subheader("PO Approval Details (Safe Mode)")
-    st.caption("Debug: Columns present in po_app_df")
-    st.text(", ".join([str(c) for c in po_app_df.columns.tolist()]))
-    desired = ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time']
-    show_cols = [c for c in desired if c and c in po_app_df.columns]
-    if not show_cols:
-        st.info("No PO approval columns found to display.")
+with T[2]:
+    st.subheader("PO Approval Details")
+    po_create = safe_col(df, ['po_create_date', 'po create date'])
+    po_approved = safe_col(df, ['po_approved_date', 'po approved date'])
+
+    def build_po_app_df():
+        if not (po_create and po_approved and po_create in fil.columns and po_approved in fil.columns):
+            return pd.DataFrame()
+        cols = ['po_creator', purchase_doc_col, po_create, po_approved]
+        p_df = fil[[c for c in cols if c in fil.columns]].copy()
+        p_df['approval_lead_time'] = (p_df[po_approved] - p_df[po_create]).dt.days
+        return p_df
+
+    po_app_df = memoized_compute('po_approval', filter_signature, build_po_app_df)
+
+    if po_app_df.empty:
+        st.info("PO Approval columns not found (need PO Create Date and PO Approved Date).")
     else:
-        po_detail = po_app_df[show_cols].copy()
-        if 'approval_lead_time' in po_detail.columns:
-            try:
+        avg_approval_time = po_app_df['approval_lead_time'].mean()
+        st.metric("Avg Approval Time (Days)", f"{avg_approval_time:.1f}")
+        desired = ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time']
+        show_cols = [c for c in desired if c and c in po_app_df.columns]
+        if show_cols:
+            po_detail = po_app_df[show_cols].copy()
+            if 'approval_lead_time' in po_detail.columns:
                 po_detail = po_detail.sort_values('approval_lead_time', ascending=False)
-            except Exception:
-                st.warning("Could not sort by approval_lead_time.")
-        if purchase_doc_col and purchase_doc_col in po_detail.columns:
-            try:
+            if purchase_doc_col and purchase_doc_col in po_detail.columns:
                 po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
-            except Exception:
-                st.warning(f"Could not drop duplicates on {purchase_doc_col}")
-        st.dataframe(po_detail, use_container_width=True)
-except Exception as e:
-    import traceback
-    st.error("Error while preparing PO approval details:")
-    st.text(traceback.format_exc())
+            st.dataframe(po_detail, use_container_width=True)
 
 
 # ----------------- Delivery -----------------
@@ -1053,27 +1083,31 @@ with T[9]:
 # ----------------- Search -----------------
 with T[10]:
     st.subheader('🔍 Keyword Search')
-    valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in df.columns]
+    search_df = df_raw # search on raw data before filters
+    valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in search_df.columns]
     query = st.text_input('Type vendor, product, PO, PR, etc.', '')
     cat_sel = st.multiselect('Filter by Procurement Category',
-        sorted(df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in df.columns else []
+        sorted(search_df.get('procurement_category', pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if 'procurement_category' in search_df.columns else []
     vend_sel = st.multiselect('Filter by Vendor',
-        sorted(df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in df.columns else []
+        sorted(search_df.get(po_vendor_col, pd.Series(dtype=object)).dropna().astype(str).unique().tolist())) if po_vendor_col in search_df.columns else []
 
     if query and valid_cols:
         q = query.lower()
         masks = []
         for c in valid_cols:
-            masks.append(df[c].astype(str).str.lower().str.contains(q, na=False))
-        mask_any = np.logical_or.reduce(masks) if masks else pd.Series(False, index=df.index)
-        res = df[mask_any].copy()
+            masks.append(search_df[c].astype(str).str.lower().str.contains(q, na=False))
+        mask_any = np.logical_or.reduce(masks) if masks else pd.Series(False, index=search_df.index)
+        res = search_df[mask_any].copy()
         if cat_sel:
             res = res[res['procurement_category'].astype(str).isin(cat_sel)]
-        if vend_sel and po_vendor_col in df.columns:
+        if vend_sel and po_vendor_col in search_df.columns:
             res = res[res[po_vendor_col].astype(str).isin(vend_sel)]
         st.write(f'Found {len(res)} rows')
         st.dataframe(res, use_container_width=True)
-        st.download_button('⬇️ Download Search Results', res.to_csv(index=false), file_name='search_results.csv', mime='text/csv')
+        try:
+            st.download_button('⬇️ Download Search Results', res.to_csv(index=False), file_name='search_results.csv', mime='text/csv')
+        except Exception:
+            pass
     else:
         st.caption('Start typing to search…')
 
