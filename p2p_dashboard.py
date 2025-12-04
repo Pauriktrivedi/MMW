@@ -8,7 +8,6 @@ from plotly.subplots import make_subplots
 
 # ---------- CONFIG ----------
 DATA_DIR = Path(__file__).resolve().parent
-RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
 LOGO_PATH = DATA_DIR / "matter_logo.png"
 INDIRECT_BUYERS = {
     'Aatish', 'Deepak', 'Deepakex', 'Dhruv', 'Dilip', 'Mukul', 'Nayan', 'Paurik',
@@ -76,19 +75,23 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     return x
 
 @st.cache_data(show_spinner=False)
-def load_all(file_list=None):
-    if file_list is None:
-        file_list = RAW_FILES
-    frames = []
-    for fn, ent in file_list:
-        path = _resolve_path(fn)
-        if not path.exists():
-            continue
-        try:
-            frames.append(_read_excel(path, ent))
-        except Exception as exc:
-            st.warning(f"Failed to read {path.name}: {exc}")
-    return _finalize_frames(frames)
+def load_all():
+    """Loads and finalizes the dataset from the Parquet file."""
+    parquet_path = DATA_DIR / "p2p_data.parquet"
+    if not parquet_path.exists():
+        st.warning("Data file (p2p_data.parquet) not found. Please run the conversion script first.")
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_parquet(parquet_path)
+        # Ensure date columns are parsed correctly after loading from Parquet
+        for c in ['pr_date_submitted', 'po_create_date', 'po_delivery_date', 'po_approved_date']:
+            if c in df.columns:
+                df[c] = pd.to_datetime(df[c], errors='coerce')
+        return df
+    except Exception as e:
+        st.error(f"Failed to load Parquet file: {e}")
+        return pd.DataFrame()
 
 # ---------- Fast type/coercion utilities ----------
 
@@ -249,7 +252,8 @@ def _excel_col_letter(i: int) -> str:
 if 'col_map' not in st.session_state:
     st.session_state['col_map'] = {}
 
-with st.sidebar.expander('Data diagnostics & column mapping', expanded=False):
+if st.sidebar.checkbox('Show data diagnostics & column mapping'):
+    with st.sidebar.expander('Data diagnostics & column mapping', expanded=True):
     st.write('Detected columns (Excel letter : column name):')
     if cols:
         # show compact list
@@ -1083,7 +1087,7 @@ with T[9]:
 # ----------------- Search -----------------
 with T[10]:
     st.subheader('🔍 Keyword Search')
-    search_df = df_raw # search on raw data before filters
+    search_df = df # search on processed data
     valid_cols = [c for c in [pr_number_col, purchase_doc_col, 'product_name', po_vendor_col] if c in search_df.columns]
     query = st.text_input('Type vendor, product, PO, PR, etc.', '')
     cat_sel = st.multiselect('Filter by Procurement Category',
