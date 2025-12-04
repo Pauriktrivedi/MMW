@@ -149,6 +149,90 @@ df = load_all()
 if df.empty:
     st.warning("No data loaded. Place MEPL.xlsx, MLPL.xlsx, mmw.xlsx, mmpl.xlsx next to this script or upload files.")
 
+# ---------- Data diagnostics & column mapping UI ----------
+# This section helps identify which physical Excel columns map to the canonical fields
+cols = list(df.columns)
+
+def _excel_col_letter(i: int) -> str:
+    # 0->A, 25->Z, 26->AA, etc.
+    letters = ''
+    i_orig = i
+    while True:
+        i, rem = divmod(i, 26)
+        letters = chr(65 + rem) + letters
+        if i == 0:
+            break
+        i -= 1
+    return letters
+
+if 'col_map' not in st.session_state:
+    st.session_state['col_map'] = {}
+
+with st.sidebar.expander('Data diagnostics & column mapping', expanded=False):
+    st.write('Detected columns (Excel letter : column name):')
+    if cols:
+        # show compact list
+        for i, c in enumerate(cols):
+            st.write(f"{_excel_col_letter(i)} : {c}")
+        st.write('Preview of first 5 rows:')
+        try:
+            st.dataframe(df.head(5))
+        except Exception:
+            st.write(df.head(5).to_string())
+    else:
+        st.write('No columns detected')
+
+    st.markdown('---')
+    st.write('If any of the automatic mappings are wrong, pick the correct column below to override.')
+    candidates = ['-- none --'] + cols
+    # mapping selectors
+    st.session_state['col_map']['pr_qty_col'] = st.selectbox('PR Quantity column (override)', options=candidates, index=0, key='map_pr_qty_col')
+    st.session_state['col_map']['pr_unit_rate_col'] = st.selectbox('PR Unit Rate column (override)', options=candidates, index=0, key='map_pr_unit_rate_col')
+    st.session_state['col_map']['pr_value_col'] = st.selectbox('PR Value column (override)', options=candidates, index=0, key='map_pr_value_col')
+    st.session_state['col_map']['po_qty_col'] = st.selectbox('PO Quantity column (override)', options=candidates, index=0, key='map_po_qty_col')
+    st.session_state['col_map']['po_unit_rate_col'] = st.selectbox('PO Unit Rate column (override)', options=candidates, index=0, key='map_po_unit_rate_col')
+    st.session_state['col_map']['net_col'] = st.selectbox('Net Amount / PO Value column (override)', options=candidates, index=0, key='map_net_col')
+    st.markdown('---')
+    st.write('Current overrides:')
+    st.json({k:v for k,v in st.session_state['col_map'].items() if v and v!='-- none --'})
+
+# Apply overrides (if set) to the canonical variables used later
+_col_map = st.session_state.get('col_map', {})
+if _col_map:
+    def _pick_override(varname, detected):
+        v = _col_map.get(varname)
+        if v and v != '-- none --' and v in df.columns:
+            return v
+        return detected
+
+    # override detected canonical names if user selected
+    try:
+        # safe: some variables may not be defined yet in code flow; we set them to None first
+        pr_qty_col = globals().get('pr_qty_col', None)
+        pr_unit_rate_col = globals().get('pr_unit_rate_col', None)
+        pr_value_col = globals().get('pr_value_col', None)
+        po_qty_col = globals().get('po_qty_col', None)
+        po_unit_rate_col = globals().get('po_unit_rate_col', None)
+        net_col = globals().get('net_col', None)
+    except Exception:
+        pr_qty_col = pr_unit_rate_col = pr_value_col = po_qty_col = po_unit_rate_col = net_col = None
+
+    pr_qty_col = _pick_override('pr_qty_col', pr_qty_col)
+    pr_unit_rate_col = _pick_override('pr_unit_rate_col', pr_unit_rate_col)
+    pr_value_col = _pick_override('pr_value_col', pr_value_col)
+    po_qty_col = _pick_override('po_qty_col', po_qty_col)
+    po_unit_rate_col = _pick_override('po_unit_rate_col', po_unit_rate_col)
+    net_col = _pick_override('net_col', net_col)
+
+    # persist overrides back to globals so downstream code uses them
+    globals()['pr_qty_col'] = pr_qty_col
+    globals()['pr_unit_rate_col'] = pr_unit_rate_col
+    globals()['pr_value_col'] = pr_value_col
+    globals()['po_qty_col'] = po_qty_col
+    globals()['po_unit_rate_col'] = po_unit_rate_col
+    globals()['net_col'] = net_col
+
+
 # canonical column detection
 pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
 po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
@@ -626,48 +710,37 @@ with T[1]:
     else:
         st.info('Need both PR Date and PO Create Date columns to compute SLA and lead times.')
 
-# ---- Defensive PO Approval details (replace the earlier block) ----
-# show_cols used earlier may not exist in po_app_df — be defensive and show diagnostics
-try:
-    # ensure po_app_df exists
-    if 'po_app_df' not in locals() and 'po_app_df' not in globals():
-        st.info("PO approval dataframe (po_app_df) is not present in the current scope.")
-    else:
-        # print columns for debugging so you can see what actually exists
-        st.caption("Debug: columns present in po_app_df (useful to map expected columns)")
-        st.text(", ".join([str(c) for c in po_app_df.columns.tolist()]))
-
-        # candidate columns we want to show
-        desired = ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time']
-        # keep only those that are valid strings and exist in the dataframe
-        show_cols = [c for c in desired if c and c in po_app_df.columns]
-
-        if not show_cols:
-            st.info('No PO approval columns available to show details. (None of the expected columns were found.)')
-        else:
-            # create a safe view
-            po_detail = po_app_df.loc[:, show_cols].copy()
-
-            # sort only if approval_lead_time is present
-            if 'approval_lead_time' in po_detail.columns:
-                try:
+# ----------------- PO Approval -----------------
+with T[2]:
+    st.subheader('📋 PO Approval Summary')
+    po_create = po_create_col
+    po_approved = safe_col(fil, ['po_approved_date','po approved date','po_approved_date'])
+    if po_approved and po_create and po_create in fil.columns and purchase_doc_col:
+        def build_po_approval():
+            df_ = fil.loc[fil[po_create].notna(), [purchase_doc_col, po_create, po_approved]].copy()
+            df_[po_approved] = pd.to_datetime(df_[po_approved], errors='coerce')
+            df_['approval_lead_time'] = (df_[po_approved] - df_[po_create]).dt.days
+            return df_
+        po_app_df = memoized_compute('po_approval', filter_signature, build_po_approval)
+        total_pos = po_app_df[purchase_doc_col].nunique()
+        approved_pos = po_app_df[po_app_df[po_approved].notna()][purchase_doc_col].nunique()
+        pending_pos = total_pos - approved_pos
+        avg_approval = po_app_df['approval_lead_time'].mean()
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric('Total POs', total_pos); c2.metric('Approved POs', approved_pos); c3.metric('Pending Approval', pending_pos); c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
+        st.subheader('📄 PO Approval Details')
+        show_cols = [c for c in ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if c and c in po_app_df.columns]
+            if not show_cols:
+                st.info('No PO approval columns available to show details.')
+            else:
+                po_detail = po_app_df[show_cols].copy()
+                if 'approval_lead_time' in po_detail.columns:
                     po_detail = po_detail.sort_values('approval_lead_time', ascending=False)
-                except Exception as sort_err:
-                    st.warning(f"Could not sort by approval_lead_time: {sort_err}")
-
-            # if purchase_doc_col is present then drop duplicate POs
-            if purchase_doc_col and purchase_doc_col in po_detail.columns:
-                try:
+                if purchase_doc_col and purchase_doc_col in po_detail.columns:
                     po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
-                except Exception as dup_err:
-                    st.warning(f"Could not drop duplicates by {purchase_doc_col}: {dup_err}")
-
-            st.dataframe(po_detail, use_container_width=True)
-except Exception as e:
-    import traceback
-    st.error("Unexpected error when preparing PO Approval details:")
-    st.text(traceback.format_exc())
-
+                st.dataframe(po_detail, use_container_width=True)
+    else:
+        st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
 
 # ----------------- Delivery -----------------
 with T[3]:
