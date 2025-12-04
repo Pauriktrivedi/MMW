@@ -710,7 +710,7 @@ with T[1]:
     else:
         st.info('Need both PR Date and PO Create Date columns to compute SLA and lead times.')
 
-            # ---- Defensive PO Approval details (final stable version) ----
+                       # ---- Defensive PO Approval details (final stable version) ----
             try:
                 st.subheader("PO Approval Details (Safe Mode)")
                 st.caption("Debug: Columns present in po_app_df")
