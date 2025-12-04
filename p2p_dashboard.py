@@ -626,37 +626,48 @@ with T[1]:
     else:
         st.info('Need both PR Date and PO Create Date columns to compute SLA and lead times.')
 
-# ----------------- PO Approval -----------------
-with T[2]:
-    st.subheader('📋 PO Approval Summary')
-    po_create = po_create_col
-    po_approved = safe_col(fil, ['po_approved_date','po approved date','po_approved_date'])
-    if po_approved and po_create and po_create in fil.columns and purchase_doc_col:
-        def build_po_approval():
-            df_ = fil.loc[fil[po_create].notna(), [purchase_doc_col, po_create, po_approved]].copy()
-            df_[po_approved] = pd.to_datetime(df_[po_approved], errors='coerce')
-            df_['approval_lead_time'] = (df_[po_approved] - df_[po_create]).dt.days
-            return df_
-        po_app_df = memoized_compute('po_approval', filter_signature, build_po_approval)
-        total_pos = po_app_df[purchase_doc_col].nunique()
-        approved_pos = po_app_df[po_app_df[po_approved].notna()][purchase_doc_col].nunique()
-        pending_pos = total_pos - approved_pos
-        avg_approval = po_app_df['approval_lead_time'].mean()
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric('Total POs', total_pos); c2.metric('Approved POs', approved_pos); c3.metric('Pending Approval', pending_pos); c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
-        st.subheader('📄 PO Approval Details')
-        show_cols = [c for c in ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if c and c in po_app_df.columns]
-            if not show_cols:
-                st.info('No PO approval columns available to show details.')
-            else:
-                po_detail = po_app_df[show_cols].copy()
-                if 'approval_lead_time' in po_detail.columns:
-                    po_detail = po_detail.sort_values('approval_lead_time', ascending=False)
-                if purchase_doc_col and purchase_doc_col in po_detail.columns:
-                    po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
-                st.dataframe(po_detail, use_container_width=True)
+# ---- Defensive PO Approval details (replace the earlier block) ----
+# show_cols used earlier may not exist in po_app_df — be defensive and show diagnostics
+try:
+    # ensure po_app_df exists
+    if 'po_app_df' not in locals() and 'po_app_df' not in globals():
+        st.info("PO approval dataframe (po_app_df) is not present in the current scope.")
     else:
-        st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
+        # print columns for debugging so you can see what actually exists
+        st.caption("Debug: columns present in po_app_df (useful to map expected columns)")
+        st.text(", ".join([str(c) for c in po_app_df.columns.tolist()]))
+
+        # candidate columns we want to show
+        desired = ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time']
+        # keep only those that are valid strings and exist in the dataframe
+        show_cols = [c for c in desired if c and c in po_app_df.columns]
+
+        if not show_cols:
+            st.info('No PO approval columns available to show details. (None of the expected columns were found.)')
+        else:
+            # create a safe view
+            po_detail = po_app_df.loc[:, show_cols].copy()
+
+            # sort only if approval_lead_time is present
+            if 'approval_lead_time' in po_detail.columns:
+                try:
+                    po_detail = po_detail.sort_values('approval_lead_time', ascending=False)
+                except Exception as sort_err:
+                    st.warning(f"Could not sort by approval_lead_time: {sort_err}")
+
+            # if purchase_doc_col is present then drop duplicate POs
+            if purchase_doc_col and purchase_doc_col in po_detail.columns:
+                try:
+                    po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
+                except Exception as dup_err:
+                    st.warning(f"Could not drop duplicates by {purchase_doc_col}: {dup_err}")
+
+            st.dataframe(po_detail, use_container_width=True)
+except Exception as e:
+    import traceback
+    st.error("Unexpected error when preparing PO Approval details:")
+    st.text(traceback.format_exc())
+
 
 # ----------------- Delivery -----------------
 with T[3]:
