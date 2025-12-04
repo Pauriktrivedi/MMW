@@ -645,11 +645,16 @@ with T[2]:
         c1,c2,c3,c4 = st.columns(4)
         c1.metric('Total POs', total_pos); c2.metric('Approved POs', approved_pos); c3.metric('Pending Approval', pending_pos); c4.metric('Avg Approval Lead Time (days)', f"{avg_approval:.1f}" if avg_approval==avg_approval else 'N/A')
         st.subheader('📄 PO Approval Details')
-        show_cols = [col for col in [ 'po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if col]
-        po_detail = po_app_df[show_cols].sort_values('approval_lead_time', ascending=False)
-        if purchase_doc_col and purchase_doc_col in po_detail.columns:
-            po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
-            st.dataframe(po_detail, use_container_width=True)
+        show_cols = [c for c in ['po_creator', purchase_doc_col, po_create, po_approved, 'approval_lead_time'] if c and c in po_app_df.columns]
+            if not show_cols:
+                st.info('No PO approval columns available to show details.')
+            else:
+                po_detail = po_app_df[show_cols].copy()
+                if 'approval_lead_time' in po_detail.columns:
+                    po_detail = po_detail.sort_values('approval_lead_time', ascending=False)
+                if purchase_doc_col and purchase_doc_col in po_detail.columns:
+                    po_detail = po_detail.drop_duplicates(subset=[purchase_doc_col], keep='first')
+                st.dataframe(po_detail, use_container_width=True)
     else:
         st.info("ℹ️ 'PO Approved Date' column not found or Purchase Doc missing.")
 
