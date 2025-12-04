@@ -281,7 +281,12 @@ sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
-    fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
+    # If the source column is categorical, filling with a value not present in categories
+    # raises a TypeError. Convert to object first to avoid that.
+    if pd.api.types.is_categorical_dtype(fil[po_vendor_col]):
+        fil['po_vendor'] = fil[po_vendor_col].astype(object).fillna('').astype(str)
+    else:
+        fil['po_vendor'] = fil[po_vendor_col].fillna('').astype(str)
 else:
     fil['po_vendor'] = ''
 if 'product_name' not in fil.columns:
