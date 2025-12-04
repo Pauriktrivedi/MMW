@@ -492,6 +492,19 @@ with T[1]:
         else:
             st.info('PR Number or Purchase Doc column missing — cannot show monthly PR/PO trend.')
 
+        # --- Procurement Category spend (new) ---
+        st.markdown('---')
+        st.subheader('Spend by Procurement Category')
+        if 'procurement_category' in fil.columns and net_amount_col and net_amount_col in fil.columns:
+            pc = fil.groupby('procurement_category', dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            pc['cr'] = pc[net_amount_col] / 1e7
+            fig_pc = px.bar(pc, x='procurement_category', y='cr', text='cr', title='Procurement Category Spend (Cr)')
+            fig_pc.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_pc.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_pc, use_container_width=True)
+        else:
+            st.info('Procurement Category or Net Amount column not found — cannot show Procurement Category spend.')
+
         # Open PRs
         st.subheader("⚠️ Open PRs (Approved/InReview)")
         pr_status_col = safe_col(df, ['pr_status','pr status','status','prstatus','pr_status'])
