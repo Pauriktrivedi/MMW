@@ -95,8 +95,19 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 def load_all():
     """Loads and finalizes the dataset from the Parquet file."""
     parquet_path = DATA_DIR / "p2p_data.parquet"
+    
+    # Auto-generate if missing
     if not parquet_path.exists():
-        st.warning("Data file (p2p_data.parquet) not found. Please run the conversion script first.")
+        try:
+            import convert_to_parquet
+            convert_to_parquet.convert_all_to_parquet()
+        except Exception as e:
+             logger.error(f"Auto-conversion failed: {e}")
+             st.error(f"Could not generate data file: {e}")
+             return pd.DataFrame()
+
+    if not parquet_path.exists():
+        st.warning("Data file (p2p_data.parquet) not found and auto-generation failed.")
         return pd.DataFrame()
     
     try:
@@ -1658,18 +1669,39 @@ with T[8]:
         try:
             def build_savings():
                 z = fil.copy()
+                
+                # EXCLUSION: Drop specific outlier case if present (requested by user)
+                # Vendor: 'Gujarat Irrigation Contractor' or similar variants
+                if po_vendor_col and po_vendor_col in z.columns:
+                    # Filter out any vendor containing 'Gujarat' AND 'Erection' (case insensitive)
+                    # to be robust against slight naming variations.
+                    mask_exclude = z[po_vendor_col].astype(str).str.contains('Gujarat', case=False, na=False) & \
+                                   z[po_vendor_col].astype(str).str.contains('Erection', case=False, na=False)
+                    if mask_exclude.any():
+                        z = z[~mask_exclude]
+
                 # ensure any categorical columns used are converted to safe types first
                 for col in [pr_qty_col, pr_unit_rate_col, pr_value_col, po_qty_col, po_unit_rate_col, net_col]:
                     if col and col in z.columns and pd.api.types.is_categorical_dtype(z[col]):
                         z[col] = z[col].astype(object)
 
-                # compute PR line value: prefer PR Value if present else PR Qty * PR Unit Rate
+                # compute PR line value: more robust logic
+                # 1. Try PR Value column
+                val_from_col = pd.Series(0.0, index=z.index)
                 if pr_value_col and pr_value_col in z.columns:
-                    z['pr_line_value'] = pd.to_numeric(z[pr_value_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
-                else: # safe multiplication with defaults
-                    pr_q = pd.to_numeric(z.get(pr_qty_col, 0).astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
-                    pr_r = pd.to_numeric(z.get(pr_unit_rate_col, 0).astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
-                    z['pr_line_value'] = pr_q * pr_r
+                    val_from_col = pd.to_numeric(z[pr_value_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
+                
+                # 2. Try Qty * Rate calculation
+                pr_q = pd.to_numeric(z.get(pr_qty_col, 0).astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
+                pr_r = pd.to_numeric(z.get(pr_unit_rate_col, 0).astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
+                val_calc = pr_q * pr_r
+
+                # 3. Use calculated if column is 0 but calculated is > 0 (data fix)
+                #    Otherwise trust column if present, else calc.
+                if pr_value_col and pr_value_col in z.columns:
+                    z['pr_line_value'] = np.where((val_from_col == 0) & (val_calc > 0), val_calc, val_from_col)
+                else:
+                    z['pr_line_value'] = val_calc
 
                 # compute PO line net: prefer Net Amount if present else PO Qty * PO Unit Rate
                 if net_col and net_col in z.columns:
@@ -1683,9 +1715,14 @@ with T[8]:
                 z['pr_unit_rate_f'] = pd.to_numeric(z.get(pr_unit_rate_col, np.nan), errors='coerce')
                 z['po_unit_rate_f'] = pd.to_numeric(z.get(po_unit_rate_col, np.nan), errors='coerce')
 
-                # savings absolute and percent (use pr_line_value as denominator when >0)
+                # savings absolute
                 z['savings_abs'] = z['pr_line_value'] - z['po_line_value']
+                
+                # savings percent: exclude cases where PR Value is 0 (Unbudgeted/Unestimated)
                 z['savings_pct'] = np.where(z['pr_line_value'] > 0, (z['savings_abs'] / z['pr_line_value']) * 100.0, np.nan)
+                
+                # Flag for unestimated spend (PR=0, PO>0)
+                z['is_unestimated'] = (z['pr_line_value'] == 0) & (z['po_line_value'] > 0)
                 # per-unit pct if unit rates present
                 z['unit_rate_pct_saved'] = np.where(
                     z['pr_unit_rate_f'] > 0,
