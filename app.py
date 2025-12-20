@@ -95,19 +95,8 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 def load_all():
     """Loads and finalizes the dataset from the Parquet file."""
     parquet_path = DATA_DIR / "p2p_data.parquet"
-    
-    # Auto-generate if missing
     if not parquet_path.exists():
-        try:
-            import convert_to_parquet
-            convert_to_parquet.convert_all_to_parquet()
-        except Exception as e:
-             logger.error(f"Auto-conversion failed: {e}")
-             st.error(f"Could not generate data file: {e}")
-             return pd.DataFrame()
-
-    if not parquet_path.exists():
-        st.warning("Data file (p2p_data.parquet) not found and auto-generation failed.")
+        st.warning("Data file (p2p_data.parquet) not found. Please run the conversion script first.")
         return pd.DataFrame()
     
     try:
