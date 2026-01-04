@@ -1,77 +1,49 @@
 import pandas as pd
 from pathlib import Path
+import hashlib
 
-# ---------- CONFIG ----------
-DATA_DIR = Path(__file__).resolve().parent
-RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
+FILES = {
+    "MMW.xlsx": "MMW",
+    "MMPL.xlsx": "MMPL",
+    "MLPL.xlsx": "MLPL",
+    "MEPL.xlsx": "MEPL",
+}
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Vectorized, robust column normalizer."""
-    if df is None or df.empty:
-        return df
-    cols = list(df.columns)
-    new = []
-    for c in cols:
-        s = str(c).strip()
-        s = s.replace(chr(160), " ")
-        s = s.replace(chr(92), "_").replace('/', '_')
-        s = '_'.join(s.split())
-        s = s.lower()
-        s = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in s)
-        s = '_'.join([p for p in s.split('_') if p != ''])
-        new.append(s)
-    df.columns = new
-    return df
+PARQUET_FILE = "p2p_data.parquet"
+HASH_FILE = ".data_hash"
 
-def _resolve_path(fn: str) -> Path:
-    path = Path(fn)
-    if path.exists():
-        return path
-    candidate = DATA_DIR / fn
-    return candidate
+def compute_hash():
+    h = hashlib.md5()
+    for f in FILES.keys():
+        with open(f, "rb") as file:
+            h.update(file.read())
+    return h.hexdigest()
 
-def _read_excel(path: Path, entity: str) -> pd.DataFrame:
-    # skiprows=1 was in original — preserve
-    df = pd.read_excel(path, skiprows=1, engine='openpyxl')
-    df['entity_source_file'] = entity
-    return df
+def rebuild_needed():
+    if not Path(PARQUET_FILE).exists() or not Path(HASH_FILE).exists():
+        return True
+    return compute_hash() != Path(HASH_FILE).read_text()
 
-def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    if not frames:
-        return pd.DataFrame()
-    x = pd.concat(frames, ignore_index=True)
-    x = normalize_columns(x)
-    # parse common date columns once
-    for c in ['pr_date_submitted', 'po_create_date', 'po_delivery_date', 'po_approved_date']:
-        if c in x.columns:
-            x[c] = pd.to_datetime(x[c], errors='coerce')
-    return x
+def rebuild_parquet():
+    dfs = []
+    for file, entity in FILES.items():
+        df = pd.read_excel(file)
+        df["Posting Date"] = pd.to_datetime(df["Posting Date"], errors="coerce")
+        df["Entity"] = entity
+        dfs.append(df)
 
-def convert_all_to_parquet(file_list=None):
-    if file_list is None:
-        file_list = RAW_FILES
-    frames = []
-    for fn, ent in file_list:
-        path = _resolve_path(fn)
-        if not path.exists():
-            print(f"File not found: {path}")
-            continue
-        try:
-            frames.append(_read_excel(path, ent))
-        except Exception as exc:
-            print(f"Failed to read {path.name}: {exc}")
-    
-    df = _finalize_frames(frames)
-    
-    # Ensure all object columns are converted to strings to avoid Parquet errors
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            df[col] = df[col].astype(str)
+    final_df = (
+        pd.concat(dfs, ignore_index=True)
+          .drop_duplicates(subset=["PO Number", "Posting Date"])
+    )
 
-    # Save as a single parquet file
-    output_path = DATA_DIR / "p2p_data.parquet"
-    df.to_parquet(output_path)
-    print(f"Successfully converted all Excel files to {output_path}")
+    final_df.to_parquet(PARQUET_FILE, index=False)
+    Path(HASH_FILE).write_text(compute_hash())
 
 if __name__ == "__main__":
-    convert_all_to_parquet()
+    if rebuild_needed():
+        print("Rebuilding parquet from Excel masters...")
+        rebuild_parquet()
+        print("Rebuild complete.")
+    else:
+        print("No data change detected. Using existing parquet.")
