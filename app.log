@@ -1,6 +1,6 @@
 app - INFO - Starting data loading...
-app - INFO - Data loading took: 0.16 seconds
+app - INFO - Data loading took: 0.47 seconds
 app - INFO - Starting data preprocessing...
-app - INFO - Data preprocessing took: 0.08 seconds
+app - INFO - Data preprocessing took: 0.50 seconds
 app - INFO - Applying filters...
-app - INFO - Filter application took: 0.18 seconds
+app - INFO - Filter application took: 0.32 seconds
