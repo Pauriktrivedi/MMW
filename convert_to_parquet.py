@@ -3,7 +3,13 @@ from pathlib import Path
 
 # ---------- CONFIG ----------
 DATA_DIR = Path(__file__).resolve().parent
-RAW_FILES = [("MEPL.xlsx", "MEPL"), ("MLPL.xlsx", "MLPL"), ("mmw.xlsx", "MMW"), ("mmpl.xlsx", "MMPL")]
+# File mapping: (filename, entity_name)
+RAW_FILES = [
+    ("MEPL.xlsx", "MEPL"),
+    ("MLPL.xlsx", "MLPL"),
+    ("mmw.xlsx", "MMW"),
+    ("mmpl.xlsx", "MMPL")
+]
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Vectorized, robust column normalizer."""
@@ -47,20 +53,28 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
-def convert_all_to_parquet(file_list=None):
-    if file_list is None:
-        file_list = RAW_FILES
+def update_parquet_if_needed(force: bool = False):
+    """
+    Checks if p2p_data.parquet exists. If not (or if force=True),
+    reads Excel files, concatenates them, and writes the Parquet file.
+    """
+    output_path = DATA_DIR / "p2p_data.parquet"
+    if output_path.exists() and not force:
+        return
+
     frames = []
-    for fn, ent in file_list:
+    for fn, ent in RAW_FILES:
         path = _resolve_path(fn)
         if not path.exists():
-            print(f"File not found: {path}")
             continue
         try:
             frames.append(_read_excel(path, ent))
-        except Exception as exc:
-            print(f"Failed to read {path.name}: {exc}")
+        except Exception:
+            pass
     
+    if not frames:
+        return
+
     df = _finalize_frames(frames)
     
     # Ensure all object columns are converted to strings to avoid Parquet errors
@@ -69,9 +83,10 @@ def convert_all_to_parquet(file_list=None):
             df[col] = df[col].astype(str)
 
     # Save as a single parquet file
-    output_path = DATA_DIR / "p2p_data.parquet"
-    df.to_parquet(output_path)
-    print(f"Successfully converted all Excel files to {output_path}")
+    try:
+        df.to_parquet(output_path)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
-    convert_all_to_parquet()
+    update_parquet_if_needed(force=True)
