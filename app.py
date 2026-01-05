@@ -9,29 +9,6 @@ import time
 import logging
 import traceback
 import re
-from pathlib import Path
-import streamlit as st
-
-PARQUET_PATH = Path(__file__).resolve().parent / "p2p_data.parquet"
-
-try:
-    from convert_to_parquet import update_parquet_if_needed
-    if not PARQUET_PATH.exists():
-        update_parquet_if_needed(force=True)
-except Exception as e:
-    st.warning(
-        "Data file missing and auto-ingestion failed. "
-        "Please check convert_to_parquet.py."
-    )
-
-# ---------- AUTO BUILD PARQUET IF MISSING ----------
-from convert_to_parquet import update_parquet_if_needed
-
-PARQUET_PATH = Path(__file__).resolve().parent / "p2p_data.parquet"
-
-if not PARQUET_PATH.exists():
-    with st.spinner("Preparing data for first run…"):
-        update_parquet_if_needed(force=True)
 
 # ---------- CONFIG ----------
 # Set up a logger that works reliably with Streamlit
@@ -431,50 +408,6 @@ logger.info(f"Data loading took: {load_end_time - load_start_time:.2f} seconds")
 logger.info("Starting data preprocessing...")
 preprocess_start_time = time.time()
 df = preprocess_data(df_raw)
-# ---------- GLOBAL DATE BOUNDS (CRITICAL) ----------
-pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
-po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
-
-combined_dates = pd.Series(dtype="datetime64[ns]")
-
-if pr_col and pr_col in df.columns:
-    combined_dates = combined_dates.append(df[pr_col])
-
-if po_create_col and po_create_col in df.columns:
-    combined_dates = combined_dates.append(df[po_create_col])
-
-combined_dates = combined_dates.dropna()
-
-if not combined_dates.empty:
-    global_min_date = combined_dates.min()
-    global_max_date = combined_dates.max()
-else:
-    global_min_date = pd.Timestamp("2023-04-01")
-    global_max_date = pd.Timestamp("2026-03-31")
-
-# ---------- GLOBAL DATE BOUNDS (AUTHORITATIVE) ----------
-date_cols = []
-if pr_col and pr_col in df.columns:
-    date_cols.append(df[pr_col])
-if po_create_col and po_create_col in df.columns:
-    date_cols.append(df[po_create_col])
-
-if date_cols:
-    combined_dates = pd.concat(date_cols).dropna()
-    global_min_date = combined_dates.min()
-    global_max_date = combined_dates.max()
-else:
-    global_min_date = pd.Timestamp("2023-04-01")
-    global_max_date = pd.Timestamp("2026-03-31")
-
-# ---------- DATE BASIS (SINGLE SOURCE OF TRUTH) ----------
-date_basis = pr_col if (pr_col and pr_col in df.columns) else (
-    po_create_col if (po_create_col and po_create_col in df.columns) else None
-)
-
-# ---------- DATE RANGE KEY (FOR CACHE SAFETY) ----------
-date_range_key = None
-
 preprocess_end_time = time.time()
 logger.info(f"Data preprocessing took: {preprocess_end_time - preprocess_start_time:.2f} seconds")
 
@@ -533,39 +466,20 @@ elif po_create_col and po_create_col in fil.columns:
     # Fallback if PR column completely missing
     fil = fil[(fil[po_create_col] >= pr_start) & (fil[po_create_col] <= pr_end)]
 
-# # ---------- DATE RANGE FILTER (CANONICAL) ----------
-DEFAULT_START = pd.Timestamp('2023-04-01')
-DEFAULT_END   = pd.Timestamp('2026-03-31')
-
-# Clamp default to actual data bounds
-def_start = max(global_min_date, DEFAULT_START)
-def_end   = min(global_max_date, DEFAULT_END)
-
-# Reset invalid session state safely
-if 'date_range' in st.session_state:
-    try:
-        s0, s1 = st.session_state['date_range']
-        if s0 < global_min_date.date() or s1 > global_max_date.date():
-            del st.session_state['date_range']
-    except Exception:
-        del st.session_state['date_range']
-
-dr = st.sidebar.date_input(
-    'Date range',
-    value=(def_start.date(), def_end.date()),
-    min_value=global_min_date.date(),
-    max_value=global_max_date.date(),
-    key='date_range'
-)
-
-sdt = pd.to_datetime(dr[0])
-edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
-
-if date_basis and date_basis in fil.columns:
-    fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
-    date_range_key = (sdt.isoformat(), edt.isoformat())
-
-
+# Date range filter
+date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
+dr = None
+date_range_key = None
+if date_basis:
+    # compute min/max without copying
+    mindt = fil[date_basis].dropna().min()
+    maxdt = fil[date_basis].dropna().max()
+    if pd.notna(mindt) and pd.notna(maxdt):
+        dr = st.sidebar.date_input('Date range', (mindt.date(), maxdt.date()), key='date_range')
+        if isinstance(dr, tuple) and len(dr) == 2:
+            sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
+            fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
+            date_range_key = (sdt.isoformat(), edt.isoformat())
 
 # ensure defensive columns exist without expensive operations
 for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
