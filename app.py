@@ -408,6 +408,29 @@ logger.info(f"Data loading took: {load_end_time - load_start_time:.2f} seconds")
 logger.info("Starting data preprocessing...")
 preprocess_start_time = time.time()
 df = preprocess_data(df_raw)
+# ---------- GLOBAL DATE BOUNDS (AUTHORITATIVE) ----------
+date_cols = []
+if pr_col and pr_col in df.columns:
+    date_cols.append(df[pr_col])
+if po_create_col and po_create_col in df.columns:
+    date_cols.append(df[po_create_col])
+
+if date_cols:
+    combined_dates = pd.concat(date_cols).dropna()
+    global_min_date = combined_dates.min()
+    global_max_date = combined_dates.max()
+else:
+    global_min_date = pd.Timestamp("2023-04-01")
+    global_max_date = pd.Timestamp("2026-03-31")
+
+# ---------- DATE BASIS (SINGLE SOURCE OF TRUTH) ----------
+date_basis = pr_col if (pr_col and pr_col in df.columns) else (
+    po_create_col if (po_create_col and po_create_col in df.columns) else None
+)
+
+# ---------- DATE RANGE KEY (FOR CACHE SAFETY) ----------
+date_range_key = None
+
 preprocess_end_time = time.time()
 logger.info(f"Data preprocessing took: {preprocess_end_time - preprocess_start_time:.2f} seconds")
 
@@ -493,6 +516,11 @@ dr = st.sidebar.date_input(
 
 sdt = pd.to_datetime(dr[0])
 edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
+
+if date_basis and date_basis in fil.columns:
+    fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
+    date_range_key = (sdt.isoformat(), edt.isoformat())
+
 
 
 # ensure defensive columns exist without expensive operations
