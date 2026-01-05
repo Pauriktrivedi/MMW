@@ -122,6 +122,11 @@ def load_all():
         st.error(f"Failed to load Parquet file: {e}")
         return pd.DataFrame()
 
+
+DEFAULT_START = pd.Timestamp("2023-04-01")
+DEFAULT_END   = pd.Timestamp("2026-03-31")
+
+
 # ---------- Vendor Master Parsing (New) ----------
 @st.cache_data(show_spinner=False)
 def load_vendor_master():
