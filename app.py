@@ -466,20 +466,34 @@ elif po_create_col and po_create_col in fil.columns:
     # Fallback if PR column completely missing
     fil = fil[(fil[po_create_col] >= pr_start) & (fil[po_create_col] <= pr_end)]
 
-# Date range filter
-date_basis = pr_col if pr_col in fil.columns else (po_create_col if po_create_col in fil.columns else None)
-dr = None
-date_range_key = None
-if date_basis:
-    # compute min/max without copying
-    mindt = fil[date_basis].dropna().min()
-    maxdt = fil[date_basis].dropna().max()
-    if pd.notna(mindt) and pd.notna(maxdt):
-        dr = st.sidebar.date_input('Date range', (mindt.date(), maxdt.date()), key='date_range')
-        if isinstance(dr, tuple) and len(dr) == 2:
-            sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
-            fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
-            date_range_key = (sdt.isoformat(), edt.isoformat())
+# # ---------- DATE RANGE FILTER (CANONICAL) ----------
+DEFAULT_START = pd.Timestamp('2023-04-01')
+DEFAULT_END   = pd.Timestamp('2026-03-31')
+
+# Clamp default to actual data bounds
+def_start = max(global_min_date, DEFAULT_START)
+def_end   = min(global_max_date, DEFAULT_END)
+
+# Reset invalid session state safely
+if 'date_range' in st.session_state:
+    try:
+        s0, s1 = st.session_state['date_range']
+        if s0 < global_min_date.date() or s1 > global_max_date.date():
+            del st.session_state['date_range']
+    except Exception:
+        del st.session_state['date_range']
+
+dr = st.sidebar.date_input(
+    'Date range',
+    value=(def_start.date(), def_end.date()),
+    min_value=global_min_date.date(),
+    max_value=global_max_date.date(),
+    key='date_range'
+)
+
+sdt = pd.to_datetime(dr[0])
+edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
+
 
 # ensure defensive columns exist without expensive operations
 for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
