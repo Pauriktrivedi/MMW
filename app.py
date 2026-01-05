@@ -498,6 +498,24 @@ if date_basis:
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
             date_range_key = (sdt.isoformat(), edt.isoformat())
 
+combined_dates = pd.concat([pr_dates, po_dates]).dropna()
+
+global_min_date = combined_dates.min()
+global_max_date = combined_dates.max()
+
+
+def_start = max(global_min_date, DEFAULT_START)
+def_end   = min(global_max_date, DEFAULT_END)
+
+date_range = st.sidebar.date_input(
+    "Date range",
+    (def_start.date(), def_end.date()),
+    min_value=global_min_date.date(),
+    max_value=global_max_date.date(),
+    key="date_range"
+)
+
+
 # ensure defensive columns exist without expensive operations
 for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
     if c not in fil.columns:
