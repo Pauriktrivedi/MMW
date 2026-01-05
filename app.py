@@ -10,6 +10,15 @@ import logging
 import traceback
 import re
 
+# ---------- AUTO BUILD PARQUET IF MISSING ----------
+from convert_to_parquet import update_parquet_if_needed
+
+PARQUET_PATH = Path(__file__).resolve().parent / "p2p_data.parquet"
+
+if not PARQUET_PATH.exists():
+    with st.spinner("Preparing data for first run…"):
+        update_parquet_if_needed(force=True)
+
 # ---------- CONFIG ----------
 # Set up a logger that works reliably with Streamlit
 logger = logging.getLogger(__name__)
