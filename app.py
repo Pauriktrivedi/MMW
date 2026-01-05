@@ -1,15 +1,3 @@
-import subprocess
-from pathlib import Path
-
-# Auto rebuild parquet on app start (safe, silent)
-if Path("convert_to_parquet.py").exists():
-    subprocess.run(
-        ["python", "convert_to_parquet.py"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -121,11 +109,6 @@ def load_all():
     except Exception as e:
         st.error(f"Failed to load Parquet file: {e}")
         return pd.DataFrame()
-
-
-DEFAULT_START = pd.Timestamp("2023-04-01")
-DEFAULT_END   = pd.Timestamp("2026-03-31")
-
 
 # ---------- Vendor Master Parsing (New) ----------
 @st.cache_data(show_spinner=False)
@@ -497,24 +480,6 @@ if date_basis:
             sdt = pd.to_datetime(dr[0]); edt = pd.to_datetime(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
             fil = fil[(fil[date_basis] >= sdt) & (fil[date_basis] <= edt)]
             date_range_key = (sdt.isoformat(), edt.isoformat())
-
-combined_dates = pd.concat([pr_dates, po_dates]).dropna()
-
-global_min_date = combined_dates.min()
-global_max_date = combined_dates.max()
-
-
-def_start = max(global_min_date, DEFAULT_START)
-def_end   = min(global_max_date, DEFAULT_END)
-
-date_range = st.sidebar.date_input(
-    "Date range",
-    (def_start.date(), def_end.date()),
-    min_value=global_min_date.date(),
-    max_value=global_max_date.date(),
-    key="date_range"
-)
-
 
 # ensure defensive columns exist without expensive operations
 for c in ['Buyer.Type', 'po_creator', 'po_vendor', 'entity', 'po_buyer_type']:
