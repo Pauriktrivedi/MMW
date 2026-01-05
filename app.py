@@ -9,6 +9,20 @@ import time
 import logging
 import traceback
 import re
+from pathlib import Path
+import streamlit as st
+
+PARQUET_PATH = Path(__file__).resolve().parent / "p2p_data.parquet"
+
+try:
+    from convert_to_parquet import update_parquet_if_needed
+    if not PARQUET_PATH.exists():
+        update_parquet_if_needed(force=True)
+except Exception as e:
+    st.warning(
+        "Data file missing and auto-ingestion failed. "
+        "Please check convert_to_parquet.py."
+    )
 
 # ---------- AUTO BUILD PARQUET IF MISSING ----------
 from convert_to_parquet import update_parquet_if_needed
