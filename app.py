@@ -417,6 +417,27 @@ logger.info(f"Data loading took: {load_end_time - load_start_time:.2f} seconds")
 logger.info("Starting data preprocessing...")
 preprocess_start_time = time.time()
 df = preprocess_data(df_raw)
+# ---------- GLOBAL DATE BOUNDS (CRITICAL) ----------
+pr_col = safe_col(df, ['pr_date_submitted', 'pr_date', 'pr date submitted'])
+po_create_col = safe_col(df, ['po_create_date', 'po create date', 'po_created_date'])
+
+combined_dates = pd.Series(dtype="datetime64[ns]")
+
+if pr_col and pr_col in df.columns:
+    combined_dates = combined_dates.append(df[pr_col])
+
+if po_create_col and po_create_col in df.columns:
+    combined_dates = combined_dates.append(df[po_create_col])
+
+combined_dates = combined_dates.dropna()
+
+if not combined_dates.empty:
+    global_min_date = combined_dates.min()
+    global_max_date = combined_dates.max()
+else:
+    global_min_date = pd.Timestamp("2023-04-01")
+    global_max_date = pd.Timestamp("2026-03-31")
+
 # ---------- GLOBAL DATE BOUNDS (AUTHORITATIVE) ----------
 date_cols = []
 if pr_col and pr_col in df.columns:
