@@ -1596,7 +1596,20 @@ with T[5]:
             # Source: Use existing Budget Code / Budget Description fields
             if pr_budget_desc_col and pr_budget_desc_col in df_chart.columns:
                 budget_opts = sorted(df_chart[pr_budget_desc_col].astype(str).unique())
-                budget_sel = st.multiselect("Filter: Budget Description", budget_opts, default=budget_opts, key='pr_spend_budget_filter')
+
+                # Pre-calculate defaults (Top 10 by spend to avoid rendering too many charts)
+                try:
+                    # Quick aggregation for defaults
+                    default_agg = df_chart.groupby(pr_budget_desc_col)[net_amount_col].sum().sort_values(ascending=False).head(10)
+                    top_defaults = [str(x) for x in default_agg.index]
+                    # Intersect with opts to be safe
+                    defaults_to_use = [x for x in top_defaults if x in budget_opts]
+                    if not defaults_to_use:
+                         defaults_to_use = budget_opts[:6]
+                except:
+                    defaults_to_use = budget_opts[:6]
+
+                budget_sel = st.multiselect("Filter: Budget Description", budget_opts, default=defaults_to_use, key='pr_spend_budget_filter')
             else:
                 budget_sel = []
 
@@ -1613,7 +1626,7 @@ with T[5]:
             if not df_filtered.empty and net_amount_col in df_filtered.columns:
                 agg = df_filtered.groupby(['TimeLabel', pr_budget_desc_col])[net_amount_col].sum().reset_index()
 
-                # Sorting Logic for X-axis
+                # Sorting Logic for X-axis (shared across all charts)
                 if granularity == "Monthly":
                     # Create a sort key
                     agg['SortKey'] = pd.to_datetime(agg['TimeLabel'], format='%b %Y')
@@ -1621,9 +1634,38 @@ with T[5]:
                 else:
                     agg = agg.sort_values('TimeLabel')
 
-                fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col,
-                             title='Total PR Spend Amount', labels={net_amount_col: 'Spend'})
-                st.plotly_chart(fig, use_container_width=True)
+                # Extract global time order for consistent x-axis
+                time_order = agg['TimeLabel'].unique()
+
+                # Calculate Global Max Y for shared scale
+                global_max_y = agg[net_amount_col].max() if not agg.empty else 0
+
+                # Get unique budget descriptions to iterate
+                unique_budgets = sorted(agg[pr_budget_desc_col].unique())
+
+                # Small Multiples Layout (Grid)
+                # 2 charts per row
+                cols_per_row = 2
+                grid_cols = st.columns(cols_per_row)
+
+                for i, budget in enumerate(unique_budgets):
+                    sub_df = agg[agg[pr_budget_desc_col] == budget]
+
+                    fig = px.line(sub_df, x='TimeLabel', y=net_amount_col,
+                                 title=str(budget), # Chart title = Budget Description
+                                 labels={net_amount_col: 'Spend', 'TimeLabel': ''},
+                                 markers=True)
+
+                    # Enforce shared time scale & consistent Y-axis
+                    fig.update_xaxes(categoryorder='array', categoryarray=time_order)
+                    # Add 10% headroom
+                    fig.update_yaxes(range=[0, global_max_y * 1.1])
+                    fig.update_layout(showlegend=False, height=300, margin=dict(l=20, r=20, t=40, b=20))
+
+                    # Place in grid
+                    with grid_cols[i % cols_per_row]:
+                        st.plotly_chart(fig, use_container_width=True)
+
             else:
                 st.info("No data for selected filters.")
 
