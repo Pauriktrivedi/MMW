@@ -1556,29 +1556,32 @@ with T[4]:
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
 
-    # ----------------- Category & Sub-Category Spend Analysis -----------------
-    st.subheader('Category & Sub-Category Spend Analysis')
+    # ----------------- Department & Services – Category-wise Spend Trend -----------------
+    st.subheader('Department & Services – Category-wise Spend Trend')
 
     dept_df = fil
 
-    # 2. Controls: Granularity + Category Selector
+    # Controls: Granularity + Multi-Select Category
     c_ctl1, c_ctl2 = st.columns([1, 2])
     with c_ctl1:
-        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='cat_spend_granularity')
+        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='main_cat_trend_granularity')
 
     with c_ctl2:
         # Get Categories
         if 'procurement_category' in dept_df.columns:
             all_cats = sorted(dept_df['procurement_category'].dropna().unique().astype(str).tolist())
-            cat_options = ['All Categories'] + all_cats
-            sel_category = st.selectbox("Select Category (Drill-down)", cat_options, index=0, key='cat_spend_selector')
+            # Default to all
+            sel_categories = st.multiselect("Select Categories to Compare", all_cats, default=all_cats, key='main_cat_multiselect')
         else:
-            sel_category = 'All Categories'
+            sel_categories = []
             st.warning("Procurement Category column missing.")
 
     # Prepare Data
-    if trend_date_col and trend_date_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
+    if trend_date_col and trend_date_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns and sel_categories:
         df_chart = dept_df.dropna(subset=[trend_date_col]).copy()
+
+        # Filter by selected categories
+        df_chart = df_chart[df_chart['procurement_category'].astype(str).isin(sel_categories)]
 
         # PR-level spend only check (if pr_number_col exists)
         if pr_number_col and pr_number_col in df_chart.columns:
@@ -1596,76 +1599,33 @@ with T[5]:
         time_order_df = df_chart[['TimeLabel', 'SortKey']].drop_duplicates().sort_values('SortKey')
         time_order = time_order_df['TimeLabel'].tolist()
 
-        # MODE 1: All Categories (Category View - Small Multiples)
-        if sel_category == 'All Categories':
-            if 'procurement_category' in df_chart.columns:
-                # Group by Main Category + Time
-                agg = df_chart.groupby(['TimeLabel', 'procurement_category'])[net_amount_col].sum().reset_index()
+        if not df_chart.empty:
+            # Group by Main Category + Time (ONE single aggregation for comparison)
+            agg = df_chart.groupby(['TimeLabel', 'procurement_category'])[net_amount_col].sum().reset_index()
 
-                # Small Multiples Logic
-                unique_cats = sorted(agg['procurement_category'].unique())
-                global_max_y = agg[net_amount_col].max() if not agg.empty else 0
-
-                cols_per_row = 2
-                grid_cols = st.columns(cols_per_row)
-
-                for i, cat in enumerate(unique_cats):
-                    sub_df = agg[agg['procurement_category'] == cat]
-
-                    if granularity == "Monthly":
-                        fig = px.line(sub_df, x='TimeLabel', y=net_amount_col,
-                                     title=f"{cat} — Monthly Spend",
-                                     labels={net_amount_col: 'Spend', 'TimeLabel': ''},
-                                     markers=True)
-                    else:
-                        fig = px.bar(sub_df, x='TimeLabel', y=net_amount_col,
-                                    title=f"{cat} — Yearly Spend",
-                                    labels={net_amount_col: 'Spend', 'TimeLabel': ''},
-                                    text_auto='.2s')
-
-                    fig.update_xaxes(categoryorder='array', categoryarray=time_order)
-                    fig.update_yaxes(range=[0, global_max_y * 1.1])
-                    fig.update_layout(showlegend=False, height=300, margin=dict(l=20, r=20, t=40, b=20))
-
-                    with grid_cols[i % cols_per_row]:
-                        st.plotly_chart(fig, use_container_width=True)
+            # Create ONE single comparative chart
+            if granularity == "Monthly":
+                fig = px.line(agg, x='TimeLabel', y=net_amount_col, color='procurement_category',
+                             title='Comparative Category Spend Trend (Monthly)',
+                             labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
+                             markers=True)
             else:
-                st.info("Procurement Category column missing.")
+                fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color='procurement_category', barmode='group',
+                            title='Comparative Category Spend Trend (Yearly)',
+                            labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
+                            text_auto='.2s')
 
-        # MODE 2: Specific Category (Drill-down View)
+            fig.update_xaxes(categoryorder='array', categoryarray=time_order)
+            fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20), hovermode='x unified')
+            st.plotly_chart(fig, use_container_width=True)
+
         else:
-            # Filter by Category
-            if 'procurement_category' in df_chart.columns:
-                df_filtered = df_chart[df_chart['procurement_category'] == sel_category]
-
-                if not df_filtered.empty and pr_budget_desc_col and pr_budget_desc_col in df_filtered.columns:
-                    # Group by Sub-Category (PR Budget Description) + Time
-                    agg = df_filtered.groupby(['TimeLabel', pr_budget_desc_col])[net_amount_col].sum().reset_index()
-
-                    if granularity == "Monthly":
-                        fig = px.line(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col,
-                                     title=f"{sel_category} — Sub-Category Breakdown (Monthly)",
-                                     labels={net_amount_col: 'Spend', 'TimeLabel': '', pr_budget_desc_col: 'Sub-Category'},
-                                     markers=True)
-                    else:
-                        fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col, barmode='group',
-                                    title=f"{sel_category} — Sub-Category Breakdown (Yearly)",
-                                    labels={net_amount_col: 'Spend', 'TimeLabel': '', pr_budget_desc_col: 'Sub-Category'},
-                                    text_auto='.2s')
-
-                    fig.update_xaxes(categoryorder='array', categoryarray=time_order)
-                    fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # Data Table
-                    st.write("Detailed Breakdown:")
-                    st.dataframe(agg.pivot(index='TimeLabel', columns=pr_budget_desc_col, values=net_amount_col).fillna(0).reindex(time_order), use_container_width=True)
-                else:
-                    st.info(f"No data or missing Budget Description for {sel_category}.")
-            else:
-                 st.info("Procurement Category column missing.")
+            st.info("No data for selected categories.")
     else:
-        st.info("Date column or Net Amount column not found.")
+        if not sel_categories:
+            st.info("Please select at least one category.")
+        else:
+            st.info("Date column or Net Amount column not found.")
 
     st.markdown("---")
     # ----------------- End New Feature -----------------
