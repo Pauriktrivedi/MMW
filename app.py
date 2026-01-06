@@ -1601,17 +1601,18 @@ with T[5]:
 
         if not df_chart.empty:
             # Group by Main Category + Time (ONE single aggregation for comparison)
+            # Critical: Aggregating by procurement_category sums up all underlying PR Budget Descriptions
             agg = df_chart.groupby(['TimeLabel', 'procurement_category'])[net_amount_col].sum().reset_index()
 
             # Create ONE single comparative chart
             if granularity == "Monthly":
                 fig = px.line(agg, x='TimeLabel', y=net_amount_col, color='procurement_category',
-                             title='Comparative Category Spend Trend (Monthly)',
+                             title='Department & Services – Category-wise Spend Trend (Monthly)',
                              labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
                              markers=True)
             else:
                 fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color='procurement_category', barmode='group',
-                            title='Comparative Category Spend Trend (Yearly)',
+                            title='Department & Services – Category-wise Spend Trend (Yearly)',
                             labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
                             text_auto='.2s')
 
