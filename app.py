@@ -1556,88 +1556,77 @@ with T[4]:
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
 
-    # ----------------- Department & Services – Category-wise Spend Trend -----------------
+    # ----------------- Category-wise Trend (Mirrored from Entity Trend) -----------------
     st.subheader('Department & Services – Category-wise Spend Trend')
 
     dept_df = fil
 
-    # Controls: Granularity + Multi-Select Category
-    c_ctl1, c_ctl2 = st.columns([1, 2])
-    with c_ctl1:
-        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='main_cat_trend_granularity')
+    # Build aggregation function similar to build_monthly() but for Category
+    def build_monthly_category():
+        if not (trend_date_col and net_amount_col and net_amount_col in dept_df.columns):
+            return pd.DataFrame()
+        if 'procurement_category' not in dept_df.columns:
+            return pd.DataFrame()
 
-    with c_ctl2:
-        # Get Categories
-        if 'procurement_category' in dept_df.columns:
-            all_cats = sorted(dept_df['procurement_category'].dropna().unique().astype(str).tolist())
+        # Filter for time & cols
+        z = dept_df.loc[dept_df['_month_bucket'].notna(), ['_month_bucket', 'procurement_category', net_amount_col]].copy()
+        z['month'] = z['_month_bucket']
+        z = z[(z['month'] >= pr_start) & (z['month'] <= pr_end)]
 
-            # Default to Top 10 by Spend to avoid overcrowding
-            # Note: dept_df is already filtered by sidebar selections (Entity, FY, etc.)
-            try:
-                if net_amount_col and net_amount_col in dept_df.columns:
-                    top_10 = dept_df.groupby('procurement_category')[net_amount_col].sum().sort_values(ascending=False).head(10).index.astype(str).tolist()
-                    default_cats = [c for c in top_10 if c in all_cats]
-                else:
-                    default_cats = all_cats[:5]
-            except:
-                default_cats = all_cats[:5]
+        # Group by Month + Category (Strictly Main Category)
+        return z.groupby(['month', 'procurement_category'], dropna=False)[net_amount_col].sum().reset_index()
 
-            sel_categories = st.multiselect("Select Categories to Compare", all_cats, default=default_cats, key='main_cat_multiselect')
-        else:
-            sel_categories = []
-            st.warning("Procurement Category column missing.")
+    # Controls
+    if 'procurement_category' in dept_df.columns:
+        # Get sorted unique categories
+        all_cats = sorted(dept_df['procurement_category'].dropna().unique().astype(str).tolist())
 
-    # Prepare Data
-    if trend_date_col and trend_date_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns and sel_categories:
-        df_chart = dept_df.dropna(subset=[trend_date_col]).copy()
-
-        # Filter by selected categories
-        df_chart = df_chart[df_chart['procurement_category'].astype(str).isin(sel_categories)]
-
-        # PR-level spend only check (if pr_number_col exists)
-        if pr_number_col and pr_number_col in df_chart.columns:
-            df_chart = df_chart[df_chart[pr_number_col].notna()]
-
-        # Time Labeling
-        if granularity == "Monthly":
-            df_chart['TimeLabel'] = df_chart[trend_date_col].dt.strftime('%b %Y')
-            df_chart['SortKey'] = df_chart[trend_date_col].dt.to_period('M')
-        else:
-            df_chart['TimeLabel'] = df_chart[trend_date_col].dt.year.astype(str)
-            df_chart['SortKey'] = df_chart[trend_date_col].dt.year
-
-        # Get global time order
-        time_order_df = df_chart[['TimeLabel', 'SortKey']].drop_duplicates().sort_values('SortKey')
-        time_order = time_order_df['TimeLabel'].tolist()
-
-        if not df_chart.empty:
-            # Group by Main Category + Time (ONE single aggregation for comparison)
-            # Critical: Aggregating by procurement_category sums up all underlying PR Budget Descriptions
-            agg = df_chart.groupby(['TimeLabel', 'procurement_category'])[net_amount_col].sum().reset_index()
-
-            # Create ONE single comparative chart
-            if granularity == "Monthly":
-                fig = px.line(agg, x='TimeLabel', y=net_amount_col, color='procurement_category',
-                             title='Department & Services – Category-wise Spend Trend (Monthly)',
-                             labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
-                             markers=True)
+        # Default to Top 10 to avoid clutter (as requested in previous steps, maintaining cleaner default)
+        try:
+            if net_amount_col:
+                top_10 = dept_df.groupby('procurement_category')[net_amount_col].sum().sort_values(ascending=False).head(10).index.astype(str).tolist()
+                default_cats = [c for c in top_10 if c in all_cats]
             else:
-                fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color='procurement_category', barmode='group',
-                            title='Department & Services – Category-wise Spend Trend (Yearly)',
-                            labels={net_amount_col: 'Spend', 'TimeLabel': '', 'procurement_category': 'Category'},
-                            text_auto='.2s')
+                default_cats = all_cats[:5]
+        except:
+            default_cats = all_cats[:5]
 
-            fig.update_xaxes(categoryorder='array', categoryarray=time_order)
-            fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20), hovermode='x unified')
-            st.plotly_chart(fig, use_container_width=True)
-
-        else:
-            st.info("No data for selected categories.")
+        sel_categories = st.multiselect("Select Categories to Compare", all_cats, default=default_cats, key='cat_trend_multiselect')
     else:
-        if not sel_categories:
-            st.info("Please select at least one category.")
-        else:
-            st.info("Date column or Net Amount column not found.")
+        sel_categories = []
+        st.warning("Procurement Category column not found.")
+
+    # Render Chart using Memoized Aggregation (Mirroring Entity Trend)
+    try:
+        if trend_date_col and net_amount_col and net_amount_col in dept_df.columns and 'procurement_category' in dept_df.columns and sel_categories:
+
+            # Compute aggregation
+            g_cat = memoized_compute('monthly_category', filter_signature, build_monthly_category)
+
+            if not g_cat.empty:
+                # Filter for selected categories
+                g_cat_filtered = g_cat[g_cat['procurement_category'].astype(str).isin(sel_categories)].copy()
+
+                if not g_cat_filtered.empty:
+                    # Sort chronologically
+                    g_cat_filtered = g_cat_filtered.sort_values('month')
+
+                    fig_c = px.line(
+                        g_cat_filtered,
+                        x=g_cat_filtered['month'].dt.strftime('%b-%Y'),
+                        y=net_amount_col,
+                        color='procurement_category',
+                        labels={net_amount_col:'Net Amount', 'x':'Month', 'procurement_category': 'Category'},
+                        title='Category-wise Spend Trend'
+                    )
+                    fig_c.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_c, use_container_width=True)
+                else:
+                    st.info("No data for the selected categories.")
+            else:
+                st.info("No monthly category data available.")
+    except Exception as e:
+        st.error(f'Could not render Category Trend: {e}')
 
     st.markdown("---")
     # ----------------- End New Feature -----------------
