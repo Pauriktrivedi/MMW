@@ -1555,7 +1555,84 @@ with T[4]:
 # ----------------- Dept & Services -----------------
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
+
+    # ----------------- PR Budget vs Spend Analysis (New Feature) -----------------
+    st.subheader('PR Budget vs Spend — Monthly / Yearly')
+
     dept_df = fil
+
+    # 2. Top Controls
+    c_t1, c_t2 = st.columns([1, 3])
+    with c_t1:
+        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='pr_spend_granularity')
+
+    # Prepare Data for Selector
+    # filtered data is `dept_df`
+    # Ensure date col exists
+    if trend_date_col and trend_date_col in dept_df.columns:
+        df_chart = dept_df.dropna(subset=[trend_date_col]).copy()
+
+        # PR-level spend only check (if pr_number_col exists)
+        if pr_number_col and pr_number_col in df_chart.columns:
+            df_chart = df_chart[df_chart[pr_number_col].notna()]
+
+        if granularity == "Monthly":
+            df_chart['TimeLabel'] = df_chart[trend_date_col].dt.strftime('%b %Y')
+            # Sort by date
+            timeline_options = sorted(df_chart[trend_date_col].dt.to_period('M').unique())
+            timeline_options_str = [t.strftime('%b %Y') for t in timeline_options]
+        else:
+            df_chart['TimeLabel'] = df_chart[trend_date_col].dt.year.astype(str)
+            timeline_options_str = sorted(df_chart['TimeLabel'].unique())
+
+        with c_t2:
+            timeline_sel = st.multiselect("Timeline Selector", timeline_options_str, default=timeline_options_str, key='pr_spend_timeline')
+
+        # 3. Left Filter & 4. Chart
+        c_left, c_right = st.columns([1, 3])
+
+        with c_left:
+            # Budget Code Filter
+            # Source: Use existing Budget Code / Budget Description fields
+            if pr_budget_desc_col and pr_budget_desc_col in df_chart.columns:
+                budget_opts = sorted(df_chart[pr_budget_desc_col].astype(str).unique())
+                budget_sel = st.multiselect("Filter: Budget Description", budget_opts, default=budget_opts, key='pr_spend_budget_filter')
+            else:
+                budget_sel = []
+
+        # Filter Data
+        mask = df_chart['TimeLabel'].isin(timeline_sel)
+        if budget_sel and pr_budget_desc_col in df_chart.columns:
+            mask = mask & df_chart[pr_budget_desc_col].astype(str).isin(budget_sel)
+
+        df_filtered = df_chart[mask]
+
+        with c_right:
+            # Aggregation
+            # X: TimeLabel, Color: Budget Description, Y: Net Amount
+            if not df_filtered.empty and net_amount_col in df_filtered.columns:
+                agg = df_filtered.groupby(['TimeLabel', pr_budget_desc_col])[net_amount_col].sum().reset_index()
+
+                # Sorting Logic for X-axis
+                if granularity == "Monthly":
+                    # Create a sort key
+                    agg['SortKey'] = pd.to_datetime(agg['TimeLabel'], format='%b %Y')
+                    agg = agg.sort_values('SortKey')
+                else:
+                    agg = agg.sort_values('TimeLabel')
+
+                fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col,
+                             title='Total PR Spend Amount', labels={net_amount_col: 'Spend'})
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No data for selected filters.")
+
+    else:
+        st.info("Date column not found for Timeline analysis.")
+
+    st.markdown("---")
+    # ----------------- End New Feature -----------------
+
     # replace expensive apply with column-wise bfill
     dept_cols = [c for c in [pr_bu_col, pr_budget_desc_col, po_bu_col, po_budget_desc_col, pr_budget_code_col] if c]
     if dept_cols:
