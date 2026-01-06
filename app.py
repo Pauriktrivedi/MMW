@@ -1556,121 +1556,116 @@ with T[4]:
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
 
-    # ----------------- PR Budget vs Spend Analysis (New Feature) -----------------
-    st.subheader('PR Budget vs Spend — Monthly / Yearly')
+    # ----------------- Category & Sub-Category Spend Analysis -----------------
+    st.subheader('Category & Sub-Category Spend Analysis')
 
     dept_df = fil
 
-    # 2. Top Controls
-    c_t1, c_t2 = st.columns([1, 3])
-    with c_t1:
-        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='pr_spend_granularity')
+    # 2. Controls: Granularity + Category Selector
+    c_ctl1, c_ctl2 = st.columns([1, 2])
+    with c_ctl1:
+        granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='cat_spend_granularity')
 
-    # Prepare Data for Selector
-    # filtered data is `dept_df`
-    # Ensure date col exists
-    if trend_date_col and trend_date_col in dept_df.columns:
+    with c_ctl2:
+        # Get Categories
+        if 'procurement_category' in dept_df.columns:
+            all_cats = sorted(dept_df['procurement_category'].dropna().unique().astype(str).tolist())
+            cat_options = ['All Categories'] + all_cats
+            sel_category = st.selectbox("Select Category (Drill-down)", cat_options, index=0, key='cat_spend_selector')
+        else:
+            sel_category = 'All Categories'
+            st.warning("Procurement Category column missing.")
+
+    # Prepare Data
+    if trend_date_col and trend_date_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         df_chart = dept_df.dropna(subset=[trend_date_col]).copy()
 
         # PR-level spend only check (if pr_number_col exists)
         if pr_number_col and pr_number_col in df_chart.columns:
             df_chart = df_chart[df_chart[pr_number_col].notna()]
 
+        # Time Labeling
         if granularity == "Monthly":
             df_chart['TimeLabel'] = df_chart[trend_date_col].dt.strftime('%b %Y')
-            # Sort by date
-            timeline_options = sorted(df_chart[trend_date_col].dt.to_period('M').unique())
-            timeline_options_str = [t.strftime('%b %Y') for t in timeline_options]
+            df_chart['SortKey'] = df_chart[trend_date_col].dt.to_period('M')
         else:
             df_chart['TimeLabel'] = df_chart[trend_date_col].dt.year.astype(str)
-            timeline_options_str = sorted(df_chart['TimeLabel'].unique())
+            df_chart['SortKey'] = df_chart[trend_date_col].dt.year
 
-        with c_t2:
-            timeline_sel = st.multiselect("Timeline Selector", timeline_options_str, default=timeline_options_str, key='pr_spend_timeline')
+        # Get global time order
+        time_order_df = df_chart[['TimeLabel', 'SortKey']].drop_duplicates().sort_values('SortKey')
+        time_order = time_order_df['TimeLabel'].tolist()
 
-        # 3. Left Filter & 4. Chart
-        c_left, c_right = st.columns([1, 3])
+        # MODE 1: All Categories (Category View - Small Multiples)
+        if sel_category == 'All Categories':
+            if 'procurement_category' in df_chart.columns:
+                # Group by Main Category + Time
+                agg = df_chart.groupby(['TimeLabel', 'procurement_category'])[net_amount_col].sum().reset_index()
 
-        with c_left:
-            # Budget Code Filter
-            # Source: Use existing Budget Code / Budget Description fields
-            if pr_budget_desc_col and pr_budget_desc_col in df_chart.columns:
-                budget_opts = sorted(df_chart[pr_budget_desc_col].astype(str).unique())
-
-                # Pre-calculate defaults (Top 10 by spend to avoid rendering too many charts)
-                try:
-                    # Quick aggregation for defaults
-                    default_agg = df_chart.groupby(pr_budget_desc_col)[net_amount_col].sum().sort_values(ascending=False).head(10)
-                    top_defaults = [str(x) for x in default_agg.index]
-                    # Intersect with opts to be safe
-                    defaults_to_use = [x for x in top_defaults if x in budget_opts]
-                    if not defaults_to_use:
-                         defaults_to_use = budget_opts[:6]
-                except:
-                    defaults_to_use = budget_opts[:6]
-
-                budget_sel = st.multiselect("Filter: Budget Description", budget_opts, default=defaults_to_use, key='pr_spend_budget_filter')
-            else:
-                budget_sel = []
-
-        # Filter Data
-        mask = df_chart['TimeLabel'].isin(timeline_sel)
-        if budget_sel and pr_budget_desc_col in df_chart.columns:
-            mask = mask & df_chart[pr_budget_desc_col].astype(str).isin(budget_sel)
-
-        df_filtered = df_chart[mask]
-
-        with c_right:
-            # Aggregation
-            # X: TimeLabel, Color: Budget Description, Y: Net Amount
-            if not df_filtered.empty and net_amount_col in df_filtered.columns:
-                agg = df_filtered.groupby(['TimeLabel', pr_budget_desc_col])[net_amount_col].sum().reset_index()
-
-                # Sorting Logic for X-axis (shared across all charts)
-                if granularity == "Monthly":
-                    # Create a sort key
-                    agg['SortKey'] = pd.to_datetime(agg['TimeLabel'], format='%b %Y')
-                    agg = agg.sort_values('SortKey')
-                else:
-                    agg = agg.sort_values('TimeLabel')
-
-                # Extract global time order for consistent x-axis
-                time_order = agg['TimeLabel'].unique()
-
-                # Calculate Global Max Y for shared scale
+                # Small Multiples Logic
+                unique_cats = sorted(agg['procurement_category'].unique())
                 global_max_y = agg[net_amount_col].max() if not agg.empty else 0
 
-                # Get unique budget descriptions to iterate
-                unique_budgets = sorted(agg[pr_budget_desc_col].unique())
-
-                # Small Multiples Layout (Grid)
-                # 2 charts per row
                 cols_per_row = 2
                 grid_cols = st.columns(cols_per_row)
 
-                for i, budget in enumerate(unique_budgets):
-                    sub_df = agg[agg[pr_budget_desc_col] == budget]
+                for i, cat in enumerate(unique_cats):
+                    sub_df = agg[agg['procurement_category'] == cat]
 
-                    fig = px.line(sub_df, x='TimeLabel', y=net_amount_col,
-                                 title=str(budget), # Chart title = Budget Description
-                                 labels={net_amount_col: 'Spend', 'TimeLabel': ''},
-                                 markers=True)
+                    if granularity == "Monthly":
+                        fig = px.line(sub_df, x='TimeLabel', y=net_amount_col,
+                                     title=f"{cat} — Monthly Spend",
+                                     labels={net_amount_col: 'Spend', 'TimeLabel': ''},
+                                     markers=True)
+                    else:
+                        fig = px.bar(sub_df, x='TimeLabel', y=net_amount_col,
+                                    title=f"{cat} — Yearly Spend",
+                                    labels={net_amount_col: 'Spend', 'TimeLabel': ''},
+                                    text_auto='.2s')
 
-                    # Enforce shared time scale & consistent Y-axis
                     fig.update_xaxes(categoryorder='array', categoryarray=time_order)
-                    # Add 10% headroom
                     fig.update_yaxes(range=[0, global_max_y * 1.1])
                     fig.update_layout(showlegend=False, height=300, margin=dict(l=20, r=20, t=40, b=20))
 
-                    # Place in grid
                     with grid_cols[i % cols_per_row]:
                         st.plotly_chart(fig, use_container_width=True)
-
             else:
-                st.info("No data for selected filters.")
+                st.info("Procurement Category column missing.")
 
+        # MODE 2: Specific Category (Drill-down View)
+        else:
+            # Filter by Category
+            if 'procurement_category' in df_chart.columns:
+                df_filtered = df_chart[df_chart['procurement_category'] == sel_category]
+
+                if not df_filtered.empty and pr_budget_desc_col and pr_budget_desc_col in df_filtered.columns:
+                    # Group by Sub-Category (PR Budget Description) + Time
+                    agg = df_filtered.groupby(['TimeLabel', pr_budget_desc_col])[net_amount_col].sum().reset_index()
+
+                    if granularity == "Monthly":
+                        fig = px.line(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col,
+                                     title=f"{sel_category} — Sub-Category Breakdown (Monthly)",
+                                     labels={net_amount_col: 'Spend', 'TimeLabel': '', pr_budget_desc_col: 'Sub-Category'},
+                                     markers=True)
+                    else:
+                        fig = px.bar(agg, x='TimeLabel', y=net_amount_col, color=pr_budget_desc_col, barmode='group',
+                                    title=f"{sel_category} — Sub-Category Breakdown (Yearly)",
+                                    labels={net_amount_col: 'Spend', 'TimeLabel': '', pr_budget_desc_col: 'Sub-Category'},
+                                    text_auto='.2s')
+
+                    fig.update_xaxes(categoryorder='array', categoryarray=time_order)
+                    fig.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Data Table
+                    st.write("Detailed Breakdown:")
+                    st.dataframe(agg.pivot(index='TimeLabel', columns=pr_budget_desc_col, values=net_amount_col).fillna(0).reindex(time_order), use_container_width=True)
+                else:
+                    st.info(f"No data or missing Budget Description for {sel_category}.")
+            else:
+                 st.info("Procurement Category column missing.")
     else:
-        st.info("Date column not found for Timeline analysis.")
+        st.info("Date column or Net Amount column not found.")
 
     st.markdown("---")
     # ----------------- End New Feature -----------------
