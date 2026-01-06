@@ -10,6 +10,15 @@ import logging
 import traceback
 import re
 
+try:
+    from convert_to_parquet import update_parquet_if_needed
+except ImportError:
+    st.warning("Could not import update_parquet_if_needed from convert_to_parquet.py")
+    update_parquet_if_needed = None
+except Exception as e:
+    st.warning(f"Error importing convert_to_parquet: {e}")
+    update_parquet_if_needed = None
+
 # ---------- CONFIG ----------
 # Set up a logger that works reliably with Streamlit
 logger = logging.getLogger(__name__)
@@ -398,6 +407,15 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ---------- Load & preprocess ----------
+# Auto-ingestion Logic
+parquet_path_check = DATA_DIR / "p2p_data.parquet"
+if not parquet_path_check.exists():
+    if update_parquet_if_needed:
+        try:
+            update_parquet_if_needed(force=True)
+        except Exception as e:
+            st.warning(f"Failed to generate parquet file: {e}")
+
 logger.info("Starting data loading...")
 load_start_time = time.time()
 df_raw = load_all()
