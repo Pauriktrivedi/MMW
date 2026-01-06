@@ -1710,6 +1710,27 @@ with T[5]:
     else:
         st.info('PR Budget description or Net Amount column not found to show PR Budget Description spend.')
 
+    # --- NEW: Total Spend by Main Category ---
+    st.markdown('---')
+    st.subheader('Total Spend by Main Category (₹ Cr)')
+    # Requirement: Group by Main Category only (procurement_category), Sum Spend, Descending
+    if 'procurement_category' in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
+        # Build aggregation
+        # Using dept_df which is already filtered by sidebar
+        cat_agg = dept_df.groupby('procurement_category')[net_amount_col].sum().reset_index()
+        cat_agg['cr'] = cat_agg[net_amount_col] / 1e7
+        cat_agg = cat_agg.sort_values('cr', ascending=False)
+
+        # Plot
+        fig_main_cat = px.bar(cat_agg, x='procurement_category', y='cr', text='cr',
+                              title='Total Spend by Main Category (₹ Cr)',
+                              labels={'procurement_category': 'Main Category', 'cr': 'Spend (Cr)'})
+        fig_main_cat.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_main_cat.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_main_cat, use_container_width=True)
+    else:
+        st.info("Procurement Category or Net Amount column missing.")
+
     st.markdown('---')
     if pr_budget_code_col and pr_budget_code_col in dept_df.columns and net_amount_col and net_amount_col in dept_df.columns:
         def build_code():
