@@ -317,6 +317,100 @@ def compute_item_type_vectorized(df: pd.DataFrame) -> pd.Series:
     
     return np.where(is_service, 'Services', 'Products')
 
+def compute_main_category(df: pd.DataFrame) -> pd.Series:
+    """Maps procurement categories to strict MainCategory list."""
+    if df.empty:
+        return pd.Series(dtype=object)
+
+    # Allowed values: Marketing, Capex, Digital, Infrastructure, Licenses, HR, Direct, Rentals, Logistic, Quality, R&D
+
+    # 1. Base mapping from procurement_category
+    cat_map = {
+        'Marketing': 'Marketing',
+        'Advertisement And Agency Cost': 'Marketing',
+
+        'CAPEX': 'Capex',
+        'Plant & Machinary': 'Capex',
+        'Casting & Forging': 'Capex',
+        'Dies & Moulds': 'Capex',
+        'Tooling': 'Capex',
+        'Tooling-Prototype': 'Capex',
+        'Tools': 'Capex',
+        'Plant Equipment': 'Capex',
+
+        'IT': 'Digital',
+        'IT Services': 'Digital',
+        'IT Peripherals': 'Digital',
+        'Computer & peripherals': 'Digital',
+        'Desktop': 'Digital',
+        'Laptop': 'Digital',
+        'Network': 'Digital',
+        'Wifi Router': 'Digital',
+        'Scanner Barcode/QR Code': 'Digital',
+        'Printer': 'Digital',
+        'Electronics': 'Digital', # Often IT related
+
+        'Software License': 'Licenses',
+        'SOFTWARE': 'Licenses',
+
+        'HR': 'HR',
+        'Recruitment': 'HR',
+        'Staff Welfare Cost': 'HR',
+        'Training': 'HR',
+
+        'Infrastructure': 'Infrastructure',
+        'Office Building': 'Infrastructure',
+        'Office Maintenance': 'Infrastructure',
+        'Office furniture': 'Infrastructure',
+        'Office Equipments': 'Infrastructure',
+        'Electric Installation': 'Infrastructure',
+        'Air conditioners': 'Infrastructure',
+        'Repair & Maintenance': 'Infrastructure',
+        'Plant Maintenance': 'Infrastructure',
+
+        'Logistics': 'Logistic',
+        'Transport': 'Logistic',
+        'Repairs and Maint.- Vehicle': 'Logistic',
+        'Vehicle': 'Logistic',
+
+        'Quality': 'Quality',
+        'Testing Services': 'Quality',
+
+        'R&D': 'R&D',
+        'Proprietary': 'R&D',
+
+        'Consulting Services': 'Direct', # Fallback bucket for professional services
+        'Legal and professional': 'Direct',
+        'Plant Consultancy Services': 'Direct',
+
+        'Raw Material': 'Direct',
+        'Consumable Material': 'Direct',
+        'Consumable Other': 'Direct',
+        'Store and Spares': 'Direct',
+        'Fasteners': 'Direct',
+        'Plastic & Rubber': 'Direct',
+        'Sheet Metal': 'Direct',
+        'Finish Good': 'Direct',
+        'Semi Finish Group': 'Direct',
+        'Packing Material': 'Direct',
+        'Customer Support Cost': 'Direct',
+        'Service': 'Direct', # Generic Service often production related
+        'Insurance Expense': 'Direct',
+        'Stationery and Printing': 'Direct',
+        'CWIP': 'Direct'
+    }
+
+    # 2. Get source col
+    p_cat = df.get('procurement_category', pd.Series('', index=df.index)).astype(str).fillna('Direct')
+
+    # 3. Map
+    main_cat = p_cat.map(cat_map).fillna('Direct') # Default to Direct if unknown
+
+    # 4. Refine using PR Budget Description if needed (Optional heuristic)
+    # For now, relying on robust category mapping.
+
+    return main_cat
+
 
 @st.cache_data(show_spinner=False)
 def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
@@ -401,7 +495,10 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     # Compute Item.Type
     df['Item.Type'] = compute_item_type_vectorized(df)
 
-    for c in ['entity', 'po_creator', 'buyer_display', po_vendor_col, 'Buyer.Type', 'procurement_category', 'product_name', 'Item.Type']:
+    # Compute Main Category (Strict Rollup)
+    df['MainCategory'] = compute_main_category(df)
+
+    for c in ['entity', 'po_creator', 'buyer_display', po_vendor_col, 'Buyer.Type', 'procurement_category', 'product_name', 'Item.Type', 'MainCategory']:
         to_cat(df, c)
         
     return df
@@ -1556,77 +1653,113 @@ with T[4]:
 with T[5]:
     st.subheader('Dept & Services — PR Budget perspective')
 
-    # ----------------- Category-wise Trend (Mirrored from Entity Trend) -----------------
+    # ----------------- Category-wise Trend (Strict Main Category) -----------------
     st.subheader('Department & Services – Category-wise Spend Trend')
 
     dept_df = fil
 
-    # Build aggregation function similar to build_monthly() but for Category
-    def build_monthly_category():
+    # 1. Controls: Toggle Time Granularity
+    col_t1, col_t2 = st.columns([1, 3])
+    with col_t1:
+        time_granularity = st.radio("Time Granularity", ["Monthly", "Yearly"], horizontal=True, key='main_cat_granularity')
+
+    # Build aggregation function using the new MainCategory column
+    def build_main_cat_trend():
         if not (trend_date_col and net_amount_col and net_amount_col in dept_df.columns):
             return pd.DataFrame()
-        if 'procurement_category' not in dept_df.columns:
+        if 'MainCategory' not in dept_df.columns:
             return pd.DataFrame()
 
         # Filter for time & cols
-        z = dept_df.loc[dept_df['_month_bucket'].notna(), ['_month_bucket', 'procurement_category', net_amount_col]].copy()
+        z = dept_df.loc[dept_df['_month_bucket'].notna(), ['_month_bucket', 'MainCategory', net_amount_col]].copy()
         z['month'] = z['_month_bucket']
         z = z[(z['month'] >= pr_start) & (z['month'] <= pr_end)]
 
-        # Group by Month + Category (Strictly Main Category)
-        return z.groupby(['month', 'procurement_category'], dropna=False)[net_amount_col].sum().reset_index()
+        # Group by Month + MainCategory
+        return z.groupby(['month', 'MainCategory'], dropna=False)[net_amount_col].sum().reset_index()
 
-    # Controls
-    if 'procurement_category' in dept_df.columns:
-        # Get sorted unique categories
-        all_cats = sorted(dept_df['procurement_category'].dropna().unique().astype(str).tolist())
+    # 2. Controls: Select Categories
+    if 'MainCategory' in dept_df.columns:
+        # Get sorted unique categories from strict list
+        all_main_cats = sorted(dept_df['MainCategory'].dropna().unique().astype(str).tolist())
 
-        # Default to Top 10 to avoid clutter (as requested in previous steps, maintaining cleaner default)
+        # Default: Top 5 by spend
         try:
             if net_amount_col:
-                top_10 = dept_df.groupby('procurement_category')[net_amount_col].sum().sort_values(ascending=False).head(10).index.astype(str).tolist()
-                default_cats = [c for c in top_10 if c in all_cats]
+                top_5 = dept_df.groupby('MainCategory')[net_amount_col].sum().sort_values(ascending=False).head(5).index.astype(str).tolist()
+                default_cats = [c for c in top_5 if c in all_main_cats]
             else:
-                default_cats = all_cats[:5]
+                default_cats = all_main_cats[:5]
         except:
-            default_cats = all_cats[:5]
+            default_cats = all_main_cats[:5]
 
-        sel_categories = st.multiselect("Select Categories to Compare", all_cats, default=default_cats, key='cat_trend_multiselect')
+        with col_t2:
+            sel_main_cats = st.multiselect("Select Categories to Compare", all_main_cats, default=default_cats, key='main_cat_trend_multiselect')
     else:
-        sel_categories = []
-        st.warning("Procurement Category column not found.")
+        sel_main_cats = []
+        st.warning("MainCategory column not found.")
 
-    # Render Chart using Memoized Aggregation (Mirroring Entity Trend)
+    # 3. Render Chart
     try:
-        if trend_date_col and net_amount_col and net_amount_col in dept_df.columns and 'procurement_category' in dept_df.columns and sel_categories:
+        if trend_date_col and net_amount_col and net_amount_col in dept_df.columns and 'MainCategory' in dept_df.columns and sel_main_cats:
 
-            # Compute aggregation
-            g_cat = memoized_compute('monthly_category', filter_signature, build_monthly_category)
+            # Compute monthly aggregation
+            g_cat = memoized_compute('monthly_main_cat', filter_signature, build_main_cat_trend)
 
             if not g_cat.empty:
                 # Filter for selected categories
-                g_cat_filtered = g_cat[g_cat['procurement_category'].astype(str).isin(sel_categories)].copy()
+                g_cat_filtered = g_cat[g_cat['MainCategory'].astype(str).isin(sel_main_cats)].copy()
 
                 if not g_cat_filtered.empty:
-                    # Sort chronologically
-                    g_cat_filtered = g_cat_filtered.sort_values('month')
+
+                    # Handle Yearly vs Monthly
+                    if time_granularity == 'Yearly':
+                        # Roll up to Year
+                        g_cat_filtered['Year'] = g_cat_filtered['month'].dt.year.astype(str)
+                        g_cat_filtered = g_cat_filtered.groupby(['Year', 'MainCategory'])[net_amount_col].sum().reset_index()
+                        x_axis = 'Year'
+                        title_suffix = '(Yearly)'
+                    else:
+                        g_cat_filtered = g_cat_filtered.sort_values('month')
+                        x_axis = 'month'
+                        title_suffix = '(Monthly)'
+
+                    # Pivot to ensure 0s for missing periods (critical for smooth lines)
+                    pivot_data = g_cat_filtered.pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0).reset_index()
+
+                    # Melt back for Plotly
+                    plot_data = pivot_data.melt(id_vars=x_axis, var_name='MainCategory', value_name=net_amount_col)
+
+                    # Sort logic
+                    if time_granularity == 'Monthly':
+                        plot_data = plot_data.sort_values(x_axis)
+                        x_val = plot_data[x_axis].dt.strftime('%b-%Y')
+                    else:
+                        plot_data = plot_data.sort_values(x_axis)
+                        x_val = plot_data[x_axis]
 
                     fig_c = px.line(
-                        g_cat_filtered,
-                        x=g_cat_filtered['month'].dt.strftime('%b-%Y'),
+                        plot_data,
+                        x=x_val,
                         y=net_amount_col,
-                        color='procurement_category',
-                        labels={net_amount_col:'Net Amount', 'x':'Month', 'procurement_category': 'Category'},
-                        title='Category-wise Spend Trend'
+                        color='MainCategory',
+                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category'},
+                        title=f'Category-wise Spend Trend {title_suffix}',
+                        markers=True
                     )
-                    fig_c.update_layout(xaxis_tickangle=-45)
+
+                    fig_c.update_layout(xaxis_tickangle=-45, hovermode='x unified')
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
                     st.info("No data for the selected categories.")
             else:
-                st.info("No monthly category data available.")
+                st.info("No category trend data available.")
+        elif not sel_main_cats:
+            st.info("Please select at least one category to view the trend.")
+
     except Exception as e:
         st.error(f'Could not render Category Trend: {e}')
+        st.write(traceback.format_exc())
 
     st.markdown("---")
     # ----------------- End New Feature -----------------
