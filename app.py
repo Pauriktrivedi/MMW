@@ -505,13 +505,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
 
 # ---------- Load & preprocess ----------
 # Auto-ingestion Logic
-parquet_path_check = DATA_DIR / "p2p_data.parquet"
-if not parquet_path_check.exists():
-    if update_parquet_if_needed:
-        try:
-            update_parquet_if_needed(force=True)
-        except Exception as e:
-            st.warning(f"Failed to generate parquet file: {e}")
+if update_parquet_if_needed:
+    try:
+        # force=False will still check timestamps and update if needed
+        update_parquet_if_needed(force=False)
+    except Exception as e:
+        st.warning(f"Failed to update parquet file: {e}")
 
 logger.info("Starting data loading...")
 load_start_time = time.time()
