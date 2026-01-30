@@ -714,6 +714,41 @@ T = st.tabs(['KPIs & Spend','PR/PO Timing','PO Approval','Delivery','Vendors','D
 # ----------------- KPIs & Spend -----------------
 with T[0]:
     st.header('P2P Dashboard — Indirect (KPIs & Spend)')
+
+    # --- MoM Logic ---
+    mom_delta = None
+    mom_pct = None
+
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+        # Calculate current and previous month spend
+        # Use fil to respect filters, but we need date range context
+        # Actually, best to calculate based on the MAX date in the filtered data vs the month before it
+        try:
+            max_date = fil[trend_date_col].max()
+            if pd.notna(max_date):
+                current_month_start = max_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                # Previous month
+                prev_month_end = current_month_start - pd.Timedelta(days=1)
+                prev_month_start = prev_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+                # We need to query the original DF (df) to get prev month if filter excludes it?
+                # The user "filters" usually apply to the view period.
+                # If the user selected "2024", we only see 2024.
+                # So we calculate MoM based on the LATEST available month in the filtered view vs the one immediately preceding it IN THE FILTERED VIEW.
+
+                # Get monthly sums
+                monthly_sums = fil.groupby(fil[trend_date_col].dt.to_period('M'))[net_amount_col].sum().sort_index()
+
+                if len(monthly_sums) >= 2:
+                    curr_val = monthly_sums.iloc[-1]
+                    prev_val = monthly_sums.iloc[-2]
+
+                    diff = curr_val - prev_val
+                    mom_delta = diff / 1e7 # Cr
+                    mom_pct = (diff / prev_val * 100) if prev_val != 0 else 0.0
+        except Exception as e:
+            logger.error(f"MoM Calc Error: {e}")
+
     c1,c2,c3,c4,c5 = st.columns(5)
     total_prs = int(fil.get(pr_number_col, pd.Series(dtype=object)).nunique()) if pr_number_col else 0
     total_pos = int(fil.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
@@ -721,8 +756,58 @@ with T[0]:
     c2.metric('Total POs', total_pos)
     c3.metric('Line Items', len(fil))
     c4.metric('Entities', int(fil.get('entity', pd.Series(dtype=object)).nunique()))
+
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
-    c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
+
+    # Display Spend with Delta
+    if mom_delta is not None:
+        c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}", f"{mom_delta:+.2f} Cr ({mom_pct:+.1f}%) vs last month")
+    else:
+        c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
+
+    st.markdown('---')
+
+    # --- Top Movers (New Section) ---
+    if mom_pct is not None and 'MainCategory' in fil.columns:
+        st.subheader("🚀 Top Movers (Month-over-Month)")
+
+        try:
+            # Get latest two months data
+            # Re-using timestamps from above would be cleaner but let's re-derive safely
+            m_sums = fil.groupby([fil[trend_date_col].dt.to_period('M'), 'MainCategory'])[net_amount_col].sum().reset_index()
+            periods = sorted(m_sums[trend_date_col].unique())
+
+            if len(periods) >= 2:
+                curr_p = periods[-1]
+                prev_p = periods[-2]
+
+                curr_df = m_sums[m_sums[trend_date_col] == curr_p].set_index('MainCategory')[net_amount_col]
+                prev_df = m_sums[m_sums[trend_date_col] == prev_p].set_index('MainCategory')[net_amount_col]
+
+                # Align
+                movers = pd.DataFrame({'Current': curr_df, 'Previous': prev_df}).fillna(0)
+                movers['Diff'] = movers['Current'] - movers['Previous']
+                movers['Diff_Cr'] = movers['Diff'] / 1e7
+                movers['Pct'] = (movers['Diff'] / movers['Previous'] * 100).fillna(0)
+
+                # Sort by absolute impact (Diff_Cr)
+                movers['Abs_Diff'] = movers['Diff'].abs()
+                top_movers = movers.sort_values('Abs_Diff', ascending=False).head(5)
+
+                # Display
+                # Format for display
+                disp_movers = top_movers[['Current', 'Previous', 'Diff_Cr', 'Pct']].copy()
+                disp_movers['Current'] = (disp_movers['Current']/1e7).map('{:,.2f}'.format)
+                disp_movers['Previous'] = (disp_movers['Previous']/1e7).map('{:,.2f}'.format)
+                disp_movers['Diff_Cr'] = disp_movers['Diff_Cr'].map('{:+,.2f}'.format)
+                disp_movers['Pct'] = disp_movers['Pct'].map('{:+,.1f}%'.format)
+                disp_movers.columns = ['Curr Month (Cr)', 'Prev Month (Cr)', 'Change (Cr)', '% Change']
+
+                st.table(disp_movers)
+
+        except Exception as e:
+            st.info(f"Could not calculate Top Movers: {e}")
+
     st.markdown('---')
 
     # Build monthly aggregated once
