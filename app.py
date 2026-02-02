@@ -1370,6 +1370,25 @@ with T[4]:
         c1.metric("Total Vendors", total_vendors)
         c2.metric("Total Spend (Cr)", f"{total_spend:.2f}")
 
+        # --- Top Vendors by Spend Chart ---
+        st.markdown("---")
+        st.subheader("Top Vendors by Spend (Cr)")
+
+        def build_vendor_spend_chart_data():
+            v = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            v['cr'] = v[net_amount_col] / 1e7
+            return v.head(30) # Top 30 for readability
+
+        top_v = memoized_compute('top_vendor_spend', filter_signature, build_vendor_spend_chart_data)
+
+        if not top_v.empty:
+            fig_v = px.bar(top_v, x=po_vendor_col, y='cr', text='cr', title='Top 30 Vendors by Spend (Cr)')
+            fig_v.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_v.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_v, use_container_width=True)
+        else:
+            st.info("No vendor data available for chart.")
+
         # ----------------- New: Buyer-wise Vendor Portfolio -----------------
         st.markdown("### 0. Buyer-wise Vendor Portfolio")
         
