@@ -506,11 +506,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
 # ---------- Load & preprocess ----------
 # Auto-ingestion Logic
 if update_parquet_if_needed:
-    try:
-        # force=False will still check timestamps and update if needed
-        update_parquet_if_needed(force=False)
-    except Exception as e:
-        st.warning(f"Failed to update parquet file: {e}")
+    parquet_path = DATA_DIR / "p2p_data.parquet"
+    if not parquet_path.exists():
+        try:
+            update_parquet_if_needed(force=True)
+        except Exception as e:
+            st.warning(f"Failed to generate parquet file: {e}")
 
 logger.info("Starting data loading...")
 load_start_time = time.time()
@@ -558,13 +559,20 @@ if LOGO_PATH.exists():
     st.sidebar.image(str(LOGO_PATH), use_column_width=True)
 st.sidebar.header('Filters')
 
+# Dynamic date ranges
+today = pd.Timestamp.now()
+last_3 = (today - pd.DateOffset(months=3), today + pd.DateOffset(days=1))
+last_6 = (today - pd.DateOffset(months=6), today + pd.DateOffset(days=1))
+
 FY = {
     'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
+    'Last 3 Months': last_3,
+    'Last 6 Months': last_6,
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-03-31')),
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-03-31')),
     '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-03-31'))
 }
-fy_key = st.sidebar.selectbox('Financial Year', list(FY))
+fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
 
 # Work on a filtered view (avoid copies until necessary)
@@ -1951,6 +1959,31 @@ with T[6]:
         out = z[abs(z['pctdev']) >= thr/100.0].copy()
         out['pctdev%'] = (out['pctdev']*100).round(1)
         st.dataframe(out.sort_values('pctdev%', ascending=False), use_container_width=True)
+
+    # --- Top Items by Spend Chart ---
+    st.markdown("---")
+    st.subheader("Top Items (Products/Services) by Spend")
+
+    if net_amount_col and net_amount_col in fil.columns and 'product_name' in fil.columns:
+        # Aggregate by product name
+        def build_top_items():
+            top = fil.groupby('product_name')[net_amount_col].sum().reset_index()
+            top['cr'] = top[net_amount_col] / 1e7
+            return top.sort_values('cr', ascending=False).head(30)
+
+        top_items = memoized_compute('top_items_spend', filter_signature, build_top_items)
+
+        if not top_items.empty:
+            fig_items = px.bar(top_items, x='product_name', y='cr', text='cr',
+                               title='Top 30 Items by Spend (Cr)',
+                               labels={'product_name': 'Item Name', 'cr': 'Spend (Cr)'})
+            fig_items.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_items.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_items, use_container_width=True)
+        else:
+            st.info("No item data available.")
+    else:
+        st.info("Net Amount or Product Name column missing.")
 
 # ----------------- Forecast -----------------
 with T[7]:
