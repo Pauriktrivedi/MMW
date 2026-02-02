@@ -1,5 +1,6 @@
 import pandas as pd
 from pathlib import Path
+import os
 
 # ---------- CONFIG ----------
 DATA_DIR = Path(__file__).resolve().parent
@@ -7,8 +8,8 @@ DATA_DIR = Path(__file__).resolve().parent
 RAW_FILES = [
     ("MEPL.xlsx", "MEPL"),
     ("MLPL.xlsx", "MLPL"),
-    ("mmw.xlsx", "MMW"),
-    ("mmpl.xlsx", "MMPL")
+    ("MMPL.xlsx", "MMPL"),
+    ("MMW.xlsx", "MMW")
 ]
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -37,7 +38,7 @@ def _resolve_path(fn: str) -> Path:
     return candidate
 
 def _read_excel(path: Path, entity: str) -> pd.DataFrame:
-    # skiprows=1 was in original — preserve
+    # Use openpyxl engine
     df = pd.read_excel(path, skiprows=1, engine='openpyxl')
     df['entity_source_file'] = entity
     return df
@@ -53,8 +54,6 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
-import os
-
 def update_parquet_if_needed(force: bool = False):
     """
     Checks if p2p_data.parquet exists and is up-to-date.
@@ -64,17 +63,21 @@ def update_parquet_if_needed(force: bool = False):
 
     # Check if update is needed based on timestamps
     if output_path.exists() and not force:
-        parquet_mtime = output_path.stat().st_mtime
-        needs_update = False
-        for fn, _ in RAW_FILES:
-            excel_path = _resolve_path(fn)
-            if excel_path.exists():
-                if excel_path.stat().st_mtime > parquet_mtime:
-                    needs_update = True
-                    break
+        try:
+            parquet_mtime = output_path.stat().st_mtime
+            needs_update = False
+            for fn, _ in RAW_FILES:
+                excel_path = _resolve_path(fn)
+                if excel_path.exists():
+                    if excel_path.stat().st_mtime > parquet_mtime:
+                        needs_update = True
+                        break
 
-        if not needs_update:
-            return
+            if not needs_update:
+                return
+        except Exception:
+            # Fallback to update if stat fails
+            pass
 
     frames = []
     for fn, ent in RAW_FILES:

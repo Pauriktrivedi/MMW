@@ -506,11 +506,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
 # ---------- Load & preprocess ----------
 # Auto-ingestion Logic
 if update_parquet_if_needed:
-    try:
-        # force=False will still check timestamps and update if needed
-        update_parquet_if_needed(force=False)
-    except Exception as e:
-        st.warning(f"Failed to update parquet file: {e}")
+    parquet_path = DATA_DIR / "p2p_data.parquet"
+    if not parquet_path.exists():
+        try:
+            update_parquet_if_needed(force=True)
+        except Exception as e:
+            st.warning(f"Failed to generate parquet file: {e}")
 
 logger.info("Starting data loading...")
 load_start_time = time.time()
@@ -558,13 +559,20 @@ if LOGO_PATH.exists():
     st.sidebar.image(str(LOGO_PATH), use_column_width=True)
 st.sidebar.header('Filters')
 
+# Dynamic date ranges
+today = pd.Timestamp.now()
+last_3 = (today - pd.DateOffset(months=3), today + pd.DateOffset(days=1))
+last_6 = (today - pd.DateOffset(months=6), today + pd.DateOffset(days=1))
+
 FY = {
     'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
+    'Last 3 Months': last_3,
+    'Last 6 Months': last_6,
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-03-31')),
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-03-31')),
     '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-03-31'))
 }
-fy_key = st.sidebar.selectbox('Financial Year', list(FY))
+fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
 
 # Work on a filtered view (avoid copies until necessary)
