@@ -1814,6 +1814,9 @@ with T[5]:
                     # Melt back for Plotly
                     plot_data = pivot_data.melt(id_vars=x_axis, var_name='MainCategory', value_name=net_amount_col)
 
+                    # Add Cr column for display
+                    plot_data['value_cr'] = plot_data[net_amount_col] / 1e7
+
                     # Sort logic
                     if time_granularity == 'Monthly':
                         plot_data = plot_data.sort_values(x_axis)
@@ -1827,11 +1830,13 @@ with T[5]:
                         x=x_val,
                         y=net_amount_col,
                         color='MainCategory',
-                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category'},
+                        text='value_cr',
+                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category', 'value_cr': 'Amount (Cr)'},
                         title=f'Category-wise Spend Trend {title_suffix}',
                         markers=True
                     )
 
+                    fig_c.update_traces(texttemplate='%{text:.2f} Cr', textposition='top center')
                     fig_c.update_layout(xaxis_tickangle=-45, hovermode='x unified')
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
