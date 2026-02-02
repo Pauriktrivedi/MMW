@@ -1816,6 +1816,8 @@ with T[5]:
 
                     # Add Cr column for display
                     plot_data['value_cr'] = plot_data[net_amount_col] / 1e7
+                    # Create clean labels: show 2 decimal points, but hide if value is negligible (< 0.01)
+                    plot_data['label'] = plot_data['value_cr'].apply(lambda x: f"{x:.2f}" if x > 0.01 else "")
 
                     # Sort logic
                     if time_granularity == 'Monthly':
@@ -1830,13 +1832,14 @@ with T[5]:
                         x=x_val,
                         y=net_amount_col,
                         color='MainCategory',
-                        text='value_cr',
+                        text='label',
                         labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category', 'value_cr': 'Amount (Cr)'},
                         title=f'Category-wise Spend Trend {title_suffix}',
                         markers=True
                     )
 
-                    fig_c.update_traces(texttemplate='%{text:.2f} Cr', textposition='top center')
+                    # Update traces for cleaner look: smaller font, no extra suffix, top center
+                    fig_c.update_traces(textposition='top center', textfont_size=11)
                     fig_c.update_layout(xaxis_tickangle=-45, hovermode='x unified')
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
