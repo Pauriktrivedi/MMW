@@ -53,14 +53,28 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
+import os
+
 def update_parquet_if_needed(force: bool = False):
     """
-    Checks if p2p_data.parquet exists. If not (or if force=True),
-    reads Excel files, concatenates them, and writes the Parquet file.
+    Checks if p2p_data.parquet exists and is up-to-date.
+    If missing, older than Excel files, or force=True, it regenerates the Parquet file.
     """
     output_path = DATA_DIR / "p2p_data.parquet"
+
+    # Check if update is needed based on timestamps
     if output_path.exists() and not force:
-        return
+        parquet_mtime = output_path.stat().st_mtime
+        needs_update = False
+        for fn, _ in RAW_FILES:
+            excel_path = _resolve_path(fn)
+            if excel_path.exists():
+                if excel_path.stat().st_mtime > parquet_mtime:
+                    needs_update = True
+                    break
+
+        if not needs_update:
+            return
 
     frames = []
     for fn, ent in RAW_FILES:

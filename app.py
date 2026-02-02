@@ -505,13 +505,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
 
 # ---------- Load & preprocess ----------
 # Auto-ingestion Logic
-parquet_path_check = DATA_DIR / "p2p_data.parquet"
-if not parquet_path_check.exists():
-    if update_parquet_if_needed:
-        try:
-            update_parquet_if_needed(force=True)
-        except Exception as e:
-            st.warning(f"Failed to generate parquet file: {e}")
+if update_parquet_if_needed:
+    try:
+        # force=False will still check timestamps and update if needed
+        update_parquet_if_needed(force=False)
+    except Exception as e:
+        st.warning(f"Failed to update parquet file: {e}")
 
 logger.info("Starting data loading...")
 load_start_time = time.time()
@@ -715,6 +714,41 @@ T = st.tabs(['KPIs & Spend','PR/PO Timing','PO Approval','Delivery','Vendors','D
 # ----------------- KPIs & Spend -----------------
 with T[0]:
     st.header('P2P Dashboard — Indirect (KPIs & Spend)')
+
+    # --- MoM Logic ---
+    mom_delta = None
+    mom_pct = None
+
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+        # Calculate current and previous month spend
+        # Use fil to respect filters, but we need date range context
+        # Actually, best to calculate based on the MAX date in the filtered data vs the month before it
+        try:
+            max_date = fil[trend_date_col].max()
+            if pd.notna(max_date):
+                current_month_start = max_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                # Previous month
+                prev_month_end = current_month_start - pd.Timedelta(days=1)
+                prev_month_start = prev_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+                # We need to query the original DF (df) to get prev month if filter excludes it?
+                # The user "filters" usually apply to the view period.
+                # If the user selected "2024", we only see 2024.
+                # So we calculate MoM based on the LATEST available month in the filtered view vs the one immediately preceding it IN THE FILTERED VIEW.
+
+                # Get monthly sums
+                monthly_sums = fil.groupby(fil[trend_date_col].dt.to_period('M'))[net_amount_col].sum().sort_index()
+
+                if len(monthly_sums) >= 2:
+                    curr_val = monthly_sums.iloc[-1]
+                    prev_val = monthly_sums.iloc[-2]
+
+                    diff = curr_val - prev_val
+                    mom_delta = diff / 1e7 # Cr
+                    mom_pct = (diff / prev_val * 100) if prev_val != 0 else 0.0
+        except Exception as e:
+            logger.error(f"MoM Calc Error: {e}")
+
     c1,c2,c3,c4,c5 = st.columns(5)
     total_prs = int(fil.get(pr_number_col, pd.Series(dtype=object)).nunique()) if pr_number_col else 0
     total_pos = int(fil.get(purchase_doc_col, pd.Series(dtype=object)).nunique()) if purchase_doc_col else 0
@@ -722,8 +756,58 @@ with T[0]:
     c2.metric('Total POs', total_pos)
     c3.metric('Line Items', len(fil))
     c4.metric('Entities', int(fil.get('entity', pd.Series(dtype=object)).nunique()))
+
     spend_val = fil.get(net_amount_col, pd.Series(0)).sum() if net_amount_col else 0
-    c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
+
+    # Display Spend with Delta
+    if mom_delta is not None:
+        c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}", f"{mom_delta:+.2f} Cr ({mom_pct:+.1f}%) vs last month")
+    else:
+        c5.metric('Spend (Cr ₹)', f"{spend_val/1e7:,.2f}")
+
+    st.markdown('---')
+
+    # --- Top Movers (New Section) ---
+    if mom_pct is not None and 'MainCategory' in fil.columns:
+        st.subheader("🚀 Top Movers (Month-over-Month)")
+
+        try:
+            # Get latest two months data
+            # Re-using timestamps from above would be cleaner but let's re-derive safely
+            m_sums = fil.groupby([fil[trend_date_col].dt.to_period('M'), 'MainCategory'])[net_amount_col].sum().reset_index()
+            periods = sorted(m_sums[trend_date_col].unique())
+
+            if len(periods) >= 2:
+                curr_p = periods[-1]
+                prev_p = periods[-2]
+
+                curr_df = m_sums[m_sums[trend_date_col] == curr_p].set_index('MainCategory')[net_amount_col]
+                prev_df = m_sums[m_sums[trend_date_col] == prev_p].set_index('MainCategory')[net_amount_col]
+
+                # Align
+                movers = pd.DataFrame({'Current': curr_df, 'Previous': prev_df}).fillna(0)
+                movers['Diff'] = movers['Current'] - movers['Previous']
+                movers['Diff_Cr'] = movers['Diff'] / 1e7
+                movers['Pct'] = (movers['Diff'] / movers['Previous'] * 100).fillna(0)
+
+                # Sort by absolute impact (Diff_Cr)
+                movers['Abs_Diff'] = movers['Diff'].abs()
+                top_movers = movers.sort_values('Abs_Diff', ascending=False).head(5)
+
+                # Display
+                # Format for display
+                disp_movers = top_movers[['Current', 'Previous', 'Diff_Cr', 'Pct']].copy()
+                disp_movers['Current'] = (disp_movers['Current']/1e7).map('{:,.2f}'.format)
+                disp_movers['Previous'] = (disp_movers['Previous']/1e7).map('{:,.2f}'.format)
+                disp_movers['Diff_Cr'] = disp_movers['Diff_Cr'].map('{:+,.2f}'.format)
+                disp_movers['Pct'] = disp_movers['Pct'].map('{:+,.1f}%'.format)
+                disp_movers.columns = ['Curr Month (Cr)', 'Prev Month (Cr)', 'Change (Cr)', '% Change']
+
+                st.table(disp_movers)
+
+        except Exception as e:
+            st.info(f"Could not calculate Top Movers: {e}")
+
     st.markdown('---')
 
     # Build monthly aggregated once
@@ -1286,6 +1370,25 @@ with T[4]:
         c1.metric("Total Vendors", total_vendors)
         c2.metric("Total Spend (Cr)", f"{total_spend:.2f}")
 
+        # --- Top Vendors by Spend Chart ---
+        st.markdown("---")
+        st.subheader("Top Vendors by Spend (Cr)")
+
+        def build_vendor_spend_chart_data():
+            v = fil.groupby(po_vendor_col, dropna=False)[net_amount_col].sum().reset_index().sort_values(net_amount_col, ascending=False)
+            v['cr'] = v[net_amount_col] / 1e7
+            return v.head(30) # Top 30 for readability
+
+        top_v = memoized_compute('top_vendor_spend', filter_signature, build_vendor_spend_chart_data)
+
+        if not top_v.empty:
+            fig_v = px.bar(top_v, x=po_vendor_col, y='cr', text='cr', title='Top 30 Vendors by Spend (Cr)')
+            fig_v.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_v.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_v, use_container_width=True)
+        else:
+            st.info("No vendor data available for chart.")
+
         # ----------------- New: Buyer-wise Vendor Portfolio -----------------
         st.markdown("### 0. Buyer-wise Vendor Portfolio")
         
@@ -1730,6 +1833,11 @@ with T[5]:
                     # Melt back for Plotly
                     plot_data = pivot_data.melt(id_vars=x_axis, var_name='MainCategory', value_name=net_amount_col)
 
+                    # Add Cr column for display
+                    plot_data['value_cr'] = plot_data[net_amount_col] / 1e7
+                    # Create clean labels: show 2 decimal points, but hide if value is negligible (< 0.01)
+                    plot_data['label'] = plot_data['value_cr'].apply(lambda x: f"{x:.2f}" if x > 0.01 else "")
+
                     # Sort logic
                     if time_granularity == 'Monthly':
                         plot_data = plot_data.sort_values(x_axis)
@@ -1743,11 +1851,14 @@ with T[5]:
                         x=x_val,
                         y=net_amount_col,
                         color='MainCategory',
-                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category'},
+                        text='label',
+                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category', 'value_cr': 'Amount (Cr)'},
                         title=f'Category-wise Spend Trend {title_suffix}',
                         markers=True
                     )
 
+                    # Update traces for cleaner look: smaller font, no extra suffix, top center
+                    fig_c.update_traces(textposition='top center', textfont_size=11)
                     fig_c.update_layout(xaxis_tickangle=-45, hovermode='x unified')
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
