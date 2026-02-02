@@ -1960,6 +1960,31 @@ with T[6]:
         out['pctdev%'] = (out['pctdev']*100).round(1)
         st.dataframe(out.sort_values('pctdev%', ascending=False), use_container_width=True)
 
+    # --- Top Items by Spend Chart ---
+    st.markdown("---")
+    st.subheader("Top Items (Products/Services) by Spend")
+
+    if net_amount_col and net_amount_col in fil.columns and 'product_name' in fil.columns:
+        # Aggregate by product name
+        def build_top_items():
+            top = fil.groupby('product_name')[net_amount_col].sum().reset_index()
+            top['cr'] = top[net_amount_col] / 1e7
+            return top.sort_values('cr', ascending=False).head(30)
+
+        top_items = memoized_compute('top_items_spend', filter_signature, build_top_items)
+
+        if not top_items.empty:
+            fig_items = px.bar(top_items, x='product_name', y='cr', text='cr',
+                               title='Top 30 Items by Spend (Cr)',
+                               labels={'product_name': 'Item Name', 'cr': 'Spend (Cr)'})
+            fig_items.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_items.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_items, use_container_width=True)
+        else:
+            st.info("No item data available.")
+    else:
+        st.info("Net Amount or Product Name column missing.")
+
 # ----------------- Forecast -----------------
 with T[7]:
     st.subheader('Forecast Next Month Spend (SMA)')
