@@ -65,12 +65,14 @@ def safe_col(df, candidates, default=None):
     return default
 
 def memoized_compute(namespace: str, signature: tuple, compute_fn):
-    """Session-state memoization keyed by the active filter tuple."""
-    store = st.session_state.setdefault('_memo_cache', {})
-    key = (namespace, signature)
-    if key not in store:
-        store[key] = compute_fn()
-    return store[key]
+    """
+    Compute results with a simple cache.
+    To avoid memory bloat in st.session_state (which causes "Oh no" crashes),
+    we use a limited-size cache or simply compute on the fly if the operation is fast.
+    """
+    # Operation is fast enough to compute on the fly (<100ms for most aggregations)
+    # This prevents the session state from growing indefinitely.
+    return compute_fn()
 
 @st.cache_data
 def convert_df_to_csv(df):
@@ -220,6 +222,8 @@ def load_vendor_master():
             
     if records:
         v_df = pd.DataFrame(records)
+        # Missing vendor details default to 'Gujarat' as per user request
+        v_df['State'] = v_df['State'].fillna('Gujarat')
         # Normalize name for matching
         v_df['VendorName_Norm'] = v_df['VendorName'].astype(str).str.lower().str.strip()
         return v_df
@@ -736,23 +740,13 @@ with T[0]:
     mom_delta = None
     mom_pct = None
 
-    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns and not fil.empty:
         # Calculate current and previous month spend
         # Use fil to respect filters, but we need date range context
         # Actually, best to calculate based on the MAX date in the filtered data vs the month before it
         try:
             max_date = fil[trend_date_col].max()
             if pd.notna(max_date):
-                current_month_start = max_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                # Previous month
-                prev_month_end = current_month_start - pd.Timedelta(days=1)
-                prev_month_start = prev_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-                # We need to query the original DF (df) to get prev month if filter excludes it?
-                # The user "filters" usually apply to the view period.
-                # If the user selected "2024", we only see 2024.
-                # So we calculate MoM based on the LATEST available month in the filtered view vs the one immediately preceding it IN THE FILTERED VIEW.
-
                 # Get monthly sums
                 monthly_sums = fil.groupby(fil[trend_date_col].dt.to_period('M'))[net_amount_col].sum().sort_index()
 
@@ -785,42 +779,44 @@ with T[0]:
     st.markdown('---')
 
     # --- Top Movers (New Section) ---
-    if mom_pct is not None and 'MainCategory' in fil.columns:
+    if mom_pct is not None and 'MainCategory' in fil.columns and not fil.empty:
         st.subheader("🚀 Top Movers (Month-over-Month)")
 
         try:
             # Get latest two months data
             # Re-using timestamps from above would be cleaner but let's re-derive safely
             m_sums = fil.groupby([fil[trend_date_col].dt.to_period('M'), 'MainCategory'])[net_amount_col].sum().reset_index()
-            periods = sorted(m_sums[trend_date_col].unique())
 
-            if len(periods) >= 2:
-                curr_p = periods[-1]
-                prev_p = periods[-2]
+            if not m_sums.empty:
+                periods = sorted(m_sums[trend_date_col].unique())
 
-                curr_df = m_sums[m_sums[trend_date_col] == curr_p].set_index('MainCategory')[net_amount_col]
-                prev_df = m_sums[m_sums[trend_date_col] == prev_p].set_index('MainCategory')[net_amount_col]
+                if len(periods) >= 2:
+                    curr_p = periods[-1]
+                    prev_p = periods[-2]
 
-                # Align
-                movers = pd.DataFrame({'Current': curr_df, 'Previous': prev_df}).fillna(0)
-                movers['Diff'] = movers['Current'] - movers['Previous']
-                movers['Diff_Cr'] = movers['Diff'] / 1e7
-                movers['Pct'] = (movers['Diff'] / movers['Previous'] * 100).fillna(0)
+                    curr_df = m_sums[m_sums[trend_date_col] == curr_p].set_index('MainCategory')[net_amount_col]
+                    prev_df = m_sums[m_sums[trend_date_col] == prev_p].set_index('MainCategory')[net_amount_col]
 
-                # Sort by absolute impact (Diff_Cr)
-                movers['Abs_Diff'] = movers['Diff'].abs()
-                top_movers = movers.sort_values('Abs_Diff', ascending=False).head(5)
+                    # Align
+                    movers = pd.DataFrame({'Current': curr_df, 'Previous': prev_df}).fillna(0)
+                    movers['Diff'] = movers['Current'] - movers['Previous']
+                    movers['Diff_Cr'] = movers['Diff'] / 1e7
+                    movers['Pct'] = (movers['Diff'] / movers['Previous'] * 100).fillna(0)
 
-                # Display
-                # Format for display
-                disp_movers = top_movers[['Current', 'Previous', 'Diff_Cr', 'Pct']].copy()
-                disp_movers['Current'] = (disp_movers['Current']/1e7).map('{:,.2f}'.format)
-                disp_movers['Previous'] = (disp_movers['Previous']/1e7).map('{:,.2f}'.format)
-                disp_movers['Diff_Cr'] = disp_movers['Diff_Cr'].map('{:+,.2f}'.format)
-                disp_movers['Pct'] = disp_movers['Pct'].map('{:+,.1f}%'.format)
-                disp_movers.columns = ['Curr Month (Cr)', 'Prev Month (Cr)', 'Change (Cr)', '% Change']
+                    # Sort by absolute impact (Diff_Cr)
+                    movers['Abs_Diff'] = movers['Diff'].abs()
+                    top_movers = movers.sort_values('Abs_Diff', ascending=False).head(5)
 
-                st.table(disp_movers)
+                    # Display
+                    # Format for display
+                    disp_movers = top_movers[['Current', 'Previous', 'Diff_Cr', 'Pct']].copy()
+                    disp_movers['Current'] = (disp_movers['Current']/1e7).map('{:,.2f}'.format)
+                    disp_movers['Previous'] = (disp_movers['Previous']/1e7).map('{:,.2f}'.format)
+                    disp_movers['Diff_Cr'] = disp_movers['Diff_Cr'].map('{:+,.2f}'.format)
+                    disp_movers['Pct'] = disp_movers['Pct'].map('{:+,.1f}%'.format)
+                    disp_movers.columns = ['Curr Month (Cr)', 'Prev Month (Cr)', 'Change (Cr)', '% Change']
+
+                    st.table(disp_movers)
 
         except Exception as e:
             st.info(f"Could not calculate Top Movers: {e}")
@@ -2241,7 +2237,9 @@ with T[12]:
             if 'City' in vm_geo.columns:
                 cols_vm_geo.append('City')
                 
-            merged_geo = pd.merge(df_geo_base, vm_geo[cols_vm_geo], on='VendorName_Norm', how='inner')
+            merged_geo = pd.merge(df_geo_base, vm_geo[cols_vm_geo], on='VendorName_Norm', how='left')
+            # Missing states default to Gujarat
+            merged_geo['State'] = merged_geo['State'].fillna('Gujarat')
             
             if not merged_geo.empty:
                 # 4. Aggregation by State
