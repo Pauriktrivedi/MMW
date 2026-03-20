@@ -379,32 +379,32 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
         'R&D': 'R&D',
         'Proprietary': 'R&D',
 
-        'Consulting Services': 'Direct', # Fallback bucket for professional services
-        'Legal and professional': 'Direct',
-        'Plant Consultancy Services': 'Direct',
+        'Consulting Services': 'Production / Direct Spend', # Fallback bucket for professional services
+        'Legal and professional': 'Production / Direct Spend',
+        'Plant Consultancy Services': 'Production / Direct Spend',
 
-        'Raw Material': 'Direct',
-        'Consumable Material': 'Direct',
-        'Consumable Other': 'Direct',
-        'Store and Spares': 'Direct',
-        'Fasteners': 'Direct',
-        'Plastic & Rubber': 'Direct',
-        'Sheet Metal': 'Direct',
-        'Finish Good': 'Direct',
-        'Semi Finish Group': 'Direct',
-        'Packing Material': 'Direct',
-        'Customer Support Cost': 'Direct',
-        'Service': 'Direct', # Generic Service often production related
-        'Insurance Expense': 'Direct',
-        'Stationery and Printing': 'Direct',
-        'CWIP': 'Direct'
+        'Raw Material': 'Production / Direct Spend',
+        'Consumable Material': 'Production / Direct Spend',
+        'Consumable Other': 'Production / Direct Spend',
+        'Store and Spares': 'Production / Direct Spend',
+        'Fasteners': 'Production / Direct Spend',
+        'Plastic & Rubber': 'Production / Direct Spend',
+        'Sheet Metal': 'Production / Direct Spend',
+        'Finish Good': 'Production / Direct Spend',
+        'Semi Finish Group': 'Production / Direct Spend',
+        'Packing Material': 'Production / Direct Spend',
+        'Customer Support Cost': 'Production / Direct Spend',
+        'Service': 'Production / Direct Spend', # Generic Service often production related
+        'Insurance Expense': 'Production / Direct Spend',
+        'Stationery and Printing': 'Production / Direct Spend',
+        'CWIP': 'Production / Direct Spend'
     }
 
     # 2. Get source col
-    p_cat = df.get('procurement_category', pd.Series('', index=df.index)).astype(str).fillna('Direct')
+    p_cat = df.get('procurement_category', pd.Series('', index=df.index)).astype(str).fillna('Production / Direct Spend')
 
     # 3. Map
-    main_cat = p_cat.map(cat_map).fillna('Direct') # Default to Direct if unknown
+    main_cat = p_cat.map(cat_map).fillna('Production / Direct Spend') # Default to Direct if unknown
 
     # 4. Refine using PR Budget Description if needed (Optional heuristic)
     # For now, relying on robust category mapping.
@@ -444,11 +444,6 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             df['buyer_group_code'] = np.nan
 
-    # Buyer.Type
-    if 'Buyer.Type' not in df.columns:
-        df['Buyer.Type'] = compute_buyer_type_vectorized(df)
-    df['Buyer.Type'] = df['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
-
     # normalize po_creator using mapping
     o_created_by_map = {
         'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
@@ -471,12 +466,28 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     mask_dilip = df['po_creator'].str.strip().str.lower().isin(['nan', 'n/a', 'na', '', 'none', 'null'])
     df.loc[mask_dilip, 'po_creator'] = 'Dilip'
 
-    # po_buyer_type
+    # po_buyer_type & Buyer.Type refinement
+    # Rule 1: Primarily use po_creator if assigned and not a generic default
     creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
-    df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+    is_generic = creator_clean.str.lower().isin(['dilip', 'nan', 'n/a', 'na', '', 'none', 'null', 'intesh data'])
 
-    # Fix: Vraj should be considered Direct even if touching Indirect buyer groups
+    # Pre-calculate Buyer.Type using Buyer Group logic as the robust source
+    bg_buyer_type = compute_buyer_type_vectorized(df).fillna('Direct').astype(str).str.strip().str.title()
+
+    # Classify based on Personnel (INDIRECT_BUYERS list)
+    personnel_buyer_type = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+
+    # Final Buyer.Type: Use Personnel classification IF assigned, ELSE fallback to Buyer Group classification
+    df['Buyer.Type'] = np.where(is_generic, bg_buyer_type, personnel_buyer_type)
+
+    # Ensure 'Direct'/'Indirect' title case consistency
+    df['Buyer.Type'] = df['Buyer.Type'].astype(str).str.strip().str.title()
+
+    # Explicit override: Vraj is always Direct
     df.loc[df['po_creator'] == 'Vraj', 'Buyer.Type'] = 'Direct'
+
+    # po_buyer_type matches the final Buyer.Type for consistency in specific sections
+    df['po_buyer_type'] = df['Buyer.Type']
 
     # pr_requester column detection and buyer_display
     purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchase doc'])
@@ -575,8 +586,8 @@ FY = {
 fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
 
-# Work on a filtered view (avoid copies until necessary)
-fil = df
+# Work on a filtered view (ensure a clean copy for stateful filtering)
+fil = df.copy()
 # FY Filtering Logic: Use PR Date if available; fallback to PO Create Date for rows where PR Date is missing
 if pr_col and pr_col in fil.columns:
     # Use PR date primarily, backfill with PO date for filtering check
@@ -663,26 +674,24 @@ else:
     item_choices = []
 
 
-# Apply filters using df.query() for potential performance improvement
-query_parts = []
-if sel_b and len(sel_b) < len(choices_bt):
-    query_parts.append('`Buyer.Type` in @sel_b')
-if sel_e and 'entity' in fil.columns and len(sel_e) < len(entity_choices):
-    query_parts.append('entity in @sel_e')
-if sel_pc and len(sel_pc) < len(proc_cat_choices):
-    query_parts.append('procurement_category in @sel_pc')
+# Apply filters using boolean indexing for robustness (handles empty selections correctly)
+# For filters with defaults (all selected), only filter if selection is reduced.
+# If selection is empty, it will result in no data (correct behavior for unselecting everything).
+if len(sel_b) < len(choices_bt):
+    fil = fil[fil['Buyer.Type'].isin(sel_b)]
+if len(sel_e) < len(entity_choices) and 'entity' in fil.columns:
+    fil = fil[fil['entity'].isin(sel_e)]
+if len(sel_pc) < len(proc_cat_choices) and 'procurement_category' in fil.columns:
+    fil = fil[fil['procurement_category'].isin(sel_pc)]
 
-if sel_o and len(sel_o) < len(creators):
-    query_parts.append('po_creator in @sel_o')
-
-if sel_v and len(sel_v) < len(vendor_choices):
-    query_parts.append('po_vendor in @sel_v')
-
-if sel_i and len(sel_i) < len(item_choices):
-    query_parts.append('product_name in @sel_i')
-
-if query_parts:
-    fil = fil.query(' & '.join(query_parts))
+# For filters without defaults (none selected), only filter if selection is NOT empty.
+# If nothing is selected, we assume "All" is intended (standard behavior for optional search filters).
+if sel_o and len(sel_o) < len(creators) and 'po_creator' in fil.columns:
+    fil = fil[fil['po_creator'].isin(sel_o)]
+if sel_v and len(sel_v) < len(vendor_choices) and 'po_vendor' in fil.columns:
+    fil = fil[fil['po_vendor'].isin(sel_v)]
+if sel_i and len(sel_i) < len(item_choices) and 'product_name' in fil.columns:
+    fil = fil[fil['product_name'].isin(sel_i)]
 
 # Apply Item Type Filter (Products vs Services)
 if item_type_opt != "All" and 'Item.Type' in fil.columns:
