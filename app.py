@@ -444,11 +444,6 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             df['buyer_group_code'] = np.nan
 
-    # Buyer.Type
-    if 'Buyer.Type' not in df.columns:
-        df['Buyer.Type'] = compute_buyer_type_vectorized(df)
-    df['Buyer.Type'] = df['Buyer.Type'].fillna('Direct').astype(str).str.strip().str.title()
-
     # normalize po_creator using mapping
     o_created_by_map = {
         'MMW2324030': 'Dhruv', 'MMW2324062': 'Deepak', 'MMW2425154': 'Mukul', 'MMW2223104': 'Paurik',
@@ -471,12 +466,28 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     mask_dilip = df['po_creator'].str.strip().str.lower().isin(['nan', 'n/a', 'na', '', 'none', 'null'])
     df.loc[mask_dilip, 'po_creator'] = 'Dilip'
 
-    # po_buyer_type
+    # po_buyer_type & Buyer.Type refinement
+    # Rule 1: Primarily use po_creator if assigned and not a generic default
     creator_clean = df['po_creator'].fillna('').astype(str).str.strip()
-    df['po_buyer_type'] = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+    is_generic = creator_clean.str.lower().isin(['dilip', 'nan', 'n/a', 'na', '', 'none', 'null', 'intesh data'])
 
-    # Fix: Vraj should be considered Direct even if touching Indirect buyer groups
+    # Pre-calculate Buyer.Type using Buyer Group logic as the robust source
+    bg_buyer_type = compute_buyer_type_vectorized(df).fillna('Direct').astype(str).str.strip().str.title()
+
+    # Classify based on Personnel (INDIRECT_BUYERS list)
+    personnel_buyer_type = np.where(creator_clean.isin(INDIRECT_BUYERS), 'Indirect', 'Direct')
+
+    # Final Buyer.Type: Use Personnel classification IF assigned, ELSE fallback to Buyer Group classification
+    df['Buyer.Type'] = np.where(is_generic, bg_buyer_type, personnel_buyer_type)
+
+    # Ensure 'Direct'/'Indirect' title case consistency
+    df['Buyer.Type'] = df['Buyer.Type'].astype(str).str.strip().str.title()
+
+    # Explicit override: Vraj is always Direct
     df.loc[df['po_creator'] == 'Vraj', 'Buyer.Type'] = 'Direct'
+
+    # po_buyer_type matches the final Buyer.Type for consistency in specific sections
+    df['po_buyer_type'] = df['Buyer.Type']
 
     # pr_requester column detection and buyer_display
     purchase_doc_col = safe_col(df, ['purchase_doc', 'purchase_doc_number', 'purchase doc'])
