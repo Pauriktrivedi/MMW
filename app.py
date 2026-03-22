@@ -74,8 +74,9 @@ def memoized_compute(namespace: str, signature: tuple, compute_fn):
     # This prevents the session state from growing indefinitely.
     return compute_fn()
 
-@st.cache_data
+@st.cache_data(max_entries=5)
 def convert_df_to_csv(df):
+    """Cache only a few CSV exports to avoid memory bloat."""
     return df.to_csv(index=False).encode('utf-8')
 
 def _resolve_path(fn: str) -> Path:
@@ -102,7 +103,7 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1)
 def load_all():
     """Loads and finalizes the dataset from the Parquet file."""
     parquet_path = DATA_DIR / "p2p_data.parquet"
@@ -122,7 +123,7 @@ def load_all():
         return pd.DataFrame()
 
 # ---------- Vendor Master Parsing (New) ----------
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1)
 def load_vendor_master():
     """
     Parses 'meplvendor.xlsx', 'mlplvendor.xlsx', 'mmwvendor.xlsx', 'mmplvendor.xlsx' 
@@ -416,7 +417,7 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
     return main_cat
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1)
 def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     """Applies all expensive preprocessing steps to the raw dataframe."""
     if _df.empty:
@@ -499,8 +500,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     df['buyer_display'] = compute_buyer_display(df, purchase_doc_col, pr_requester_col)
 
     # Convert common columns to categorical to speed groupbys & joins
-    po_vendor_col = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
-    df['po_vendor'] = df[po_vendor_col].fillna('').astype(str) if po_vendor_col in df.columns else ''
+    v_col_src = safe_col(df, ['po_vendor', 'vendor', 'po vendor'])
+    if v_col_src:
+        df['po_vendor'] = df[v_col_src].fillna('').astype(str)
+    else:
+        df['po_vendor'] = ''
+
     df['product_name'] = df['product_name'].fillna('').astype(str) if 'product_name' in df.columns else ''
     
     # Ensure purchase_doc is categorical to speed up groupby in Delivery tab
@@ -513,8 +518,12 @@ def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     # Compute Main Category (Strict Rollup)
     df['MainCategory'] = compute_main_category(df)
 
-    for c in ['entity', 'po_creator', 'buyer_display', po_vendor_col, 'Buyer.Type', 'procurement_category', 'product_name', 'Item.Type', 'MainCategory']:
-        to_cat(df, c)
+    # Optimization: Convert all key search/group columns to category
+    cat_cols = ['entity', 'po_creator', 'buyer_display', 'po_vendor', 'Buyer.Type',
+                'procurement_category', 'product_name', 'Item.Type', 'MainCategory']
+    for c in cat_cols:
+        if c in df.columns:
+            to_cat(df, c)
         
     return df
 
@@ -839,7 +848,7 @@ with T[0]:
         return z.groupby(['month','entity'], dropna=False)[net_amount_col].sum().reset_index()
 
     st.subheader('Monthly Total Spend + Cumulative')
-    if trend_date_col and net_amount_col and net_amount_col in fil.columns:
+    if trend_date_col and net_amount_col and net_amount_col in fil.columns and not fil.empty:
         me = memoized_compute('monthly_entity', filter_signature, build_monthly)
         if me.empty:
             st.info('No monthly/entity data to plot.')
@@ -896,7 +905,7 @@ with T[0]:
     st.markdown('---')
     st.subheader('Entity Trend')
     try:
-        if trend_date_col and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns:
+        if trend_date_col and net_amount_col and net_amount_col in fil.columns and 'entity' in fil.columns and not fil.empty:
             g = memoized_compute('monthly_entity', filter_signature, build_monthly)
             if not g.empty:
                 fig_e = px.line(g, x=g['month'].dt.strftime('%b-%Y'), y=net_amount_col, color='entity', labels={net_amount_col:'Net Amount','x':'Month'})
@@ -1817,7 +1826,7 @@ with T[5]:
 
     # 3. Render Chart
     try:
-        if trend_date_col and net_amount_col and net_amount_col in dept_df.columns and 'MainCategory' in dept_df.columns and sel_main_cats:
+        if trend_date_col and net_amount_col and net_amount_col in dept_df.columns and 'MainCategory' in dept_df.columns and sel_main_cats and not dept_df.empty:
 
             # Compute monthly aggregation
             g_cat = memoized_compute('monthly_main_cat', filter_signature, build_main_cat_trend)

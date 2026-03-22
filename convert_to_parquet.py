@@ -101,7 +101,7 @@ def update_parquet_if_needed(force: bool = False):
 
     # Save as a single parquet file
     try:
-        df.to_parquet(output_path)
+        df.to_parquet(output_path, engine='pyarrow')
     except Exception:
         pass
 
