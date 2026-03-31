@@ -124,11 +124,13 @@ def load_all():
 
 # ---------- Vendor Master Parsing (New) ----------
 @st.cache_data(show_spinner=False, max_entries=1)
-def load_vendor_master():
+def load_vendor_master(transaction_df: pd.DataFrame = None):
     """
     Parses 'meplvendor.xlsx', 'mlplvendor.xlsx', 'mmwvendor.xlsx', 'mmplvendor.xlsx' 
     if present in DATA_DIR. Returns a unified DataFrame of vendor details.
     Structure: Entity | VendorCode | VendorName | Address | Phone | Email | State | City
+
+    If master files are missing, it attempts to populate basic vendor list from the transaction_df.
     """
     vendor_files = {
         'MEPL': 'meplvendor.xlsx',
@@ -138,12 +140,14 @@ def load_vendor_master():
     }
     
     records = []
+    found_any_master = False
     
     for entity, fname in vendor_files.items():
         fpath = DATA_DIR / fname
         if not fpath.exists():
             continue
             
+        found_any_master = True
         try:
             # Read headerless to parse semi-structured content
             df = pd.read_excel(fpath, header=None)
@@ -229,6 +233,28 @@ def load_vendor_master():
         v_df['VendorName_Norm'] = v_df['VendorName'].astype(str).str.lower().str.strip()
         return v_df
     
+    # Fallback: Populate from Transaction Data if no master files were found
+    if not found_any_master and transaction_df is not None and not transaction_df.empty:
+        v_col = safe_col(transaction_df, ['po_vendor', 'vendor', 'po vendor'])
+        if v_col:
+            v_list = transaction_df[v_col].dropna().unique().tolist()
+            for v_name in v_list:
+                v_str = str(v_name).strip()
+                if v_str:
+                    records.append({
+                        'Entity': 'Unknown',
+                        'VendorCode': 'N/A',
+                        'VendorName': v_str,
+                        'Address': None, 'Phone': None, 'Email': None,
+                        'State': 'Gujarat', # User requested default
+                        'City': 'Unknown'
+                    })
+
+            if records:
+                v_df = pd.DataFrame(records)
+                v_df['VendorName_Norm'] = v_df['VendorName'].str.lower().str.strip()
+                return v_df
+
     return pd.DataFrame(columns=['Entity', 'VendorCode', 'VendorName', 'Address', 'Phone', 'Email', 'State', 'City', 'VendorName_Norm'])
 
 # ---------- Fast type/coercion utilities ----------
@@ -549,6 +575,9 @@ preprocess_start_time = time.time()
 df = preprocess_data(df_raw)
 preprocess_end_time = time.time()
 logger.info(f"Data preprocessing took: {preprocess_end_time - preprocess_start_time:.2f} seconds")
+
+# Re-run vendor master load with df as fallback source
+vendor_master = load_vendor_master(df)
 
 
 if df.empty:
@@ -1317,7 +1346,7 @@ with T[3]:
     if po_qty_col and received_col and po_qty_col in dv.columns and received_col in dv.columns:
         def build_delivery():
             # Include Net Amount for Open Value calc
-            cols = [po_qty_col, received_col, purchase_doc_col, po_vendor_col]
+            cols = [po_qty_col, received_col, purchase_doc_col, po_vendor_col, 'po_creator']
             if net_amount_col and net_amount_col in dv.columns:
                 cols.append(net_amount_col)
                 
@@ -1332,7 +1361,7 @@ with T[3]:
 
             # Group by PO
             # Aggregation: Sum Qty, Sum Received, Sum Net Amount (assuming net amount is line level)
-            agg_rules = {'po_qty_f':'sum', 'received_f':'sum', 'net_val':'sum'}
+            agg_rules = {'po_qty_f':'sum', 'received_f':'sum', 'net_val':'sum', 'po_creator': 'first'}
             
             grp = tmp.groupby([purchase_doc_col, po_vendor_col], dropna=False).agg(agg_rules).reset_index()
             
@@ -1352,9 +1381,17 @@ with T[3]:
             
         ag = memoized_compute('delivery_summary', filter_signature, build_delivery)
         
+        # Filter by Creator if selected
+        creators_in_ag = sorted([str(x) for x in ag['po_creator'].unique().tolist() if str(x).strip() != ''])
+        sel_creator_delivery = st.selectbox("Filter by PO Creator", ["All"] + creators_in_ag, key='delivery_creator_filter')
+
+        filtered_ag = ag
+        if sel_creator_delivery != "All":
+            filtered_ag = ag[ag['po_creator'] == sel_creator_delivery]
+
         # Metrics using unique POs
-        open_pos = ag[ag['is_open']]
-        closed_pos = ag[~ag['is_open']]
+        open_pos = filtered_ag[filtered_ag['is_open']]
+        closed_pos = filtered_ag[~filtered_ag['is_open']]
         
         cnt_open = open_pos[purchase_doc_col].nunique()
         cnt_closed = closed_pos[purchase_doc_col].nunique()
@@ -1372,7 +1409,7 @@ with T[3]:
         st.dataframe(open_pos.sort_values('open_val', ascending=False).head(500), use_container_width=True)
         
         st.subheader("Partial Delivery POs (0 < Received < Ordered)")
-        partial_pos = ag[ag['is_partial']]
+        partial_pos = filtered_ag[filtered_ag['is_partial']]
         st.dataframe(partial_pos.sort_values('open_val', ascending=False).head(500), use_container_width=True)
         
     else:
@@ -1896,6 +1933,68 @@ with T[5]:
 
     st.markdown("---")
     # ----------------- End New Feature -----------------
+
+    # ----------------- Spend Analysis Table & Drilldown -----------------
+    st.subheader('Spend Breakdown by Category')
+
+    if 'MainCategory' in dept_df.columns and net_amount_col in dept_df.columns:
+        # 1. Summary Table for All Categories
+        def build_cat_summary():
+            s = dept_df.groupby('MainCategory', dropna=False).agg(
+                Spend=(net_amount_col, 'sum'),
+                PO_Count=(purchase_doc_col, 'nunique') if purchase_doc_col in dept_df.columns else ('entity', 'count'),
+                Vendor_Count=(po_vendor_col, 'nunique') if po_vendor_col in dept_df.columns else ('entity', 'count')
+            ).reset_index().sort_values('Spend', ascending=False)
+            s['Spend (Cr)'] = s['Spend'] / 1e7
+            return s
+
+        cat_summary = memoized_compute('cat_summary', filter_signature, build_cat_summary)
+        st.dataframe(cat_summary[['MainCategory', 'Spend (Cr)', 'PO_Count', 'Vendor_Count']], use_container_width=True)
+
+        st.markdown("---")
+
+        # 2. Drilldown by Category
+        col_dr1, col_dr2 = st.columns(2)
+        with col_dr1:
+            sel_cat_drill = st.selectbox("Select Category to Drill Down", ["-- none --"] + sorted(cat_summary['MainCategory'].dropna().unique().tolist()))
+
+        if sel_cat_drill != "-- none --":
+            sub_cat = dept_df[dept_df['MainCategory'] == sel_cat_drill].copy()
+
+            # Month Breakup inside Category
+            with col_dr2:
+                months_in_cat = sorted(sub_cat['_month_bucket'].dropna().unique().tolist())
+                sel_month_drill = st.selectbox("Filter by Month", ["All"] + [m.strftime('%b-%Y') for m in months_in_cat])
+
+            if sel_month_drill != "All":
+                sub_cat = sub_cat[sub_cat['_month_bucket'].dt.strftime('%b-%Y') == sel_month_drill]
+
+            st.write(f"Showing POs and Vendors for **{sel_cat_drill}** ({sel_month_drill}):")
+
+            # Aggregate to PO Level for display
+            agg_po = sub_cat.groupby(purchase_doc_col).agg({
+                po_vendor_col: 'first',
+                'product_name': lambda x: ', '.join(set(str(i) for i in x if str(i).strip())),
+                net_amount_col: 'sum',
+                'po_creator': 'first'
+            }).reset_index().sort_values(net_amount_col, ascending=False)
+
+            agg_po.columns = ['PO Number', 'Vendor', 'Items', 'Net Amount', 'PO Creator']
+            st.dataframe(agg_po, use_container_width=True)
+
+            # Aggregate to Vendor Level for display
+            agg_vend = sub_cat.groupby(po_vendor_col).agg({
+                net_amount_col: 'sum',
+                purchase_doc_col: 'nunique'
+            }).reset_index().sort_values(net_amount_col, ascending=False)
+
+            agg_vend.columns = ['Vendor', 'Total Spend', 'PO Count']
+            agg_vend['Total Spend (Cr)'] = agg_vend['Total Spend'] / 1e7
+
+            st.write("**Vendor Summary in this Selection:**")
+            st.dataframe(agg_vend[['Vendor', 'Total Spend (Cr)', 'PO Count']], use_container_width=True)
+
+    st.markdown("---")
 
     # replace expensive apply with column-wise bfill
     dept_cols = [c for c in [pr_bu_col, pr_budget_desc_col, po_bu_col, po_budget_desc_col, pr_budget_code_col] if c]
