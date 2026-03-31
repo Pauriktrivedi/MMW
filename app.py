@@ -1886,39 +1886,59 @@ with T[5]:
                         x_axis = 'month'
                         title_suffix = '(Monthly)'
 
-                    # Pivot to ensure 0s for missing periods (critical for smooth lines)
-                    pivot_data = g_cat_filtered.pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0).reset_index()
+                    # Pivot to ensure 0s for missing periods
+                    pivot_data = g_cat_filtered.pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0)
 
-                    # Melt back for Plotly
-                    plot_data = pivot_data.melt(id_vars=x_axis, var_name='MainCategory', value_name=net_amount_col)
+                    # Sort index (time)
+                    pivot_data = pivot_data.sort_index()
 
-                    # Add Cr column for display
-                    plot_data['value_cr'] = plot_data[net_amount_col] / 1e7
-                    # Create clean labels: show 2 decimal points, but hide if value is negligible (< 0.01)
-                    plot_data['label'] = plot_data['value_cr'].apply(lambda x: f"{x:.2f}" if x > 0.01 else "")
-
-                    # Sort logic
+                    # Labels for X axis
                     if time_granularity == 'Monthly':
-                        plot_data = plot_data.sort_values(x_axis)
-                        x_val = plot_data[x_axis].dt.strftime('%b-%Y')
+                        xaxis_labels = pivot_data.index.strftime('%b-%Y')
                     else:
-                        plot_data = plot_data.sort_values(x_axis)
-                        x_val = plot_data[x_axis]
+                        xaxis_labels = pivot_data.index.astype(str)
 
-                    fig_c = px.line(
-                        plot_data,
-                        x=x_val,
-                        y=net_amount_col,
-                        color='MainCategory',
-                        text='label',
-                        labels={net_amount_col:'Net Amount', 'x':'Time', 'MainCategory': 'Category', 'value_cr': 'Amount (Cr)'},
+                    fig_c = go.Figure()
+
+                    for cat in sel_main_cats:
+                        if cat in pivot_data.columns:
+                            vals_cr = pivot_data[cat] / 1e7
+                            # Labels: show 2 decimal points, hide if negligible
+                            text_labels = [f"{v:.2f}" if v > 0.01 else "" for v in vals_cr]
+
+                            fig_c.add_trace(go.Bar(
+                                x=xaxis_labels,
+                                y=pivot_data[cat],
+                                name=cat,
+                                text=text_labels,
+                                textposition='inside',
+                                hovertemplate='%{x}<br>'+cat+': %{y:,.0f} (₹)<extra></extra>'
+                            ))
+
+                    # Add Total Labels on top
+                    total_vals = pivot_data.sum(axis=1)
+                    total_labels = [f"{v/1e7:.2f} Cr" if v > 0 else "" for v in total_vals]
+
+                    fig_c.add_trace(go.Scatter(
+                        x=xaxis_labels,
+                        y=total_vals,
+                        mode='text',
+                        text=total_labels,
+                        textposition='top center',
+                        showlegend=False,
+                        hoverinfo='none'
+                    ))
+
+                    fig_c.update_layout(
+                        barmode='stack',
+                        xaxis_tickangle=-45,
                         title=f'Category-wise Spend Trend {title_suffix}',
-                        markers=True
+                        xaxis_title='Time',
+                        yaxis_title='Net Amount (₹)',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                        hovermode='x unified'
                     )
 
-                    # Update traces for cleaner look: smaller font, no extra suffix, top center
-                    fig_c.update_traces(textposition='top center', textfont_size=11)
-                    fig_c.update_layout(xaxis_tickangle=-45, hovermode='x unified')
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
                     st.info("No data for the selected categories.")
