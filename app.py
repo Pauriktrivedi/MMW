@@ -437,8 +437,32 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
     # 3. Map
     main_cat = p_cat.map(cat_map).fillna('Production / Direct Spend') # Default to Direct if unknown
 
-    # 4. Refine using PR Budget Description if needed (Optional heuristic)
-    # For now, relying on robust category mapping.
+    # 4. Refine using PR Budget Code keywords (Heuristic for unmapped items)
+    # This helps catch items that fall into the default 'Production / Direct Spend' bucket
+    # but have clear categorization in their budget codes.
+    budget_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
+    if budget_col and budget_col in df.columns:
+        b_codes = df[budget_col].astype(str).str.upper().fillna('')
+
+        # Rule-based reassignment for items in the default bucket
+        is_default = (main_cat == 'Production / Direct Spend')
+
+        # Capex
+        main_cat.loc[is_default & b_codes.str.contains('CPX|CAPEX|INF.STR', na=False)] = 'Capex'
+        # Marketing
+        main_cat.loc[is_default & b_codes.str.contains('MKT|SELL|A&M|MKTG', na=False)] = 'Marketing'
+        # Digital
+        main_cat.loc[is_default & b_codes.str.contains('DT|IT|DIGITEC|DIGIT|SOFTWARE', na=False)] = 'Digital'
+        # Licenses
+        main_cat.loc[is_default & b_codes.str.contains('SFT|LCN|SFL|LICENSE|SUBSCRIPTION', na=False)] = 'Licenses'
+        # R&D
+        main_cat.loc[is_default & b_codes.str.contains('R&D|RD|PRDDEV|PRODDEV|TEST|PROT|VAVE', na=False)] = 'R&D'
+        # HR
+        main_cat.loc[is_default & b_codes.str.contains('HR|TA|WLF|UNF|HKM|CNST', na=False)] = 'HR'
+        # Infrastructure
+        main_cat.loc[is_default & b_codes.str.contains('INF|BLD|HVAC|AMC|SAF', na=False)] = 'Infrastructure'
+        # Logistics
+        main_cat.loc[is_default & b_codes.str.contains('LOG|FRT|COUR|TRANS', na=False)] = 'Logistic'
 
     return main_cat
 
