@@ -589,12 +589,12 @@ last_3 = (today - pd.DateOffset(months=3), today + pd.DateOffset(days=1))
 last_6 = (today - pd.DateOffset(months=6), today + pd.DateOffset(days=1))
 
 FY = {
-    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-03-31')),
+    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-04-01')),
     'Last 3 Months': last_3,
     'Last 6 Months': last_6,
-    '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-03-31')),
-    '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-03-31')),
-    '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-03-31'))
+    '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-04-01')),
+    '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-04-01')),
+    '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-04-01'))
 }
 fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
