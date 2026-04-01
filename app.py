@@ -457,6 +457,8 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
         main_cat.loc[is_default & b_codes.str.contains('SFT|LCN|SFL|LICENSE|SUBSCRIPTION', na=False)] = 'Licenses'
         # R&D
         main_cat.loc[is_default & b_codes.str.contains('R&D|RD|PRDDEV|PRODDEV|TEST|PROT|VAVE', na=False)] = 'R&D'
+        # Aggressive R&D mapping based on budget code for Production / Direct Spend
+        main_cat.loc[(main_cat == 'Production / Direct Spend') & b_codes.str.contains('R&D', case=False, na=False)] = 'R&D'
         # HR
         main_cat.loc[is_default & b_codes.str.contains('HR|TA|WLF|UNF|HKM|CNST', na=False)] = 'HR'
         # Infrastructure
@@ -1894,15 +1896,8 @@ with T[5]:
         # Get sorted unique categories from strict list
         all_main_cats = sorted(dept_df['MainCategory'].dropna().unique().astype(str).tolist())
 
-        # Default: Top 5 by spend
-        try:
-            if net_amount_col:
-                top_5 = dept_df.groupby('MainCategory')[net_amount_col].sum().sort_values(ascending=False).head(5).index.astype(str).tolist()
-                default_cats = [c for c in top_5 if c in all_main_cats]
-            else:
-                default_cats = all_main_cats[:5]
-        except:
-            default_cats = all_main_cats[:5]
+        # Default: All categories selected
+        default_cats = all_main_cats
 
         with col_t2:
             sel_main_cats = st.multiselect("Select Categories to Compare", all_main_cats, default=default_cats, key='main_cat_trend_multiselect')
@@ -1955,31 +1950,17 @@ with T[5]:
                             # Labels: show 2 decimal points, hide if negligible
                             text_labels = [f"{v:.2f}" if v > 0.01 else "" for v in vals_cr]
 
-                            fig_c.add_trace(go.Bar(
+                            fig_c.add_trace(go.Scatter(
                                 x=xaxis_labels,
                                 y=pivot_data[cat],
                                 name=cat,
+                                mode='lines+markers+text',
                                 text=text_labels,
-                                textposition='inside',
+                                textposition='top center',
                                 hovertemplate='%{x}<br>'+cat+': %{y:,.0f} (₹)<extra></extra>'
                             ))
 
-                    # Add Total Labels on top
-                    total_vals = pivot_data.sum(axis=1)
-                    total_labels = [f"{v/1e7:.2f} Cr" if v > 0 else "" for v in total_vals]
-
-                    fig_c.add_trace(go.Scatter(
-                        x=xaxis_labels,
-                        y=total_vals,
-                        mode='text',
-                        text=total_labels,
-                        textposition='top center',
-                        showlegend=False,
-                        hoverinfo='none'
-                    ))
-
                     fig_c.update_layout(
-                        barmode='stack',
                         xaxis_tickangle=-45,
                         title=f'Category-wise Spend Trend {title_suffix}',
                         xaxis_title='Time',
@@ -2246,6 +2227,11 @@ with T[8]:
                     (z['pr_unit_rate_f'] - z['po_unit_rate_f']) / z['pr_unit_rate_f'] * 100.0,
                     np.nan
                 )
+                # filter out rows where PO number is missing or empty
+                if purchase_doc_col and purchase_doc_col in z.columns:
+                    z = z[z[purchase_doc_col].astype(str).str.strip() != '']
+                    z = z[z[purchase_doc_col].notna()]
+
                 # select display columns (only those that exist)
                 disp_cols = [
                     pr_number_col, purchase_doc_col, pr_qty_col, pr_unit_rate_col, pr_value_col,
@@ -2272,11 +2258,6 @@ with T[8]:
                 k3.metric('Total Savings (Cr)', f"{total_savings/1e7:,.2f}")
                 k4.metric('% Saved vs PR', f"{pct_saved_overall:.2f}%" if pct_saved_overall==pct_saved_overall else 'N/A')
                 st.markdown('---')
-
-                # Histogram % saved
-                st.subheader('Distribution of % Saved (per line)')
-                fig_hist = px.histogram(savings_df, x='savings_pct', nbins=50, title='% Saved per Line (PR→PO)', labels={'savings_pct':'% Saved'})
-                st.plotly_chart(fig_hist, use_container_width=True)
 
                 # Top savings by absolute value
                 st.subheader('Top Savings — Absolute (Cr)')
