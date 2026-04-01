@@ -437,8 +437,44 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
     # 3. Map
     main_cat = p_cat.map(cat_map).fillna('Production / Direct Spend') # Default to Direct if unknown
 
-    # 4. Refine using PR Budget Description if needed (Optional heuristic)
-    # For now, relying on robust category mapping.
+    # 4. Refine using PR Budget Code keywords (Heuristic for unmapped items)
+    # This helps catch items that fall into the default 'Production / Direct Spend' bucket
+    # but have clear categorization in their budget codes.
+    budget_col = safe_col(df, ['pr_budget_code', 'pr budget code', 'pr_budgetcode'])
+    if budget_col and budget_col in df.columns:
+        b_codes = df[budget_col].astype(str).str.upper().fillna('')
+
+        # Rule-based reassignment for items in the default bucket
+        is_default = (main_cat == 'Production / Direct Spend')
+
+        # Capex
+        main_cat.loc[is_default & b_codes.str.contains('CPX|CAPEX|INF.STR', na=False)] = 'Capex'
+        # Marketing
+        main_cat.loc[is_default & b_codes.str.contains('MKT|SELL|A&M|MKTG', na=False)] = 'Marketing'
+        # Digital
+        main_cat.loc[is_default & b_codes.str.contains('DT|IT|DIGITEC|DIGIT|SOFTWARE', na=False)] = 'Digital'
+        # Licenses
+        main_cat.loc[is_default & b_codes.str.contains('SFT|LCN|SFL|LICENSE|SUBSCRIPTION', na=False)] = 'Licenses'
+        # R&D
+        main_cat.loc[is_default & b_codes.str.contains('R&D|RD|PRDDEV|PRODDEV|TEST|PROT|VAVE', na=False)] = 'R&D'
+        # HR
+        main_cat.loc[is_default & b_codes.str.contains('HR|TA|WLF|UNF|HKM|CNST', na=False)] = 'HR'
+        # Infrastructure
+        main_cat.loc[is_default & b_codes.str.contains('INF|BLD|HVAC|AMC|SAF', na=False)] = 'Infrastructure'
+        # Logistics
+        main_cat.loc[is_default & b_codes.str.contains('LOG|FRT|COUR|TRANS', na=False)] = 'Logistic'
+
+        # Heuristic for unmapped items using product name/description
+        prod_col = df.get('product_name', pd.Series('', index=df.index)).astype(str).fillna('').str.upper()
+        desc_col = df.get('item_description', pd.Series('', index=df.index)).astype(str).fillna('').str.upper()
+
+        # Licenses
+        license_mask = prod_col.str.contains(r'LICENSE|SOFTWARE|ZOHO|SUBSCRIPTION|AMC|RENEWAL', na=False) | desc_col.str.contains(r'LICENSE|SOFTWARE|ZOHO|SUBSCRIPTION|AMC|RENEWAL', na=False)
+        main_cat.loc[is_default & license_mask] = 'Licenses'
+
+        # Digital
+        digital_mask = prod_col.str.contains(r'\bIT\b|DIGITAL|LAPTOP|DESKTOP|SCANNER|PRINTER|PRINTERS|ELECTRONICS|SERVER|STORAGE', na=False) | desc_col.str.contains(r'\bIT\b|DIGITAL|LAPTOP|DESKTOP|SCANNER|PRINTER|PRINTERS|ELECTRONICS|SERVER|STORAGE', na=False)
+        main_cat.loc[is_default & digital_mask & ~license_mask] = 'Digital'
 
     return main_cat
 
@@ -1259,6 +1295,11 @@ with T[2]:
             if 'product_name' in pending_df.columns: 
                 agg_dict['product_name'] = lambda x: ', '.join(sorted(set(str(i) for i in x.dropna().unique() if str(i).strip() != '')))
 
+            if pr_budget_code_col and pr_budget_code_col in pending_df.columns:
+                agg_dict[pr_budget_code_col] = 'first'
+            if pr_budget_desc_col and pr_budget_desc_col in pending_df.columns:
+                agg_dict[pr_budget_desc_col] = 'first'
+
             if purchase_doc_col and purchase_doc_col in pending_df.columns:
                 unique_pending = pending_df.groupby(purchase_doc_col, as_index=False).agg(agg_dict)
             else:
@@ -1310,6 +1351,14 @@ with T[2]:
             if net_amount_col and net_amount_col in filtered_pending.columns:
                 display_cols.append(net_amount_col)
                 rename_map[net_amount_col] = 'Net Amount'
+
+            if pr_budget_code_col and pr_budget_code_col in filtered_pending.columns:
+                display_cols.append(pr_budget_code_col)
+                rename_map[pr_budget_code_col] = 'Budget Code'
+
+            if pr_budget_desc_col and pr_budget_desc_col in filtered_pending.columns:
+                display_cols.append(pr_budget_desc_col)
+                rename_map[pr_budget_desc_col] = 'Budget Desc'
                 
             display_cols.append('Age (Days)')
             
@@ -1996,10 +2045,12 @@ with T[5]:
                 po_vendor_col: 'first',
                 'product_name': lambda x: ', '.join(set(str(i) for i in x if str(i).strip())),
                 net_amount_col: 'sum',
-                'po_creator': 'first'
+                'po_creator': 'first',
+                pr_budget_code_col: 'first',
+                pr_budget_desc_col: 'first'
             }).reset_index().sort_values(net_amount_col, ascending=False)
 
-            agg_po.columns = ['PO Number', 'Vendor', 'Items', 'Net Amount', 'PO Creator']
+            agg_po.columns = ['PO Number', 'Vendor', 'Items', 'Net Amount', 'PO Creator', 'Budget Code', 'Budget Desc']
             st.dataframe(agg_po, use_container_width=True)
 
             # Aggregate to Vendor Level for display
