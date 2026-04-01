@@ -854,51 +854,6 @@ with T[0]:
 
     st.markdown('---')
 
-    # --- Top Movers (New Section) ---
-    if mom_pct is not None and 'MainCategory' in fil.columns and not fil.empty:
-        st.subheader("🚀 Top Movers (Month-over-Month)")
-
-        try:
-            # Get latest two months data
-            # Re-using timestamps from above would be cleaner but let's re-derive safely
-            m_sums = fil.groupby([fil[trend_date_col].dt.to_period('M'), 'MainCategory'])[net_amount_col].sum().reset_index()
-
-            if not m_sums.empty:
-                periods = sorted(m_sums[trend_date_col].unique())
-
-                if len(periods) >= 2:
-                    curr_p = periods[-1]
-                    prev_p = periods[-2]
-
-                    curr_df = m_sums[m_sums[trend_date_col] == curr_p].set_index('MainCategory')[net_amount_col]
-                    prev_df = m_sums[m_sums[trend_date_col] == prev_p].set_index('MainCategory')[net_amount_col]
-
-                    # Align
-                    movers = pd.DataFrame({'Current': curr_df, 'Previous': prev_df}).fillna(0)
-                    movers['Diff'] = movers['Current'] - movers['Previous']
-                    movers['Diff_Cr'] = movers['Diff'] / 1e7
-                    movers['Pct'] = (movers['Diff'] / movers['Previous'] * 100).fillna(0)
-
-                    # Sort by absolute impact (Diff_Cr)
-                    movers['Abs_Diff'] = movers['Diff'].abs()
-                    top_movers = movers.sort_values('Abs_Diff', ascending=False).head(5)
-
-                    # Display
-                    # Format for display
-                    disp_movers = top_movers[['Current', 'Previous', 'Diff_Cr', 'Pct']].copy()
-                    disp_movers['Current'] = (disp_movers['Current']/1e7).map('{:,.2f}'.format)
-                    disp_movers['Previous'] = (disp_movers['Previous']/1e7).map('{:,.2f}'.format)
-                    disp_movers['Diff_Cr'] = disp_movers['Diff_Cr'].map('{:+,.2f}'.format)
-                    disp_movers['Pct'] = disp_movers['Pct'].map('{:+,.1f}%'.format)
-                    disp_movers.columns = ['Curr Month (Cr)', 'Prev Month (Cr)', 'Change (Cr)', '% Change']
-
-                    st.table(disp_movers)
-
-        except Exception as e:
-            st.info(f"Could not calculate Top Movers: {e}")
-
-    st.markdown('---')
-
     # Build monthly aggregated once
     def build_monthly():
         if not (trend_date_col and net_amount_col and net_amount_col in fil.columns):
@@ -2231,6 +2186,12 @@ with T[8]:
                 if purchase_doc_col and purchase_doc_col in z.columns:
                     z = z[z[purchase_doc_col].astype(str).str.strip() != '']
                     z = z[z[purchase_doc_col].notna()]
+                    # Also drop rows where PO Number is 'nan' string (common in some datasets)
+                    z = z[z[purchase_doc_col].astype(str).str.lower() != 'nan']
+
+                # Drop 'MATTER MOBILITY PRIVATE LIMITED' from savings
+                if entity_col and entity_col in z.columns:
+                    z = z[~z[entity_col].astype(str).str.upper().str.contains('MATTER MOBILITY PRIVATE LIMITED', na=False)]
 
                 # select display columns (only those that exist)
                 disp_cols = [
