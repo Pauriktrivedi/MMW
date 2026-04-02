@@ -125,13 +125,13 @@ def load_all():
 
 # ---------- Vendor Master Parsing (New) ----------
 @st.cache_data(show_spinner=False, max_entries=1)
-def load_vendor_master(transaction_df: pd.DataFrame = None):
+def load_vendor_master(_transaction_df: pd.DataFrame = None):
     """
     Parses 'meplvendor.xlsx', 'mlplvendor.xlsx', 'mmwvendor.xlsx', 'mmplvendor.xlsx' 
     if present in DATA_DIR. Returns a unified DataFrame of vendor details.
     Structure: Entity | VendorCode | VendorName | Address | Phone | Email | State | City
 
-    If master files are missing, it attempts to populate basic vendor list from the transaction_df.
+    If master files are missing, it attempts to populate basic vendor list from the _transaction_df.
     """
     vendor_files = {
         'MEPL': 'meplvendor.xlsx',
@@ -235,10 +235,10 @@ def load_vendor_master(transaction_df: pd.DataFrame = None):
         return v_df
     
     # Fallback: Populate from Transaction Data if no master files were found
-    if not found_any_master and transaction_df is not None and not transaction_df.empty:
-        v_col = safe_col(transaction_df, ['po_vendor', 'vendor', 'po vendor'])
+    if not found_any_master and _transaction_df is not None and not _transaction_df.empty:
+        v_col = safe_col(_transaction_df, ['po_vendor', 'vendor', 'po vendor'])
         if v_col:
-            v_list = transaction_df[v_col].dropna().unique().tolist()
+            v_list = _transaction_df[v_col].dropna().unique().tolist()
             for v_name in v_list:
                 v_str = str(v_name).strip()
                 if v_str:
@@ -717,7 +717,7 @@ sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 # Procurement Category filter
 if 'procurement_category' in fil.columns:
     proc_cat_choices = sorted([str(x) for x in fil['procurement_category'].dropna().unique() if str(x).strip()])
-    sel_pc = st.sidebar.multiselect('Procurement Category', proc_cat_choices, default=proc_cat_choices)
+    sel_pc = st.sidebar.multiselect('Procurement Category', proc_cat_choices)
 else:
     sel_pc = []
     proc_cat_choices = []
