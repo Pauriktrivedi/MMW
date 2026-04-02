@@ -9,6 +9,7 @@ import time
 import logging
 import traceback
 import re
+import hashlib
 
 try:
     from convert_to_parquet import update_parquet_if_needed
@@ -783,7 +784,12 @@ logger.info(f"Filter application took: {filter_end_time - filter_start_time:.2f}
 
 # Helper to create deterministic signature for caching
 def _sel_key(values):
-    return tuple(sorted(str(v) for v in values)) if values else ()
+    if not values:
+        return ()
+    sorted_vals = sorted(str(v) for v in values)
+    if len(sorted_vals) > 20:
+        return hashlib.md5(str(sorted_vals).encode('utf-8')).hexdigest()
+    return tuple(sorted_vals)
 filter_signature = (
     fy_key, date_range_key, _sel_key(sel_b), _sel_key(sel_e), _sel_key(sel_pc),
     _sel_key(sel_o), _sel_key(sel_v), _sel_key(sel_i), item_type_opt
