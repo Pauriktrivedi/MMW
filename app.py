@@ -65,17 +65,18 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
+@st.cache_data(max_entries=50, show_spinner=False)
+def _run_compute(namespace: str, signature: tuple, _compute_fn):
+    return _compute_fn()
+
 def memoized_compute(namespace: str, signature: tuple, compute_fn):
     """
     Compute results with a simple cache.
     To avoid memory bloat in st.session_state (which causes "Oh no" crashes),
-    we use a limited-size cache or simply compute on the fly if the operation is fast.
+    we use Streamlit's robust disk/memory cache instead of st.session_state.
     """
-    # Operation is fast enough to compute on the fly (<100ms for most aggregations)
-    # This prevents the session state from growing indefinitely.
-    return compute_fn()
+    return _run_compute(namespace, signature, compute_fn)
 
-@st.cache_data(max_entries=5)
 def convert_df_to_csv(df):
     """Cache only a few CSV exports to avoid memory bloat."""
     return df.to_csv(index=False).encode('utf-8')
@@ -605,7 +606,6 @@ if update_parquet_if_needed:
 logger.info("Starting data loading...")
 load_start_time = time.time()
 df_raw = load_all()
-vendor_master = load_vendor_master() # Load vendor details
 load_end_time = time.time()
 logger.info(f"Data loading took: {load_end_time - load_start_time:.2f} seconds")
 
@@ -615,7 +615,7 @@ df = preprocess_data(df_raw)
 preprocess_end_time = time.time()
 logger.info(f"Data preprocessing took: {preprocess_end_time - preprocess_start_time:.2f} seconds")
 
-# Re-run vendor master load with df as fallback source
+# Load vendor master with df as fallback source
 vendor_master = load_vendor_master(df)
 
 
