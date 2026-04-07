@@ -1,0 +1,13 @@
+requests
+sqlalchemy
+fastapi
+uvicorn
+websockets
+pyotp
+python-dotenv
+pandas
+apscheduler
+pytz
+rich
+aiohttp
+jinja2
