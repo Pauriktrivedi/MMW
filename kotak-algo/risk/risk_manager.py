@@ -50,7 +50,10 @@ class RiskManager:
             db.close()
 
     def check_daily_loss_limit(self):
-        return self.daily_pnl <= -self.max_daily_loss
+        if self.daily_pnl <= -self.max_daily_loss:
+            logger.warning(f"Daily loss limit hit: {self.daily_pnl}")
+            return False
+        return True
 
     def check_max_positions(self):
         # Count non-zero positions
@@ -58,8 +61,7 @@ class RiskManager:
         return active_positions >= self.max_open_positions
 
     def check_order_allowed(self, symbol, side, qty, price):
-        if self.check_daily_loss_limit():
-            logger.warning(f"Order rejected: Daily loss limit exceeded ({self.daily_pnl}).")
+        if not self.check_daily_loss_limit():
             return False
 
         # Check if it's opening a new position or closing an existing one
