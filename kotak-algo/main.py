@@ -19,6 +19,7 @@ from scheduler.scheduler import TradingScheduler
 from analytics.pnl_report import PnlReport
 from dashboard.dashboard import app as fastapi_app
 from strategies.sample_strategy import SampleStrategy
+from strategies.breakout_strategy import BreakoutRangeStrategy
 
 # Set up logging
 logging.basicConfig(
@@ -76,12 +77,25 @@ class SystemController:
                 self.order_manager = OrderManager(session)
 
             # 4. Initialize Strategy
-            self.strategy = SampleStrategy(
-                mode=self.mode,
-                paper_trader=self.paper_trader,
-                live_trader=self.order_manager,
-                risk_manager=self.risk_manager
-            )
+            use_breakout = os.getenv("USE_BREAKOUT_STRATEGY", "true").lower() == "true"
+            if use_breakout:
+                self.strategy = BreakoutRangeStrategy(
+                    mode=self.mode,
+                    paper_trader=self.paper_trader,
+                    live_trader=self.order_manager,
+                    risk_manager=self.risk_manager,
+                    symbol="nse_cm|Nifty 50",
+                    range_high=22010.0, # Example values for testing
+                    range_low=21990.0,
+                    quantity=50
+                )
+            else:
+                self.strategy = SampleStrategy(
+                    mode=self.mode,
+                    paper_trader=self.paper_trader,
+                    live_trader=self.order_manager,
+                    risk_manager=self.risk_manager
+                )
 
             # 5. Setup Websocket
             # Subscribe to major indices using their names as required by Kotak Neo
@@ -152,23 +166,55 @@ class SystemController:
         try:
             now = datetime.now()
 
-            # Only inject if we are using the fallback dummy tokens
-            if "nse_cm|26000" in tokens or "nse_fo|12345" in tokens or "nse_cm|Nifty 50" in tokens:
-                # Dummy Indices
+            # Dummy Indices
+            if "nse_cm|Nifty 50" in tokens:
                 db.add(MarketData(symbol="nse_cm|Nifty 50", trading_symbol="NIFTY 50", exchange_seg="nse_cm", instrument_type="EQ", bid_price=22000, ask_price=22001, last_traded_price=22000.5, volume=100, oi=0, timestamp=now))
+            if "nse_cm|NIFTY BANK" in tokens:
                 db.add(MarketData(symbol="nse_cm|NIFTY BANK", trading_symbol="BANKNIFTY", exchange_seg="nse_cm", instrument_type="EQ", bid_price=47000, ask_price=47010, last_traded_price=47005, volume=100, oi=0, timestamp=now))
+            if "bse_cm|SENSEX" in tokens:
                 db.add(MarketData(symbol="bse_cm|SENSEX", trading_symbol="SENSEX", exchange_seg="bse_cm", instrument_type="EQ", bid_price=72000, ask_price=72050, last_traded_price=72025, volume=100, oi=0, timestamp=now))
 
-                # Dummy Option Chain at 22000 Strike
+            # If using fallback dummy tokens
+            if "nse_fo|12345" in tokens:
                 db.add(MarketData(symbol="nse_fo|12345", trading_symbol="NIFTY24MAY22000CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22000, bid_price=150, ask_price=152, last_traded_price=151, volume=5000, oi=100000, timestamp=now))
                 db.add(MarketData(symbol="nse_fo|12346", trading_symbol="NIFTY24MAY22000PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22000, bid_price=140, ask_price=141, last_traded_price=140.5, volume=4000, oi=90000, timestamp=now))
-
-                # Dummy Option Chain at 22100 Strike
                 db.add(MarketData(symbol="nse_fo|12347", trading_symbol="NIFTY24MAY22100CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22100, bid_price=90, ask_price=92, last_traded_price=91, volume=8000, oi=150000, timestamp=now))
                 db.add(MarketData(symbol="nse_fo|12348", trading_symbol="NIFTY24MAY22100PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22100, bid_price=180, ask_price=183, last_traded_price=181.5, volume=3000, oi=80000, timestamp=now))
+            else:
+                # We dynamically found real options tokens
+                import random
+                for t in tokens:
+                    if t.startswith("nse_fo|"):
+                        try:
+                            token_id = t.split("|")[1]
+                            # Use instruments to fetch details
+                            mask = self.instruments.fo_df['pSymbol'] == token_id
+                            matches = self.instruments.fo_df[mask]
+                            if not matches.empty:
+                                row = matches.iloc[0]
+                                inst_type = row['pOptionType'] if 'OPT' in str(row['pInstrumentType']) else 'FUT'
+                                strike = float(row['dStrikePrice']) if not import pandas as pd; pd.isna(row['dStrikePrice']) else None
 
-                db.commit()
-                logger.info("Injected dummy UI data for Paper mode display.")
+                                base_price = 100.0 * (random.uniform(0.5, 1.5))
+
+                                db.add(MarketData(
+                                    symbol=t,
+                                    trading_symbol=row['pTrdSymbol'],
+                                    exchange_seg="nse_fo",
+                                    instrument_type=inst_type,
+                                    strike_price=strike,
+                                    bid_price=base_price,
+                                    ask_price=base_price + 1,
+                                    last_traded_price=base_price + 0.5,
+                                    volume=random.randint(1000, 5000),
+                                    oi=random.randint(50000, 150000),
+                                    timestamp=now
+                                ))
+                        except Exception as inner_e:
+                            logger.error(f"Error injecting for token {t}: {inner_e}")
+
+            db.commit()
+            logger.info("Injected dummy UI data for Paper mode display.")
         except Exception as e:
             logger.error(f"Error injecting dummy UI data: {e}")
         finally:
