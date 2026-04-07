@@ -65,17 +65,18 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
+@st.cache_data(max_entries=50, show_spinner=False)
+def _run_compute(namespace: str, signature: tuple, _compute_fn):
+    return _compute_fn()
+
 def memoized_compute(namespace: str, signature: tuple, compute_fn):
     """
     Compute results with a simple cache.
     To avoid memory bloat in st.session_state (which causes "Oh no" crashes),
-    we use a limited-size cache or simply compute on the fly if the operation is fast.
+    we use Streamlit's robust disk/memory cache instead of st.session_state.
     """
-    # Operation is fast enough to compute on the fly (<100ms for most aggregations)
-    # This prevents the session state from growing indefinitely.
-    return compute_fn()
+    return _run_compute(namespace, signature, compute_fn)
 
-@st.cache_data(max_entries=5)
 def convert_df_to_csv(df):
     """Cache only a few CSV exports to avoid memory bloat."""
     return df.to_csv(index=False).encode('utf-8')
@@ -125,13 +126,13 @@ def load_all():
 
 # ---------- Vendor Master Parsing (New) ----------
 @st.cache_data(show_spinner=False, max_entries=1)
-def load_vendor_master(transaction_df: pd.DataFrame = None):
+def load_vendor_master(_transaction_df: pd.DataFrame = None):
     """
     Parses 'meplvendor.xlsx', 'mlplvendor.xlsx', 'mmwvendor.xlsx', 'mmplvendor.xlsx' 
     if present in DATA_DIR. Returns a unified DataFrame of vendor details.
     Structure: Entity | VendorCode | VendorName | Address | Phone | Email | State | City
 
-    If master files are missing, it attempts to populate basic vendor list from the transaction_df.
+    If master files are missing, it attempts to populate basic vendor list from the _transaction_df.
     """
     vendor_files = {
         'MEPL': 'meplvendor.xlsx',
@@ -235,10 +236,10 @@ def load_vendor_master(transaction_df: pd.DataFrame = None):
         return v_df
     
     # Fallback: Populate from Transaction Data if no master files were found
-    if not found_any_master and transaction_df is not None and not transaction_df.empty:
-        v_col = safe_col(transaction_df, ['po_vendor', 'vendor', 'po vendor'])
+    if not found_any_master and _transaction_df is not None and not _transaction_df.empty:
+        v_col = safe_col(_transaction_df, ['po_vendor', 'vendor', 'po vendor'])
         if v_col:
-            v_list = transaction_df[v_col].dropna().unique().tolist()
+            v_list = _transaction_df[v_col].dropna().unique().tolist()
             for v_name in v_list:
                 v_str = str(v_name).strip()
                 if v_str:
@@ -605,7 +606,6 @@ if update_parquet_if_needed:
 logger.info("Starting data loading...")
 load_start_time = time.time()
 df_raw = load_all()
-vendor_master = load_vendor_master() # Load vendor details
 load_end_time = time.time()
 logger.info(f"Data loading took: {load_end_time - load_start_time:.2f} seconds")
 
@@ -615,7 +615,7 @@ df = preprocess_data(df_raw)
 preprocess_end_time = time.time()
 logger.info(f"Data preprocessing took: {preprocess_end_time - preprocess_start_time:.2f} seconds")
 
-# Re-run vendor master load with df as fallback source
+# Load vendor master with df as fallback source
 vendor_master = load_vendor_master(df)
 
 
@@ -717,7 +717,7 @@ sel_e = st.sidebar.multiselect('Entity', entity_choices, default=entity_choices)
 # Procurement Category filter
 if 'procurement_category' in fil.columns:
     proc_cat_choices = sorted([str(x) for x in fil['procurement_category'].dropna().unique() if str(x).strip()])
-    sel_pc = st.sidebar.multiselect('Procurement Category', proc_cat_choices, default=proc_cat_choices)
+    sel_pc = st.sidebar.multiselect('Procurement Category', proc_cat_choices)
 else:
     sel_pc = []
     proc_cat_choices = []

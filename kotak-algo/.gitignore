@@ -1,0 +1,10 @@
+*.db
+*.sqlite3
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+trading.log
+session.json
