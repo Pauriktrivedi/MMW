@@ -106,6 +106,8 @@ class PnlReport:
                 summary.winning_trades = winning_trades
 
             db.commit()
+            db.refresh(summary)
+            db.expunge(summary)
             return summary
         except Exception as e:
             logger.error(f"Error calculating daily PnL: {e}")
