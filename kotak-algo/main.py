@@ -83,16 +83,58 @@ class SystemController:
                 risk_manager=self.risk_manager
             )
 
-            # 5. Setup Websocket (Tokens usually derived from strategy, using dummy for NIFTY & BANKNIFTY)
-            # Find NIFTY index token as an example
-            tokens = ["nse_cm|26000", "nse_cm|26009"] # Standard identifiers for NIFTY 50 and BANKNIFTY
+            # 5. Setup Websocket
+            # In a real scenario, strategy would dictate what options to subscribe to dynamically.
+            # Here we hardcode indices and some dummy option tokens for UI testing purposes.
+            # Nifty 50 = 26000, Bank Nifty = 26009
+            tokens = [
+                "nse_cm|26000", "nse_cm|26009", "bse_cm|1" # Example Sensex/Indices
+            ]
+
+            # We add dummy option tokens to demonstrate the option chain on the dashboard
+            # Example representation of NIFTY options at strike 22000 and 22100
+            # Note: actual tokens must be fetched using self.instruments master!
+            dummy_option_tokens = ["nse_fo|12345", "nse_fo|12346", "nse_fo|12347", "nse_fo|12348"]
+            tokens.extend(dummy_option_tokens)
+
             self.ws_handler = WebSocketFeedHandler(session, tokens, on_tick_callback=self.strategy.on_tick)
             self.ws_handler.start()
+
+            # 6. Inject dummy data for UI testing if paper mode (since we might not have a real live WS feed)
+            if self.mode == 'paper':
+                self._inject_dummy_ui_data()
 
             logger.info("System successfully started.")
 
         except Exception as e:
             logger.error(f"Failed to start system: {e}")
+
+    def _inject_dummy_ui_data(self):
+        from database.database import SessionLocal
+        from database.models import MarketData
+        from datetime import datetime
+        db = SessionLocal()
+        try:
+            now = datetime.now()
+            # Dummy Indices
+            db.add(MarketData(symbol="nse_cm|26000", trading_symbol="NIFTY 50", exchange_seg="nse_cm", instrument_type="EQ", bid_price=22000, ask_price=22001, last_traded_price=22000.5, volume=100, oi=0, timestamp=now))
+            db.add(MarketData(symbol="nse_cm|26009", trading_symbol="BANKNIFTY", exchange_seg="nse_cm", instrument_type="EQ", bid_price=47000, ask_price=47010, last_traded_price=47005, volume=100, oi=0, timestamp=now))
+            db.add(MarketData(symbol="bse_cm|1", trading_symbol="SENSEX", exchange_seg="bse_cm", instrument_type="EQ", bid_price=72000, ask_price=72050, last_traded_price=72025, volume=100, oi=0, timestamp=now))
+
+            # Dummy Option Chain at 22000 Strike
+            db.add(MarketData(symbol="nse_fo|12345", trading_symbol="NIFTY24MAY22000CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22000, bid_price=150, ask_price=152, last_traded_price=151, volume=5000, oi=100000, timestamp=now))
+            db.add(MarketData(symbol="nse_fo|12346", trading_symbol="NIFTY24MAY22000PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22000, bid_price=140, ask_price=141, last_traded_price=140.5, volume=4000, oi=90000, timestamp=now))
+
+            # Dummy Option Chain at 22100 Strike
+            db.add(MarketData(symbol="nse_fo|12347", trading_symbol="NIFTY24MAY22100CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22100, bid_price=90, ask_price=92, last_traded_price=91, volume=8000, oi=150000, timestamp=now))
+            db.add(MarketData(symbol="nse_fo|12348", trading_symbol="NIFTY24MAY22100PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22100, bid_price=180, ask_price=183, last_traded_price=181.5, volume=3000, oi=80000, timestamp=now))
+
+            db.commit()
+            logger.info("Injected dummy UI data for Paper mode display.")
+        except Exception as e:
+            logger.error(f"Error injecting dummy UI data: {e}")
+        finally:
+            db.close()
 
     def stop(self):
         logger.info("Stopping system...")

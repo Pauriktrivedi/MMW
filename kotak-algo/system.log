@@ -1,0 +1,15 @@
+╭──────────────────────────────────────╮
+│ Kotak Neo Algorithmic Trading System │
+╰────────── Initializing... ───────────╯
+Mode: PAPER
+Virtual Cash: 500000
+Risk Limits: Daily Loss = 10000, Max Pos = 5
+2026-04-07 09:21:00,399 [INFO] System - Dashboard started on port 8000
+2026-04-07 09:21:00,573 [INFO] apscheduler.scheduler - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-07 09:21:00,575 [INFO] apscheduler.scheduler - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-07 09:21:00,576 [INFO] apscheduler.scheduler - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-07 09:21:00,576 [INFO] apscheduler.scheduler - Added job "TradingScheduler.start_system_job" to job store "default"
+2026-04-07 09:21:00,576 [INFO] apscheduler.scheduler - Added job "TradingScheduler.stop_system_job" to job store "default"
+2026-04-07 09:21:00,576 [INFO] apscheduler.scheduler - Added job "TradingScheduler.generate_report_job" to job store "default"
+2026-04-07 09:21:00,577 [INFO] apscheduler.scheduler - Scheduler started
+2026-04-07 09:21:00,577 [INFO] scheduler.scheduler - Scheduler started.

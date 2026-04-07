@@ -3,8 +3,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import os
 from dotenv import load_dotenv
 from database.database import SessionLocal
-from database.models import Order, Trade, PnlSummary
+from database.models import Order, Trade, PnlSummary, MarketData
 from datetime import date
+from sqlalchemy import func
 
 app = FastAPI()
 
@@ -40,6 +41,44 @@ html_content = """
     <div class="card">
         <h2>Today's P&L</h2>
         <div id="pnl-amount" class="pnl">₹0.00</div>
+    </div>
+
+    <div class="card">
+        <h2>Live Indices</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>LTP</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th>Volume</th>
+                </tr>
+            </thead>
+            <tbody id="indices-body">
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Option Chain (Live)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Call Bid</th>
+                    <th>Call Ask</th>
+                    <th>Call LTP</th>
+                    <th>Call OI</th>
+                    <th>Strike</th>
+                    <th>Put LTP</th>
+                    <th>Put Bid</th>
+                    <th>Put Ask</th>
+                    <th>Put OI</th>
+                </tr>
+            </thead>
+            <tbody id="options-body">
+            </tbody>
+        </table>
     </div>
 
     <div class="card">
@@ -117,6 +156,56 @@ html_content = """
                         <td>${qty}</td>
                     </tr>`;
                 }
+
+                // Fetch live market data
+                const mdRes = await fetch('/api/market_data');
+                const mdData = await mdRes.json();
+
+                const indicesBody = document.getElementById('indices-body');
+                const optionsBody = document.getElementById('options-body');
+                indicesBody.innerHTML = '';
+                optionsBody.innerHTML = '';
+
+                const optionsMap = {};
+
+                mdData.forEach(item => {
+                    // Check if it is an option (either by instrument type or having a strike price)
+                    if (item.instrument_type === 'CE' || item.instrument_type === 'PE' || item.strike_price) {
+                        const strike = item.strike_price;
+                        if (!optionsMap[strike]) {
+                            optionsMap[strike] = { CE: null, PE: null };
+                        }
+                        optionsMap[strike][item.instrument_type === 'CE' ? 'CE' : 'PE'] = item;
+                    } else {
+                        // Treat as index/equity
+                        indicesBody.innerHTML += `<tr>
+                            <td>${item.trading_symbol || item.symbol}</td>
+                            <td>${item.ltp}</td>
+                            <td>${item.bid}</td>
+                            <td>${item.ask}</td>
+                            <td>${item.volume}</td>
+                        </tr>`;
+                    }
+                });
+
+                // Render options chain sorted by strike
+                const strikes = Object.keys(optionsMap).map(Number).sort((a,b) => a-b);
+                strikes.forEach(strike => {
+                    const ce = optionsMap[strike].CE || {};
+                    const pe = optionsMap[strike].PE || {};
+                    optionsBody.innerHTML += `<tr>
+                        <td>${ce.bid || '-'}</td>
+                        <td>${ce.ask || '-'}</td>
+                        <td>${ce.ltp || '-'}</td>
+                        <td>${ce.oi || '-'}</td>
+                        <td style="font-weight: bold; text-align: center; background: #f0f0f0;">${strike}</td>
+                        <td>${pe.ltp || '-'}</td>
+                        <td>${pe.bid || '-'}</td>
+                        <td>${pe.ask || '-'}</td>
+                        <td>${pe.oi || '-'}</td>
+                    </tr>`;
+                });
+
             } catch (e) {
                 console.error("Error fetching data", e);
             }
@@ -185,5 +274,38 @@ def get_positions():
             else:
                 positions[t.symbol] -= t.quantity
         return {k: v for k, v in positions.items() if v != 0}
+    finally:
+        db.close()
+
+@app.get("/api/market_data")
+def get_market_data():
+    db = SessionLocal()
+    try:
+        # Get the latest row for each symbol using a subquery grouping by symbol
+        subquery = db.query(
+            MarketData.symbol,
+            func.max(MarketData.timestamp).label("max_timestamp")
+        ).group_by(MarketData.symbol).subquery()
+
+        latest_data = db.query(MarketData).join(
+            subquery,
+            (MarketData.symbol == subquery.c.symbol) &
+            (MarketData.timestamp == subquery.c.max_timestamp)
+        ).all()
+
+        results = []
+        for md in latest_data:
+            results.append({
+                "symbol": md.symbol,
+                "trading_symbol": md.trading_symbol,
+                "instrument_type": md.instrument_type,
+                "strike_price": md.strike_price,
+                "ltp": md.last_traded_price,
+                "bid": md.bid_price,
+                "ask": md.ask_price,
+                "volume": md.volume,
+                "oi": md.oi
+            })
+        return results
     finally:
         db.close()
