@@ -3,6 +3,8 @@ import websockets
 import json
 import logging
 import requests
+import os
+import threading
 from datetime import datetime
 from database.database import SessionLocal
 from database.models import MarketData
@@ -16,22 +18,26 @@ class WebSocketFeedHandler:
         self.session_token = auth_session.get("session_token")
         self.session_sid = auth_session.get("session_sid")
         self.data_center = auth_session.get("dataCenter")
-        self.ws_url = "wss://wshis.kotaksecurities.com/ws/NeoStreaming" # Adjust to actual ws url if needed based on API
-        # Many Kotak neo implementations use:
-        self.ws_url = "wss://ws-neo.kotaksecurities.com/Nseapi/NeoStreaming"
+        self.ws_url = os.getenv("KOTAK_WS_URL", "wss://mlhsm.kotaksecurities.com")
         self.running = False
-        self.task = None
+        self._loop = None
+        self._thread = None
 
     def start(self):
         self.running = True
-        loop = asyncio.get_event_loop()
-        self.task = loop.create_task(self._run_loop())
-        logger.info("WebSocket Feed Handler started in background.")
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_in_thread, daemon=True)
+        self._thread.start()
+        logger.info("WebSocket Feed Handler started.")
+
+    def _run_in_thread(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._run_loop())
 
     def stop(self):
         self.running = False
-        if self.task:
-            self.task.cancel()
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
         logger.info("WebSocket Feed Handler stopped.")
 
     async def _run_loop(self):
