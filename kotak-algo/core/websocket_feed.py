@@ -12,9 +12,10 @@ from database.models import MarketData
 logger = logging.getLogger(__name__)
 
 class WebSocketFeedHandler:
-    def __init__(self, auth_session, instrument_tokens):
+    def __init__(self, auth_session, instrument_tokens, on_tick_callback=None):
         self.auth_session = auth_session
         self.instrument_tokens = instrument_tokens
+        self.on_tick_callback = on_tick_callback
         self.session_token = auth_session.get("session_token")
         self.session_sid = auth_session.get("session_sid")
         self.data_center = auth_session.get("dataCenter")
@@ -97,6 +98,13 @@ class WebSocketFeedHandler:
             self._process_single_tick(data)
 
     def _process_single_tick(self, tick):
+        # Forward tick to registered strategy
+        if self.on_tick_callback:
+            try:
+                self.on_tick_callback(tick)
+            except Exception as e:
+                logger.error(f"Error executing on_tick callback: {e}")
+
         # Ex: {"tk": "11536", "e": "nse_cm", "ltp": "150.5", "v": "1000", "bp1": "150.4", "sp1": "150.6", "oi": "0"}
         if "tk" not in tick:
              return
