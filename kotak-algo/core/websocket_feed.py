@@ -8,14 +8,16 @@ import threading
 from datetime import datetime
 from database.database import SessionLocal
 from database.models import MarketData
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 class WebSocketFeedHandler:
-    def __init__(self, auth_session, instrument_tokens, on_tick_callback=None):
+    def __init__(self, auth_session, instrument_tokens, on_tick_callback=None, instruments=None):
         self.auth_session = auth_session
         self.instrument_tokens = instrument_tokens
         self.on_tick_callback = on_tick_callback
+        self.instruments = instruments
         self.session_token = auth_session.get("session_token")
         self.session_sid = auth_session.get("session_sid")
         self.data_center = auth_session.get("dataCenter")
@@ -111,23 +113,44 @@ class WebSocketFeedHandler:
 
         token = str(tick.get("tk"))
         exchange_seg = tick.get("e", "")
-        # symbol map needs to be resolved, usually kept in memory. For simplicity we store token as symbol if unmapped
         symbol = f"{exchange_seg}|{token}"
+
+        # Determine actual details using InstrumentMaster
+        trading_symbol = symbol
+        instrument_type = "EQ"
+        strike_price = None
+        expiry_date = None
+
+        if self.instruments:
+            # Check FO
+            if exchange_seg == 'nse_fo' and self.instruments.fo_df is not None:
+                match = self.instruments.fo_df[self.instruments.fo_df['pSymbol'].astype(str) == token]
+                if not match.empty:
+                    row = match.iloc[0]
+                    trading_symbol = str(row['pTrdSymbol'])
+                    instrument_type = str(row['pOptionType']) if 'OPT' in str(row['pInstrumentType']) else "FUT"
+                    strike_price = float(row['dStrikePrice']) if not pd.isna(row['dStrikePrice']) else None
+                    expiry_date = str(row['lExpiryDate'])
+            # Check CM
+            elif exchange_seg == 'nse_cm' and self.instruments.cm_df is not None:
+                match = self.instruments.cm_df[self.instruments.cm_df['pSymbol'].astype(str) == token]
+                if not match.empty:
+                    trading_symbol = str(match.iloc[0]['pTrdSymbol'])
 
         db = SessionLocal()
         try:
             md = MarketData(
                 symbol=symbol,
-                trading_symbol=symbol, # Need master to map properly
+                trading_symbol=trading_symbol,
                 exchange_seg=exchange_seg,
-                instrument_type="EQ", # Default, need master map
+                instrument_type=instrument_type,
                 bid_price=float(tick.get("bp1", tick.get("ltp", 0))),
                 ask_price=float(tick.get("sp1", tick.get("ltp", 0))),
                 last_traded_price=float(tick.get("ltp", 0)),
                 volume=int(tick.get("v", 0)),
                 oi=int(tick.get("oi", 0)),
-                strike_price=None,
-                expiry_date=None,
+                strike_price=strike_price,
+                expiry_date=expiry_date,
                 timestamp=datetime.now()
             )
             db.add(md)
