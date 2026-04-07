@@ -101,12 +101,10 @@ class KotakNeoAuth:
             self.session_data = {
                 "session_token": data2["data"]["token"],
                 "session_sid": data2["data"]["sid"],
-                "baseUrl": data2["data"]["hsServerId"], # often named hsServerId
-                "dataCenter": data2["data"]["hsServerId"], # or dataCenter depending on actual response.
+                "baseUrl": data2["data"].get("baseUrl", "https://gw-napi.kotaksecurities.com"),
+                "dataCenter": data2["data"].get("dataCenter", ""),
                 "access_token": self.access_token
             }
-            # Fallback if hsServerId not present
-            self.session_data["baseUrl"] = data2.get("data", {}).get("hsServerId", "https://gw-napi.kotaksecurities.com")
 
             self._save_session(self.session_data)
             logger.info("Login Step 2 successful. Authenticated.")
