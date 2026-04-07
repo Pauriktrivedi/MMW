@@ -18,6 +18,7 @@ from risk.risk_manager import RiskManager
 from scheduler.scheduler import TradingScheduler
 from analytics.pnl_report import PnlReport
 from dashboard.dashboard import app as fastapi_app
+from strategies.sample_strategy import SampleStrategy
 
 # Set up logging
 logging.basicConfig(
@@ -45,6 +46,7 @@ class SystemController:
         self.order_manager = None
         self.paper_trader = None
         self.risk_manager = None
+        self.strategy = None
 
     def start(self):
         logger.info(f"Initializing system in {self.mode.upper()} mode...")
@@ -73,10 +75,18 @@ class SystemController:
             else:
                 self.order_manager = OrderManager(session)
 
-            # 4. Setup Websocket (Tokens usually derived from strategy, using dummy for NIFTY & BANKNIFTY)
+            # 4. Initialize Strategy
+            self.strategy = SampleStrategy(
+                mode=self.mode,
+                paper_trader=self.paper_trader,
+                live_trader=self.order_manager,
+                risk_manager=self.risk_manager
+            )
+
+            # 5. Setup Websocket (Tokens usually derived from strategy, using dummy for NIFTY & BANKNIFTY)
             # Find NIFTY index token as an example
             tokens = ["nse_cm|26000", "nse_cm|26009"] # Standard identifiers for NIFTY 50 and BANKNIFTY
-            self.ws_handler = WebSocketFeedHandler(session, tokens)
+            self.ws_handler = WebSocketFeedHandler(session, tokens, on_tick_callback=self.strategy.on_tick)
             self.ws_handler.start()
 
             logger.info("System successfully started.")
