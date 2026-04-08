@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 
+import pandas as pd
 from database.database import init_db
 from core.auth import KotakNeoAuth
 from core.instruments import InstrumentMaster
@@ -193,7 +194,7 @@ class SystemController:
                             if not matches.empty:
                                 row = matches.iloc[0]
                                 inst_type = row['pOptionType'] if 'OPT' in str(row['pInstrumentType']) else 'FUT'
-                                strike = float(row['dStrikePrice']) if not import pandas as pd; pd.isna(row['dStrikePrice']) else None
+                                strike = float(row['dStrikePrice']) if not pd.isna(row['dStrikePrice']) else None
 
                                 base_price = 100.0 * (random.uniform(0.5, 1.5))
 

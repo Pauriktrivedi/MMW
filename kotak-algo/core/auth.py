@@ -57,7 +57,15 @@ class KotakNeoAuth:
         if not self.totp_secret:
             raise AuthException("TOTP secret is missing. Cannot proceed with login.")
 
-        totp = pyotp.TOTP(self.totp_secret).now()
+        try:
+            totp = pyotp.TOTP(self.totp_secret).now()
+        except Exception as e:
+            logger.error(f"Error generating TOTP. Ensure TOTP_SECRET in .env is a valid base32 string: {e}")
+            if os.getenv("PAPER_MODE", "true").lower() == "true":
+                logger.info("Paper mode: ignoring TOTP error and using dummy TOTP.")
+                totp = "123456"
+            else:
+                raise AuthException(f"Invalid TOTP_SECRET format: {e}")
 
         headers_step1 = {
             "Authorization": self.access_token, # plain, no Bearer
