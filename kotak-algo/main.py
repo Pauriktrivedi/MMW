@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 
+import pandas as pd
 from database.database import init_db
 from core.auth import KotakNeoAuth
 from core.instruments import InstrumentMaster
@@ -19,6 +20,8 @@ from scheduler.scheduler import TradingScheduler
 from analytics.pnl_report import PnlReport
 from dashboard.dashboard import app as fastapi_app
 from strategies.sample_strategy import SampleStrategy
+from strategies.breakout_strategy import BreakoutRangeStrategy
+from strategies.twelve_thirty_five import TwelveThirtyFiveStrategy
 
 # Set up logging
 logging.basicConfig(
@@ -76,17 +79,85 @@ class SystemController:
                 self.order_manager = OrderManager(session)
 
             # 4. Initialize Strategy
-            self.strategy = SampleStrategy(
-                mode=self.mode,
-                paper_trader=self.paper_trader,
-                live_trader=self.order_manager,
-                risk_manager=self.risk_manager
-            )
+            strategy_name = os.getenv("ACTIVE_STRATEGY", "twelve_thirty_five")
+            if strategy_name == "breakout_range":
+                self.strategy = BreakoutRangeStrategy(
+                    mode=self.mode,
+                    paper_trader=self.paper_trader,
+                    live_trader=self.order_manager,
+                    risk_manager=self.risk_manager,
+                    symbol="nse_cm|Nifty 50",
+                    range_high=22010.0, # Example values for testing
+                    range_low=21990.0,
+                    quantity=50
+                )
+            elif strategy_name == "twelve_thirty_five":
+                self.strategy = TwelveThirtyFiveStrategy(
+                    mode=self.mode,
+                    instrument_master=self.instruments,
+                    underlying_symbol="nse_cm|Nifty 50"
+                )
+                self.strategy.paper_trader = self.paper_trader
+                self.strategy.live_trader = self.order_manager
+                self.strategy.risk_manager = self.risk_manager
+            else:
+                self.strategy = SampleStrategy(
+                    mode=self.mode,
+                    paper_trader=self.paper_trader,
+                    live_trader=self.order_manager,
+                    risk_manager=self.risk_manager
+                )
 
-            # 5. Setup Websocket (Tokens usually derived from strategy, using dummy for NIFTY & BANKNIFTY)
-            # Find NIFTY index token as an example
-            tokens = ["nse_cm|26000", "nse_cm|26009"] # Standard identifiers for NIFTY 50 and BANKNIFTY
-            self.ws_handler = WebSocketFeedHandler(session, tokens, on_tick_callback=self.strategy.on_tick)
+            # 5. Setup Websocket
+            # Subscribe to major indices using their names as required by Kotak Neo
+            tokens = [
+                "nse_cm|Nifty 50", "nse_cm|NIFTY BANK", "bse_cm|SENSEX"
+            ]
+
+            # Dynamically fetch correct option chain tokens using InstrumentMaster
+            if self.instruments.fo_df is not None:
+                try:
+                    df = self.instruments.fo_df
+                    # Filter for NIFTY options
+                    mask = (
+                        (df['pSymbolName'].str.upper() == 'NIFTY') &
+                        (df['pInstrumentType'].str.contains('OPT', na=False))
+                    )
+                    nifty_options = df[mask]
+                    if not nifty_options.empty:
+                        # Find the nearest expiry
+                        expiries = nifty_options['lExpiryDate'].dropna().unique()
+                        if len(expiries) > 0:
+                            nearest_expiry = sorted(expiries)[0]
+                            current_expiry_opts = nifty_options[nifty_options['lExpiryDate'] == nearest_expiry]
+
+                            # Pick middle strikes
+                            strikes = sorted(current_expiry_opts['dStrikePrice'].dropna().unique())
+                            if strikes:
+                                mid_idx = len(strikes) // 2
+                                # Select 2 strikes around the middle
+                                selected_strikes = strikes[max(0, mid_idx-1):mid_idx+1]
+
+                                for strike in selected_strikes:
+                                    # CE
+                                    ce_opt = current_expiry_opts[(current_expiry_opts['dStrikePrice'] == strike) & (current_expiry_opts['pOptionType'] == 'CE')]
+                                    if not ce_opt.empty:
+                                        tokens.append(f"nse_fo|{ce_opt.iloc[0]['pSymbol']}")
+
+                                    # PE
+                                    pe_opt = current_expiry_opts[(current_expiry_opts['dStrikePrice'] == strike) & (current_expiry_opts['pOptionType'] == 'PE')]
+                                    if not pe_opt.empty:
+                                        tokens.append(f"nse_fo|{pe_opt.iloc[0]['pSymbol']}")
+
+                    logger.info(f"Dynamically added live option tokens: {tokens[3:]}")
+                except Exception as e:
+                    logger.error(f"Error dynamically fetching option tokens: {e}")
+            else:
+                logger.warning("InstrumentMaster data not available. Using fallback dummy option tokens.")
+                dummy_option_tokens = ["nse_fo|12345", "nse_fo|12346", "nse_fo|12347", "nse_fo|12348"]
+                tokens.extend(dummy_option_tokens)
+
+            self.ws_handler = WebSocketFeedHandler(session, tokens, on_tick_callback=self.strategy.on_tick, instruments=self.instruments)
             self.ws_handler.start()
 
             logger.info("System successfully started.")

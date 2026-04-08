@@ -54,7 +54,13 @@ class KotakNeoAuth:
     def _login(self):
         logger.info("Starting Kotak Neo 2-step login process...")
 
-        totp = pyotp.TOTP(self.totp_secret).now()
+        if not self.totp_secret:
+            raise AuthException("TOTP secret is missing. Cannot proceed with login.")
+
+        try:
+            totp = pyotp.TOTP(self.totp_secret).now()
+        except Exception as e:
+            raise AuthException(f"Invalid TOTP_SECRET format: {e}")
 
         headers_step1 = {
             "Authorization": self.access_token, # plain, no Bearer

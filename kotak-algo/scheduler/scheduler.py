@@ -61,6 +61,15 @@ class TradingScheduler:
         self.scheduler.start()
         logger.info("Scheduler started.")
 
+        # Check if we are currently within market hours to start immediately
+        now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        if now.weekday() < 5 and not self.is_holiday():
+            market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            market_close = now.replace(hour=15, minute=35, second=0, microsecond=0)
+            if market_open <= now < market_close:
+                logger.info("Current time is within market hours. Starting system immediately.")
+                self.start_system_job()
+
     def stop(self):
         self.scheduler.shutdown()
         logger.info("Scheduler stopped.")

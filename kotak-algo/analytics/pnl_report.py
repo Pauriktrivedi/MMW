@@ -106,9 +106,28 @@ class PnlReport:
                 summary.winning_trades = winning_trades
 
             db.commit()
-            return summary
+            db.refresh(summary)
+            # Create a detached copy (dict or simple object) or just return the values we need to avoid DetachedInstanceError.
+            # Or simpler: access the attributes while the session is open so they are loaded,
+            # but SQLAlchemy expunge doesn't always prevent DetachedInstanceError on related attributes or deferred cols.
+            # Using expunge_all or just returning a dict is safer.
+            summary_dict = {
+                "total_pnl": summary.total_pnl,
+                "realized_pnl": summary.realized_pnl,
+                "win_rate": summary.win_rate,
+                "total_trades": summary.total_trades,
+                "winning_trades": summary.winning_trades
+            }
+            # Create a dummy object to mimic the model so main.py doesn't break
+            class DummySummary:
+                pass
+            res = DummySummary()
+            for k, v in summary_dict.items():
+                setattr(res, k, v)
+            return res
         except Exception as e:
             logger.error(f"Error calculating daily PnL: {e}")
+            return None
         finally:
             db.close()
 
