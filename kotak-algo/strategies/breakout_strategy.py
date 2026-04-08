@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 class BreakoutRangeStrategy(BaseStrategy):
     def __init__(self, mode='paper', paper_trader=None, live_trader=None, risk_manager=None, symbol=None, range_high=None, range_low=None, quantity=100):
-        super().__init__(mode, paper_trader, live_trader, risk_manager)
+        super().__init__(name="BreakoutRange", mode=mode, paper_trader=paper_trader, live_trader=live_trader, risk_manager=risk_manager)
         self.symbol = symbol or "nse_cm|Nifty 50" # Default testing symbol
         self.range_high = range_high
         self.range_low = range_low

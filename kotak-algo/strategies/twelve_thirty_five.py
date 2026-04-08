@@ -70,9 +70,32 @@ class TwelveThirtyFiveStrategy(BaseStrategy):
 
         # In a real environment, we use instrument_master.find_option
         if self.instrument_master and self.instrument_master.fo_df is not None:
-             # Just getting *any* matching strike for demonstration.
-             # You would need the exact expiry date in a real scenario
-             pass
+             try:
+                 df = self.instrument_master.fo_df
+                 symbol_str = self.underlying_symbol.split('|')[-1] if '|' in self.underlying_symbol else self.underlying_symbol
+                 if symbol_str == "Nifty 50":
+                     symbol_str = "NIFTY"
+
+                 mask = (
+                     (df['pSymbolName'].str.upper() == symbol_str.upper()) &
+                     (df['pInstrumentType'].str.contains('OPT', na=False))
+                 )
+                 opts = df[mask]
+                 if not opts.empty:
+                     expiries = opts['lExpiryDate'].dropna().unique()
+                     if len(expiries) > 0:
+                         nearest_expiry = sorted(expiries)[0]
+                         current_opts = opts[opts['lExpiryDate'] == nearest_expiry]
+
+                         ce_opts = current_opts[(current_opts['dStrikePrice'] == atm_strike) & (current_opts['pOptionType'] == 'CE')]
+                         if not ce_opts.empty:
+                             ce_token = f"nse_fo|{ce_opts.iloc[0]['pSymbol']}"
+
+                         pe_opts = current_opts[(current_opts['dStrikePrice'] == itm_pe_strike) & (current_opts['pOptionType'] == 'PE')]
+                         if not pe_opts.empty:
+                             pe_token = f"nse_fo|{pe_opts.iloc[0]['pSymbol']}"
+             except Exception as e:
+                 logger.error(f"Error finding tokens dynamically: {e}")
 
         # Since this is selling options, side is SELL
         # 1. Sell ATM CE

@@ -21,6 +21,7 @@ from analytics.pnl_report import PnlReport
 from dashboard.dashboard import app as fastapi_app
 from strategies.sample_strategy import SampleStrategy
 from strategies.breakout_strategy import BreakoutRangeStrategy
+from strategies.twelve_thirty_five import TwelveThirtyFiveStrategy
 
 # Set up logging
 logging.basicConfig(
@@ -78,8 +79,8 @@ class SystemController:
                 self.order_manager = OrderManager(session)
 
             # 4. Initialize Strategy
-            use_breakout = os.getenv("USE_BREAKOUT_STRATEGY", "true").lower() == "true"
-            if use_breakout:
+            strategy_name = os.getenv("ACTIVE_STRATEGY", "twelve_thirty_five")
+            if strategy_name == "breakout_range":
                 self.strategy = BreakoutRangeStrategy(
                     mode=self.mode,
                     paper_trader=self.paper_trader,
@@ -90,6 +91,15 @@ class SystemController:
                     range_low=21990.0,
                     quantity=50
                 )
+            elif strategy_name == "twelve_thirty_five":
+                self.strategy = TwelveThirtyFiveStrategy(
+                    mode=self.mode,
+                    instrument_master=self.instruments,
+                    underlying_symbol="nse_cm|Nifty 50"
+                )
+                self.strategy.paper_trader = self.paper_trader
+                self.strategy.live_trader = self.order_manager
+                self.strategy.risk_manager = self.risk_manager
             else:
                 self.strategy = SampleStrategy(
                     mode=self.mode,
@@ -150,76 +160,10 @@ class SystemController:
             self.ws_handler = WebSocketFeedHandler(session, tokens, on_tick_callback=self.strategy.on_tick, instruments=self.instruments)
             self.ws_handler.start()
 
-            # 6. Inject dummy data for UI testing if paper mode (since we might not have a real live WS feed)
-            if self.mode == 'paper':
-                self._inject_dummy_ui_data(tokens)
-
             logger.info("System successfully started.")
 
         except Exception as e:
             logger.error(f"Failed to start system: {e}")
-
-    def _inject_dummy_ui_data(self, tokens):
-        from database.database import SessionLocal
-        from database.models import MarketData
-        from datetime import datetime
-        db = SessionLocal()
-        try:
-            now = datetime.now()
-
-            # Dummy Indices
-            if "nse_cm|Nifty 50" in tokens:
-                db.add(MarketData(symbol="nse_cm|Nifty 50", trading_symbol="NIFTY 50", exchange_seg="nse_cm", instrument_type="EQ", bid_price=22000, ask_price=22001, last_traded_price=22000.5, volume=100, oi=0, timestamp=now))
-            if "nse_cm|NIFTY BANK" in tokens:
-                db.add(MarketData(symbol="nse_cm|NIFTY BANK", trading_symbol="BANKNIFTY", exchange_seg="nse_cm", instrument_type="EQ", bid_price=47000, ask_price=47010, last_traded_price=47005, volume=100, oi=0, timestamp=now))
-            if "bse_cm|SENSEX" in tokens:
-                db.add(MarketData(symbol="bse_cm|SENSEX", trading_symbol="SENSEX", exchange_seg="bse_cm", instrument_type="EQ", bid_price=72000, ask_price=72050, last_traded_price=72025, volume=100, oi=0, timestamp=now))
-
-            # If using fallback dummy tokens
-            if "nse_fo|12345" in tokens:
-                db.add(MarketData(symbol="nse_fo|12345", trading_symbol="NIFTY24MAY22000CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22000, bid_price=150, ask_price=152, last_traded_price=151, volume=5000, oi=100000, timestamp=now))
-                db.add(MarketData(symbol="nse_fo|12346", trading_symbol="NIFTY24MAY22000PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22000, bid_price=140, ask_price=141, last_traded_price=140.5, volume=4000, oi=90000, timestamp=now))
-                db.add(MarketData(symbol="nse_fo|12347", trading_symbol="NIFTY24MAY22100CE", exchange_seg="nse_fo", instrument_type="CE", strike_price=22100, bid_price=90, ask_price=92, last_traded_price=91, volume=8000, oi=150000, timestamp=now))
-                db.add(MarketData(symbol="nse_fo|12348", trading_symbol="NIFTY24MAY22100PE", exchange_seg="nse_fo", instrument_type="PE", strike_price=22100, bid_price=180, ask_price=183, last_traded_price=181.5, volume=3000, oi=80000, timestamp=now))
-            else:
-                # We dynamically found real options tokens
-                import random
-                for t in tokens:
-                    if t.startswith("nse_fo|"):
-                        try:
-                            token_id = t.split("|")[1]
-                            # Use instruments to fetch details
-                            mask = self.instruments.fo_df['pSymbol'] == token_id
-                            matches = self.instruments.fo_df[mask]
-                            if not matches.empty:
-                                row = matches.iloc[0]
-                                inst_type = row['pOptionType'] if 'OPT' in str(row['pInstrumentType']) else 'FUT'
-                                strike = float(row['dStrikePrice']) if not pd.isna(row['dStrikePrice']) else None
-
-                                base_price = 100.0 * (random.uniform(0.5, 1.5))
-
-                                db.add(MarketData(
-                                    symbol=t,
-                                    trading_symbol=row['pTrdSymbol'],
-                                    exchange_seg="nse_fo",
-                                    instrument_type=inst_type,
-                                    strike_price=strike,
-                                    bid_price=base_price,
-                                    ask_price=base_price + 1,
-                                    last_traded_price=base_price + 0.5,
-                                    volume=random.randint(1000, 5000),
-                                    oi=random.randint(50000, 150000),
-                                    timestamp=now
-                                ))
-                        except Exception as inner_e:
-                            logger.error(f"Error injecting for token {t}: {inner_e}")
-
-            db.commit()
-            logger.info("Injected dummy UI data for Paper mode display.")
-        except Exception as e:
-            logger.error(f"Error injecting dummy UI data: {e}")
-        finally:
-            db.close()
 
     def stop(self):
         logger.info("Stopping system...")

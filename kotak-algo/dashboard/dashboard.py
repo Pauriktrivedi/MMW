@@ -13,7 +13,7 @@ html_content = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Kotak Algo Dashboard</title>
+    <title>Paurik Trivedi's Algo Dashboard</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; }
         h1 { color: #333; }
@@ -32,11 +32,21 @@ html_content = """
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
         th { background-color: #f8f9fa; }
+        .strategy-container { display: flex; flex-direction: column; gap: 15px; }
+        .strategy-summary { display: flex; gap: 20px; }
+        .stat-box { background: #f8f9fa; padding: 15px; border-radius: 5px; flex: 1; text-align: center; border: 1px solid #ddd; }
+        .stat-box .num { font-size: 1.5em; font-weight: bold; }
+        .stat-box.live-box .num { color: #4caf50; }
+        .stat-box.paused-box .num { color: #ff9800; }
+        .stat-box.stopped-box .num { color: #f44336; }
+        .strategy-details { background: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #ddd; display: none; }
+        .strategy-details p { margin: 5px 0; }
+        select { padding: 10px; font-size: 1em; border-radius: 5px; border: 1px solid #ccc; width: 100%; max-width: 400px; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Kotak Algo System</h1>
+        <h1>Paurik Trivedi's Algo Dashboard</h1>
         <div class="header-controls">
             <span id="ws-status-dot" class="status-dot disconnected" title="Disconnected"></span>
             <span id="mode-badge" class="badge">Loading...</span>
@@ -46,6 +56,41 @@ html_content = """
     <div class="card">
         <h2>Today's P&L</h2>
         <div id="pnl-amount" class="pnl">₹0.00</div>
+    </div>
+
+    <div class="card">
+        <h2>Strategy Management</h2>
+        <div class="strategy-container">
+            <div class="strategy-summary">
+                <div class="stat-box live-box">
+                    <div>Live</div>
+                    <div id="stat-live" class="num">0</div>
+                </div>
+                <div class="stat-box paused-box">
+                    <div>Paused</div>
+                    <div id="stat-paused" class="num">0</div>
+                </div>
+                <div class="stat-box stopped-box">
+                    <div>Stopped</div>
+                    <div id="stat-stopped" class="num">0</div>
+                </div>
+            </div>
+
+            <div>
+                <label for="strategy-select"><strong>Select Strategy:</strong></label><br/>
+                <select id="strategy-select">
+                    <option value="">-- Choose a Strategy --</option>
+                </select>
+            </div>
+
+            <div id="strategy-details-panel" class="strategy-details">
+                <h3 id="det-name" style="margin-top: 0;">Strategy Name</h3>
+                <p><strong>Status:</strong> <span id="det-status" class="badge" style="color: black;">Unknown</span></p>
+                <p><strong>Description:</strong> <span id="det-desc"></span></p>
+                <p><strong>Schedule:</strong> <span id="det-sched"></span></p>
+                <p><strong>Details:</strong> <span id="det-details"></span></p>
+            </div>
+        </div>
     </div>
 
     <div class="card">
@@ -118,6 +163,92 @@ html_content = """
     </div>
 
     <script>
+        let strategiesData = [];
+
+        async function fetchStrategies() {
+            try {
+                const res = await fetch('/api/strategies');
+                strategiesData = await res.json();
+
+                let liveCount = 0;
+                let pausedCount = 0;
+                let stoppedCount = 0;
+
+                const selectEl = document.getElementById('strategy-select');
+                const currentValue = selectEl.value;
+
+                // We only want to populate the dropdown once or if the length changes
+                // to avoid resetting the user's selection on every poll
+                if (selectEl.options.length <= 1 || selectEl.options.length - 1 !== strategiesData.length) {
+                    selectEl.innerHTML = '<option value="">-- Choose a Strategy --</option>';
+                    strategiesData.forEach(s => {
+                        const opt = document.createElement('option');
+                        opt.value = s.id;
+                        opt.textContent = s.name + " (" + s.status + ")";
+                        selectEl.appendChild(opt);
+                    });
+                    if (currentValue) selectEl.value = currentValue;
+                }
+
+                strategiesData.forEach(s => {
+                    if (s.status.toLowerCase() === 'live') liveCount++;
+                    else if (s.status.toLowerCase() === 'paused') pausedCount++;
+                    else stoppedCount++;
+
+                    // Update text in dropdown if status changed
+                    const optToUpdate = Array.from(selectEl.options).find(o => o.value === s.id);
+                    if (optToUpdate) {
+                         optToUpdate.textContent = s.name + " (" + s.status + ")";
+                    }
+                });
+
+                document.getElementById('stat-live').textContent = liveCount;
+                document.getElementById('stat-paused').textContent = pausedCount;
+                document.getElementById('stat-stopped').textContent = stoppedCount;
+
+                // If one is selected, update its details
+                updateStrategyDetails();
+
+            } catch (e) {
+                console.error("Error fetching strategies", e);
+            }
+        }
+
+        function updateStrategyDetails() {
+            const selectEl = document.getElementById('strategy-select');
+            const panel = document.getElementById('strategy-details-panel');
+            const selectedId = selectEl.value;
+
+            if (!selectedId) {
+                panel.style.display = 'none';
+                return;
+            }
+
+            const strategy = strategiesData.find(s => s.id === selectedId);
+            if (strategy) {
+                panel.style.display = 'block';
+                document.getElementById('det-name').textContent = strategy.name;
+                document.getElementById('det-desc').textContent = strategy.description;
+                document.getElementById('det-sched').textContent = strategy.schedule;
+                document.getElementById('det-details').textContent = strategy.details;
+
+                const statusEl = document.getElementById('det-status');
+                statusEl.textContent = strategy.status;
+                if (strategy.status.toLowerCase() === 'live') {
+                    statusEl.style.backgroundColor = '#4caf50';
+                    statusEl.style.color = 'white';
+                } else if (strategy.status.toLowerCase() === 'paused') {
+                    statusEl.style.backgroundColor = '#ff9800';
+                    statusEl.style.color = 'white';
+                } else {
+                    statusEl.style.backgroundColor = '#f44336';
+                    statusEl.style.color = 'white';
+                }
+            }
+        }
+
+        document.getElementById('strategy-select').addEventListener('change', updateStrategyDetails);
+
         async function fetchData() {
             try {
                 const statusRes = await fetch('/api/status');
@@ -225,8 +356,13 @@ html_content = """
             }
         }
 
-        setInterval(fetchData, 5000);
+        setInterval(() => {
+            fetchData();
+            fetchStrategies();
+        }, 5000);
+
         fetchData();
+        fetchStrategies();
     </script>
 </body>
 </html>
@@ -302,6 +438,46 @@ def get_positions():
         return {k: v for k, v in positions.items() if v != 0}
     finally:
         db.close()
+
+@app.get("/api/strategies")
+def get_strategies():
+    # In a fully dynamic system, this would be read from a database or registry.
+    # For now, we return the known configured strategies.
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    active_strategy = os.getenv("ACTIVE_STRATEGY", "twelve_thirty_five")
+
+    strategies = [
+        {
+            "id": "breakout_range",
+            "name": "Breakout Range Strategy",
+            "description": "Executes trades when the underlying index breaks out of a predefined range.",
+            "schedule": "Continuous during market hours.",
+            "details": "Monitors NIFTY 50. Goes LONG if price breaks above Range High. Goes SHORT if price breaks below Range Low.",
+            "status": "Live" if active_strategy == "breakout_range" else "Stopped"
+        },
+        {
+            "id": "twelve_thirty_five",
+            "name": "12:35 Options Selling",
+            "description": "Shorts ATM CE and 50-pt ITM PE exactly at 12:35 PM daily.",
+            "schedule": "Executes at 12:35 PM. Auto-exits at 03:25 PM.",
+            "details": "Applies a strict 25-point independent Stop Loss (SL) on both legs based on the entry price. Recovers independently.",
+            "status": "Live" if active_strategy == "twelve_thirty_five" else "Stopped"
+        },
+        {
+            "id": "sample_strategy",
+            "name": "Sample Dummy Strategy",
+            "description": "A basic placeholder strategy that randomly prints ticks.",
+            "schedule": "Continuous.",
+            "details": "Used for testing the framework and websocket connections.",
+            "status": "Live" if active_strategy == "sample_strategy" else "Stopped"
+        }
+    ]
+
+    return strategies
+
 
 @app.get("/api/market_data")
 def get_market_data():

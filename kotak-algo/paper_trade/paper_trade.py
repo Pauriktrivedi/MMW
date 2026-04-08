@@ -60,59 +60,9 @@ class PaperTradeSimulator:
             db.close()
 
     def _simulate_fills_loop(self):
-        # We also generate mock ticks for the paper dashboard to simulate a live market
-        tick_counter = 0
         while self.running:
             self._simulate_fills()
-            if tick_counter % 5 == 0:
-                self._generate_mock_ticks()
-            tick_counter += 1
             time.sleep(1.0)
-
-    def _generate_mock_ticks(self):
-        db = SessionLocal()
-        try:
-            # Fetch latest tick for each symbol
-            from sqlalchemy import func
-            subquery = db.query(
-                MarketData.symbol,
-                func.max(MarketData.timestamp).label("max_timestamp")
-            ).group_by(MarketData.symbol).subquery()
-
-            latest_data = db.query(MarketData).join(
-                subquery,
-                (MarketData.symbol == subquery.c.symbol) &
-                (MarketData.timestamp == subquery.c.max_timestamp)
-            ).all()
-
-            now = datetime.now()
-            for md in latest_data:
-                # Random walk
-                change_pct = random.uniform(-0.001, 0.001)
-                new_ltp = md.last_traded_price * (1 + change_pct)
-                new_bid = new_ltp * 0.999
-                new_ask = new_ltp * 1.001
-
-                new_md = MarketData(
-                    symbol=md.symbol,
-                    trading_symbol=md.trading_symbol,
-                    exchange_seg=md.exchange_seg,
-                    instrument_type=md.instrument_type,
-                    bid_price=new_bid,
-                    ask_price=new_ask,
-                    last_traded_price=new_ltp,
-                    volume=md.volume + random.randint(10, 100),
-                    oi=md.oi + random.randint(-10, 10),
-                    strike_price=md.strike_price,
-                    expiry_date=md.expiry_date,
-                    timestamp=now
-                )
-                db.add(new_md)
-            db.commit()
-        except Exception as e:
-            logger.error(f"Error generating mock ticks: {e}")
-        finally:
-            db.close()
 
     def _simulate_fills(self):
         db = SessionLocal()
