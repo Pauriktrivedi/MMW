@@ -21,6 +21,10 @@ html_content = """
         .badge { padding: 5px 10px; border-radius: 5px; color: white; font-weight: bold; }
         .paper { background-color: #ff9800; }
         .live { background-color: #f44336; }
+        .status-dot { height: 15px; width: 15px; background-color: #ccc; border-radius: 50%; display: inline-block; margin-right: 10px; }
+        .status-dot.connected { background-color: #4caf50; box-shadow: 0 0 8px #4caf50; }
+        .status-dot.disconnected { background-color: #f44336; box-shadow: 0 0 8px #f44336; }
+        .header-controls { display: flex; align-items: center; }
         .card { background: #fff; padding: 20px; border-radius: 8px; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .pnl { font-size: 2em; font-weight: bold; }
         .positive { color: #4caf50; }
@@ -33,7 +37,8 @@ html_content = """
 <body>
     <div class="header">
         <h1>Kotak Algo System</h1>
-        <div>
+        <div class="header-controls">
+            <span id="ws-status-dot" class="status-dot disconnected" title="Disconnected"></span>
             <span id="mode-badge" class="badge">Loading...</span>
         </div>
     </div>
@@ -124,6 +129,15 @@ html_content = """
                 } else {
                     badge.textContent = 'LIVE MODE';
                     badge.className = 'badge live';
+                }
+
+                const dot = document.getElementById('ws-status-dot');
+                if (statusData.ws_connected) {
+                    dot.className = 'status-dot connected';
+                    dot.title = 'Connected';
+                } else {
+                    dot.className = 'status-dot disconnected';
+                    dot.title = 'Disconnected';
                 }
 
                 const pnlRes = await fetch('/api/pnl');
@@ -230,7 +244,19 @@ def serve_ui():
 def get_status():
     load_dotenv()
     is_paper = os.getenv("PAPER_MODE", "true").lower() == "true"
-    return {"mode": "paper" if is_paper else "live"}
+
+    # Check websocket connection status
+    ws_connected = False
+    try:
+        from core.status import get_ws_status
+        ws_connected = get_ws_status()
+    except Exception:
+        pass
+
+    return {
+        "mode": "paper" if is_paper else "live",
+        "ws_connected": ws_connected
+    }
 
 @app.get("/api/pnl")
 def get_pnl():

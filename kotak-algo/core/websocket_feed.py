@@ -9,6 +9,7 @@ from datetime import datetime
 from database.database import SessionLocal
 from database.models import MarketData
 import pandas as pd
+from core.status import set_ws_status
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class WebSocketFeedHandler:
         self.data_center = auth_session.get("dataCenter")
         self.ws_url = os.getenv("KOTAK_WS_URL", "wss://mlhsm.kotaksecurities.com")
         self.running = False
+        self.connected = False
         self._loop = None
         self._thread = None
 
@@ -69,6 +71,8 @@ class WebSocketFeedHandler:
 
         async with websockets.connect(ws_url_full) as ws:
             logger.info("WebSocket connected successfully.")
+            self.connected = True
+            set_ws_status(True)
 
             # Subscribe
             subs_str = "&".join(self.instrument_tokens) + "&"
@@ -90,6 +94,10 @@ class WebSocketFeedHandler:
                     pass
                 except Exception as e:
                     logger.error(f"Error processing tick: {e}")
+
+            # Connection closed
+            self.connected = False
+            set_ws_status(False)
 
     def _store_tick(self, data):
         # Typical Kotak response structure needs parsing. Assuming a standard structure here:
