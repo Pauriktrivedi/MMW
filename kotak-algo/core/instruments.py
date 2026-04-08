@@ -39,28 +39,18 @@ class InstrumentMaster:
                 resp.raise_for_status()
                 data = resp.json()
 
-                if data.get("stat") != "Ok" or "data" not in data:
-                    logger.error(f"Failed to fetch file paths: {data}")
-                    return
-
-                files_data = data["data"]
-
-                # The response structure has varied, but usually it contains URLs for 'nse_cm' and 'nse_fo'
-                for item in files_data:
-                    exch_seg = item.get("exchangeSegment", "").lower()
-                    file_url = item.get("csvFileUrl")
-
-                    if file_url:
-                        if exch_seg == "nse_cm":
-                            logger.info(f"Downloading {exch_seg}...")
-                            csv_data = requests.get(file_url).content
-                            with open(self.cm_file, 'wb') as f:
-                                f.write(csv_data)
-                        elif exch_seg == "nse_fo":
-                            logger.info(f"Downloading {exch_seg}...")
-                            csv_data = requests.get(file_url).content
-                            with open(self.fo_file, 'wb') as f:
-                                f.write(csv_data)
+                file_paths = data.get("data", {}).get("filesPaths", [])
+                for file_url in file_paths:
+                    if "nse_cm" in file_url:
+                        csv_data = requests.get(file_url).content
+                        with open(self.cm_file, 'wb') as f:
+                            f.write(csv_data)
+                        logger.info("Downloaded nse_cm.csv")
+                    elif "nse_fo" in file_url:
+                        csv_data = requests.get(file_url).content
+                        with open(self.fo_file, 'wb') as f:
+                            f.write(csv_data)
+                        logger.info("Downloaded nse_fo.csv")
 
                 logger.info("Download complete.")
             else:

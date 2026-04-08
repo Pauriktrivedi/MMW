@@ -60,12 +60,7 @@ class KotakNeoAuth:
         try:
             totp = pyotp.TOTP(self.totp_secret).now()
         except Exception as e:
-            logger.error(f"Error generating TOTP. Ensure TOTP_SECRET in .env is a valid base32 string: {e}")
-            if os.getenv("PAPER_MODE", "true").lower() == "true":
-                logger.info("Paper mode: ignoring TOTP error and using dummy TOTP.")
-                totp = "123456"
-            else:
-                raise AuthException(f"Invalid TOTP_SECRET format: {e}")
+            raise AuthException(f"Invalid TOTP_SECRET format: {e}")
 
         headers_step1 = {
             "Authorization": self.access_token, # plain, no Bearer
@@ -81,22 +76,6 @@ class KotakNeoAuth:
 
         try:
             resp1 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiLogin", headers=headers_step1, json=body_step1)
-
-            # Since these are dummy credentials, let's skip actual validation in paper mode if the request fails
-            is_paper = os.getenv("PAPER_MODE", "true").lower() == "true"
-
-            if not resp1.ok and is_paper:
-                logger.info("Paper mode: skipping strict login validation due to missing credentials.")
-                self.session_data = {
-                    "session_token": "dummy_token",
-                    "session_sid": "dummy_sid",
-                    "baseUrl": "https://gw-napi.kotaksecurities.com",
-                    "dataCenter": "dummy_dc",
-                    "access_token": self.access_token or "dummy_access"
-                }
-                self._save_session(self.session_data)
-                return
-
             resp1.raise_for_status()
             data1 = resp1.json()
             if "data" not in data1 or "token" not in data1["data"] or "sid" not in data1["data"]:
@@ -120,19 +99,6 @@ class KotakNeoAuth:
             }
 
             resp2 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiValidate", headers=headers_step2, json=body_step2)
-
-            if not resp2.ok and is_paper:
-                 logger.info("Paper mode: skipping strict step 2 login validation.")
-                 self.session_data = {
-                     "session_token": "dummy_token",
-                     "session_sid": "dummy_sid",
-                     "baseUrl": "https://gw-napi.kotaksecurities.com",
-                     "dataCenter": "dummy_dc",
-                     "access_token": self.access_token or "dummy_access"
-                 }
-                 self._save_session(self.session_data)
-                 return
-
             resp2.raise_for_status()
             data2 = resp2.json()
             if "data" not in data2 or "token" not in data2["data"]:
@@ -151,18 +117,7 @@ class KotakNeoAuth:
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error during login: {e}")
-            if os.getenv("PAPER_MODE", "true").lower() == "true":
-                 logger.info("Paper mode: Network error ignored, using dummy session.")
-                 self.session_data = {
-                     "session_token": "dummy_token",
-                     "session_sid": "dummy_sid",
-                     "baseUrl": "https://gw-napi.kotaksecurities.com",
-                     "dataCenter": "dummy_dc",
-                     "access_token": self.access_token or "dummy_access"
-                 }
-                 self._save_session(self.session_data)
-            else:
-                 raise AuthException(f"Network error during login: {e}")
+            raise AuthException(f"Network error during login: {e}")
         except Exception as e:
             logger.error(f"Login error: {e}")
             raise AuthException(f"Login error: {e}")
