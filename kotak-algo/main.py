@@ -86,7 +86,7 @@ class SystemController:
                     paper_trader=self.paper_trader,
                     live_trader=self.order_manager,
                     risk_manager=self.risk_manager,
-                    symbol="nse_cm|Nifty 50",
+                    symbol="nse_cm|26000",
                     range_high=22010.0, # Example values for testing
                     range_low=21990.0,
                     quantity=50
@@ -95,7 +95,7 @@ class SystemController:
                 self.strategy = TwelveThirtyFiveStrategy(
                     mode=self.mode,
                     instrument_master=self.instruments,
-                    underlying_symbol="nse_cm|Nifty 50"
+                    underlying_symbol="nse_cm|26000"
                 )
                 self.strategy.paper_trader = self.paper_trader
                 self.strategy.live_trader = self.order_manager
@@ -110,8 +110,9 @@ class SystemController:
 
             # 5. Setup Websocket
             # Subscribe to major indices using their names as required by Kotak Neo
+            # Actually, websockets need numerical IDs: NIFTY 50 = 26000, BANKNIFTY = 26009
             tokens = [
-                "nse_cm|Nifty 50", "nse_cm|NIFTY BANK", "bse_cm|SENSEX"
+                "nse_cm|26000", "nse_cm|26009", "bse_cm|1"
             ]
 
             # Dynamically fetch correct option chain tokens using InstrumentMaster
