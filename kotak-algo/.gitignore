@@ -7,4 +7,9 @@ venv/
 env/
 .env
 trading.log
-session.json
+session.jsondata/
+*.csv
+stdout.log
+trading.db
+*.json
+*.log

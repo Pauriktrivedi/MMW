@@ -78,7 +78,7 @@ class TwelveThirtyFiveStrategy(BaseStrategy):
 
                  mask = (
                      (df['pSymbolName'].str.upper() == symbol_str.upper()) &
-                     (df['pInstrumentType'].str.contains('OPT', na=False))
+                     (df['pInstType'].str.contains('OPT', na=False))
                  )
                  opts = df[mask]
                  if not opts.empty:

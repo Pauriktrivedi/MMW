@@ -22,7 +22,7 @@ class WebSocketFeedHandler:
         self.session_token = auth_session.get("session_token")
         self.session_sid = auth_session.get("session_sid")
         self.data_center = auth_session.get("dataCenter")
-        self.ws_url = f"wss://mlhsm{self.data_center}.kotaksecurities.com"
+        self.ws_url = "wss://mlhsm.kotaksecurities.com"
         self.running = False
         self.connected = False
         self._loop = None
@@ -136,7 +136,7 @@ class WebSocketFeedHandler:
                 if not match.empty:
                     row = match.iloc[0]
                     trading_symbol = str(row['pTrdSymbol'])
-                    instrument_type = str(row['pOptionType']) if 'OPT' in str(row['pInstrumentType']) else "FUT"
+                    instrument_type = str(row['pOptionType']) if 'OPT' in str(row['pInstType']) else "FUT"
                     strike_price = float(row['dStrikePrice']) if not pd.isna(row['dStrikePrice']) else None
                     expiry_date = str(row['lExpiryDate'])
             # Check CM

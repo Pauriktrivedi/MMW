@@ -88,10 +88,10 @@ class InstrumentMaster:
             # Column names depend on exact CSV structure, using expected names based on neo API
             mask = (
                 (df['pSymbolName'].str.contains(underlying, case=False, na=False)) &
-                (df['lExpiryDate'].astype(str) == str(expiry)) &
-                (df['dStrikePrice'].astype(float) == float(strike)) &
+                (df['lExpiryDate '].astype(str) == str(expiry)) &
+                (df['dStrikePrice;'].astype(float) == float(strike)) &
                 (df['pOptionType'].str.upper() == opt_type.upper()) &
-                (df['pInstrumentType'].str.contains("OPT", na=False))
+                (df['pInstType'].str.contains("OPT", na=False))
             )
             result = df[mask]
 
@@ -117,8 +117,8 @@ class InstrumentMaster:
             df = self.fo_df
             mask = (
                 (df['pSymbolName'].str.contains(underlying, case=False, na=False)) &
-                (df['lExpiryDate'].astype(str) == str(expiry)) &
-                (df['pInstrumentType'].str.contains("FUT", na=False))
+                (df['lExpiryDate '].astype(str) == str(expiry)) &
+                (df['pInstType'].str.contains("FUT", na=False))
             )
             result = df[mask]
 

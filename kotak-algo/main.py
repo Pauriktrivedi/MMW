@@ -121,7 +121,7 @@ class SystemController:
                     # Filter for NIFTY options
                     mask = (
                         (df['pSymbolName'].str.upper() == 'NIFTY') &
-                        (df['pInstrumentType'].str.contains('OPT', na=False))
+                        (df['pInstType'].str.contains('OPT', na=False))
                     )
                     nifty_options = df[mask]
                     if not nifty_options.empty:
