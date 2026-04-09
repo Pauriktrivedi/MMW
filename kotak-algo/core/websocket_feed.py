@@ -136,7 +136,7 @@ class WebSocketFeedHandler:
                 if not match.empty:
                     row = match.iloc[0]
                     trading_symbol = str(row['pTrdSymbol'])
-                    instrument_type = str(row['pOptionType']) if 'OPT' in str(row['pInstrumentType']) else "FUT"
+                    instrument_type = str(row['pOptionType']) if 'OPT' in str(row['pInstType']) else "FUT"
                     strike_price = float(row['dStrikePrice']) if not pd.isna(row['dStrikePrice']) else None
                     expiry_date = str(row['lExpiryDate'])
             # Check CM

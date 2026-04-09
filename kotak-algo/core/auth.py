@@ -62,8 +62,14 @@ class KotakNeoAuth:
         except Exception as e:
             raise AuthException(f"Invalid TOTP_SECRET format: {e}")
 
+        import base64
+        # Ensure access token has the right prefix (some users paste the "Basic " prefix from dashboard)
+        auth_header = self.access_token
+        if not auth_header.startswith("Basic ") and not auth_header.startswith("Bearer "):
+            auth_header = f"Basic {self.access_token}"
+
         headers_step1 = {
-            "Authorization": self.access_token, # plain, no Bearer
+            "Authorization": auth_header,
             "neo-fin-key": "neotradeapi",
             "Content-Type": "application/json"
         }
@@ -75,10 +81,18 @@ class KotakNeoAuth:
         }
 
         try:
+            logger.info(f"Step 1 Headers: {headers_step1}")
+            logger.info(f"Step 1 Payload: {body_step1}")
+
+            # Using standard requests retry would be nice, but simple request first
             resp1 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiLogin", headers=headers_step1, json=body_step1)
+
+            if not resp1.ok:
+                logger.error(f"Step 1 failed: {resp1.status_code} {resp1.text}")
             resp1.raise_for_status()
+
             data1 = resp1.json()
-            if "data" not in data1 or "token" not in data1["data"] or "sid" not in data1["data"]:
+            if not data1.get("data") or "token" not in data1.get("data", {}) or "sid" not in data1.get("data", {}):
                  raise AuthException(f"Step 1 failed, unexpected response: {data1}")
 
             view_token = data1["data"]["token"]
@@ -87,7 +101,7 @@ class KotakNeoAuth:
             logger.info("Login Step 1 successful.")
 
             headers_step2 = {
-                "Authorization": self.access_token,
+                "Authorization": auth_header,
                 "neo-fin-key": "neotradeapi",
                 "sid": view_sid,
                 "Auth": view_token,
@@ -98,10 +112,16 @@ class KotakNeoAuth:
                 "mpin": self.mpin
             }
 
+            logger.info(f"Step 2 Headers: {headers_step2}")
+            logger.info(f"Step 2 Payload: {body_step2}")
             resp2 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiValidate", headers=headers_step2, json=body_step2)
+
+            if not resp2.ok:
+                logger.error(f"Step 2 failed: {resp2.status_code} {resp2.text}")
             resp2.raise_for_status()
+
             data2 = resp2.json()
-            if "data" not in data2 or "token" not in data2["data"]:
+            if not data2.get("data") or "token" not in data2.get("data", {}):
                  raise AuthException(f"Step 2 failed, unexpected response: {data2}")
 
             self.session_data = {
@@ -109,7 +129,7 @@ class KotakNeoAuth:
                 "session_sid": data2["data"]["sid"],
                 "baseUrl": data2["data"].get("baseUrl", "https://gw-napi.kotaksecurities.com"),
                 "dataCenter": data2["data"].get("dataCenter", ""),
-                "access_token": self.access_token
+                "access_token": auth_header
             }
 
             self._save_session(self.session_data)
@@ -126,6 +146,14 @@ class KotakNeoAuth:
         if not self.session_data or self.session_data.get('expiry', 0) <= time.time():
             self.refresh()
         return self.session_data
+
+    def get_headers(self):
+        return {
+            "Authorization": self.session_data.get("access_token") if self.session_data else self.access_token,
+            "neo-fin-key": "neotradeapi",
+            "sid": self.session_data.get("session_sid") if self.session_data else "",
+            "Auth": self.session_data.get("session_token") if self.session_data else ""
+        }
 
     def refresh(self):
         logger.info("Forcing token refresh...")

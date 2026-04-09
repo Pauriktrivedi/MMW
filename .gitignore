@@ -1,0 +1,5 @@
+data/
+*.csv
+stdout.log
+trading.db
+*.json
