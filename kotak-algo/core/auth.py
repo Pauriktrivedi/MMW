@@ -78,6 +78,8 @@ class KotakNeoAuth:
             logger.info(f"Step 1 Headers: {headers_step1}")
             logger.info(f"Step 1 Payload: {body_step1}")
             resp1 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiLogin", headers=headers_step1, json=body_step1)
+            if not resp1.ok:
+                logger.error(f"Step 1 failed: {resp1.status_code} {resp1.text}")
             resp1.raise_for_status()
             data1 = resp1.json()
             if not data1.get("data") or "token" not in data1.get("data", {}) or "sid" not in data1.get("data", {}):
@@ -103,6 +105,8 @@ class KotakNeoAuth:
             logger.info(f"Step 2 Headers: {headers_step2}")
             logger.info(f"Step 2 Payload: {body_step2}")
             resp2 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiValidate", headers=headers_step2, json=body_step2)
+            if not resp2.ok:
+                logger.error(f"Step 2 failed: {resp2.status_code} {resp2.text}")
             resp2.raise_for_status()
             data2 = resp2.json()
             if not data2.get("data") or "token" not in data2.get("data", {}):
