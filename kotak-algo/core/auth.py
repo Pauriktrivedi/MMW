@@ -62,8 +62,14 @@ class KotakNeoAuth:
         except Exception as e:
             raise AuthException(f"Invalid TOTP_SECRET format: {e}")
 
-        import base64
-        # Ensure access token has the right prefix (some users paste the "Basic " prefix from dashboard)
+        mobile = str(self.mobile_number).strip()
+        if mobile.startswith("+91"):
+            mobile = mobile[3:]
+
+        if not mobile.isdigit() or len(mobile) != 10:
+            raise AuthException(f"Invalid mobile number format: {mobile}")
+
+        # Ensure correct Authorization header format (Kotak TradeAPI login expects Basic Auth for the initial token)
         auth_header = self.access_token
         if not auth_header.startswith("Basic ") and not auth_header.startswith("Bearer "):
             auth_header = f"Basic {self.access_token}"
@@ -74,17 +80,26 @@ class KotakNeoAuth:
             "Content-Type": "application/json"
         }
 
+        # Postman Collection / Kotak API standards for tradeApiLogin
         body_step1 = {
-            "mobileNumber": self.mobile_number,
-            "ucc": self.ucc,
-            "totp": totp
+            "mobileNumber": mobile,
+            "password": self.mpin,
+            "userId": self.ucc
         }
+
+        # Postman Collection / Kotak API standards for tradeApiLogin
+        body_step1 = {
+            "mobileNumber": mobile,
+            "password": self.mpin,
+            "userId": self.ucc
+        }
+
+
 
         try:
             logger.info(f"Step 1 Headers: {headers_step1}")
             logger.info(f"Step 1 Payload: {body_step1}")
 
-            # Using standard requests retry would be nice, but simple request first
             resp1 = requests.post("https://mis.kotaksecurities.com/login/1.0/tradeApiLogin", headers=headers_step1, json=body_step1)
 
             if not resp1.ok:
@@ -100,16 +115,19 @@ class KotakNeoAuth:
 
             logger.info("Login Step 1 successful.")
 
+            # Step 2: tradeApiValidate
             headers_step2 = {
-                "Authorization": auth_header,
+                "Authorization": auth_header, # Kotak expects the same Authorization header here
                 "neo-fin-key": "neotradeapi",
                 "sid": view_sid,
                 "Auth": view_token,
                 "Content-Type": "application/json"
             }
 
+            # Step 2 Payload: User ID and TOTP
             body_step2 = {
-                "mpin": self.mpin
+                "userId": self.ucc,
+                "otp": totp
             }
 
             logger.info(f"Step 2 Headers: {headers_step2}")
@@ -129,8 +147,9 @@ class KotakNeoAuth:
                 "session_sid": data2["data"]["sid"],
                 "baseUrl": data2["data"].get("baseUrl", "https://gw-napi.kotaksecurities.com"),
                 "dataCenter": data2["data"].get("dataCenter", ""),
-                "access_token": auth_header
+                "access_token": auth_header # Downstream APIs (like order, quote) typically expect Bearer. The OrderManager applies Bearer prefix automatically if missing. Let's just store the raw access token. Wait, if it's prefixed with Basic, OrderManager might fail. Let's store self.access_token.
             }
+            self.session_data["access_token"] = self.access_token
 
             self._save_session(self.session_data)
             logger.info("Login Step 2 successful. Authenticated.")
@@ -149,7 +168,7 @@ class KotakNeoAuth:
 
     def get_headers(self):
         return {
-            "Authorization": self.session_data.get("access_token") if self.session_data else self.access_token,
+            "Authorization": f"Bearer {self.access_token}",
             "neo-fin-key": "neotradeapi",
             "sid": self.session_data.get("session_sid") if self.session_data else "",
             "Auth": self.session_data.get("session_token") if self.session_data else ""
