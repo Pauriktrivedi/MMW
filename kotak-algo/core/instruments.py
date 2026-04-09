@@ -25,11 +25,14 @@ class InstrumentMaster:
         logger.info("Checking instrument files...")
 
         headers = {
-            "Authorization": auth_session["access_token"]
+            "Authorization": f"Bearer {auth_session['access_token']}"
         }
 
         baseUrl = auth_session["baseUrl"]
         url = f"{baseUrl}/script-details/1.0/masterscrip/file-paths"
+
+        logger.info(f"GET {url}")
+        logger.info(f"Headers: {headers}")
 
         try:
             # Only download if stale

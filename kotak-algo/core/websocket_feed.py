@@ -22,7 +22,7 @@ class WebSocketFeedHandler:
         self.session_token = auth_session.get("session_token")
         self.session_sid = auth_session.get("session_sid")
         self.data_center = auth_session.get("dataCenter")
-        self.ws_url = "wss://mlhsm.kotaksecurities.com"
+        self.ws_url = f"wss://mlhsm{self.data_center}.kotaksecurities.com"
         self.running = False
         self.connected = False
         self._loop = None

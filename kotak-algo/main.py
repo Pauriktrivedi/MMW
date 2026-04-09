@@ -76,7 +76,7 @@ class SystemController:
                 self.paper_trader = PaperTradeSimulator()
                 self.paper_trader.start()
             else:
-                self.order_manager = OrderManager(session)
+                self.order_manager = OrderManager(session, self.auth)
 
             # 4. Initialize Strategy
             strategy_name = os.getenv("ACTIVE_STRATEGY", "twelve_thirty_five")

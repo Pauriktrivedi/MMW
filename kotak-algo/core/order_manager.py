@@ -11,20 +11,27 @@ class OrderException(Exception):
     pass
 
 class OrderManager:
-    def __init__(self, auth_session):
+    def __init__(self, auth_session, auth_instance=None):
         self.auth_session = auth_session
+        self.auth_instance = auth_instance
         self.base_url = auth_session.get("baseUrl")
-        self.headers = {
-            "Auth": auth_session.get("session_token"),
-            "Sid": auth_session.get("session_sid"),
+        self.headers = auth_instance.get_headers() if auth_instance else {
+            "Authorization": f"Bearer {auth_session.get('access_token')}",
             "neo-fin-key": "neotradeapi",
-            "Content-Type": "application/x-www-form-urlencoded"
+            "sid": auth_session.get("session_sid"),
+            "Auth": auth_session.get("session_token")
         }
+        self.headers["Content-Type"] = "application/x-www-form-urlencoded"
+
 
     def _post(self, endpoint, payload):
         url = f"{self.base_url}{endpoint}"
         jData = json.dumps(payload)
         data = {"jData": jData}
+
+        logger.info(f"POST {url}")
+        logger.info(f"Headers: {self.headers}")
+        logger.info(f"Payload: {data}")
 
         try:
             resp = requests.post(url, headers=self.headers, data=data)
@@ -40,6 +47,8 @@ class OrderManager:
 
     def _get(self, endpoint):
         url = f"{self.base_url}{endpoint}"
+        logger.info(f"GET {url}")
+        logger.info(f"Headers: {self.headers}")
         try:
             resp = requests.get(url, headers=self.headers)
             resp.raise_for_status()
