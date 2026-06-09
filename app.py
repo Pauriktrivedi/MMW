@@ -758,15 +758,15 @@ else:
 # Apply filters using boolean indexing for robustness (handles empty selections correctly)
 # For filters with defaults (all selected), only filter if selection is reduced.
 # If selection is empty, it will result in no data (correct behavior for unselecting everything).
-if sel_b is not None and len(sel_b) < len(choices_bt):
+if len(sel_b) < len(choices_bt):
     fil = fil[fil['Buyer.Type'].isin(sel_b)]
-if sel_e is not None and len(sel_e) < len(entity_choices) and 'entity' in fil.columns:
+if len(sel_e) < len(entity_choices) and 'entity' in fil.columns:
     fil = fil[fil['entity'].isin(sel_e)]
+if len(sel_pc) < len(proc_cat_choices) and 'procurement_category' in fil.columns:
+    fil = fil[fil['procurement_category'].isin(sel_pc)]
 
 # For filters without defaults (none selected), only filter if selection is NOT empty.
 # If nothing is selected, we assume "All" is intended (standard behavior for optional search filters).
-if sel_pc and len(sel_pc) < len(proc_cat_choices) and 'procurement_category' in fil.columns:
-    fil = fil[fil['procurement_category'].isin(sel_pc)]
 if sel_o and len(sel_o) < len(creators) and 'po_creator' in fil.columns:
     fil = fil[fil['po_creator'].isin(sel_o)]
 if sel_v and len(sel_v) < len(vendor_choices) and 'po_vendor' in fil.columns:
