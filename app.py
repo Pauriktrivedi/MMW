@@ -657,18 +657,25 @@ last_3 = (today - pd.DateOffset(months=3), today + pd.DateOffset(days=1))
 last_6 = (today - pd.DateOffset(months=6), today + pd.DateOffset(days=1))
 
 FY = {
-    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2026-04-01')),
+    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2027-04-01')),
     'Last 3 Months': last_3,
     'Last 6 Months': last_6,
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-04-01')),
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-04-01')),
-    '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-04-01'))
+    '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-04-01')),
+    '2026': (pd.Timestamp('2026-04-01'), pd.Timestamp('2027-04-01'))
 }
 fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
 
 # Work on a filtered view (ensure a clean copy for stateful filtering)
 fil = df.copy()
+# Remove timezone info for filtering
+if pr_col and pr_col in fil.columns and fil[pr_col].dt.tz is not None:
+    fil[pr_col] = fil[pr_col].dt.tz_localize(None)
+if po_create_col and po_create_col in fil.columns and fil[po_create_col].dt.tz is not None:
+    fil[po_create_col] = fil[po_create_col].dt.tz_localize(None)
+
 # FY Filtering Logic: Use PR Date if available; fallback to PO Create Date for rows where PR Date is missing
 if pr_col and pr_col in fil.columns:
     # Use PR date primarily, backfill with PO date for filtering check
@@ -728,7 +735,7 @@ creators = sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)
 sel_o = st.sidebar.multiselect('PO Ordered By', creators) 
 
 # Buyer Type choices
-choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist())
+choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist()) if 'Buyer.Type' in fil.columns else []
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
 # Item Type Filter (Products vs Services)
@@ -736,7 +743,7 @@ item_type_opt = st.sidebar.radio("Item Type (Global)", ["All", "Products", "Serv
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
-    if pd.api.types.is_categorical_dtype(fil[po_vendor_col]):
+    if isinstance(fil[po_vendor_col].dtype, pd.CategoricalDtype):
         vendor_choices = sorted(fil[po_vendor_col].cat.categories)
     else:
         vendor_choices = sorted(fil[po_vendor_col].unique())
@@ -758,11 +765,11 @@ else:
 # Apply filters using boolean indexing for robustness (handles empty selections correctly)
 # For filters with defaults (all selected), only filter if selection is reduced.
 # If selection is empty, it will result in no data (correct behavior for unselecting everything).
-if len(sel_b) < len(choices_bt):
+if len(sel_b) < len(choices_bt) and 'Buyer.Type' in fil.columns:
     fil = fil[fil['Buyer.Type'].isin(sel_b)]
 if len(sel_e) < len(entity_choices) and 'entity' in fil.columns:
     fil = fil[fil['entity'].isin(sel_e)]
-if len(sel_pc) < len(proc_cat_choices) and 'procurement_category' in fil.columns:
+if sel_pc and len(sel_pc) < len(proc_cat_choices) and 'procurement_category' in fil.columns:
     fil = fil[fil['procurement_category'].isin(sel_pc)]
 
 # For filters without defaults (none selected), only filter if selection is NOT empty.
