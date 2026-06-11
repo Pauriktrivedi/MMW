@@ -668,6 +668,7 @@ FY = {
 fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
 
+
 # Work on a filtered view (ensure a clean copy for stateful filtering)
 fil = df.copy()
 # Remove timezone info for filtering
@@ -735,7 +736,7 @@ creators = sorted([str(x) for x in fil.get('po_creator', pd.Series(dtype=object)
 sel_o = st.sidebar.multiselect('PO Ordered By', creators) 
 
 # Buyer Type choices
-choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist()) if 'Buyer.Type' in fil.columns else []
+choices_bt = sorted(fil['Buyer.Type'].dropna().unique().tolist())
 sel_b = st.sidebar.multiselect('Buyer Type', choices_bt, default=choices_bt)
 
 # Item Type Filter (Products vs Services)
@@ -743,7 +744,7 @@ item_type_opt = st.sidebar.radio("Item Type (Global)", ["All", "Products", "Serv
 
 # Vendor + Item filters
 if po_vendor_col and po_vendor_col in fil.columns:
-    if isinstance(fil[po_vendor_col].dtype, pd.CategoricalDtype):
+    if pd.api.types.is_categorical_dtype(fil[po_vendor_col]):
         vendor_choices = sorted(fil[po_vendor_col].cat.categories)
     else:
         vendor_choices = sorted(fil[po_vendor_col].unique())
@@ -765,7 +766,7 @@ else:
 # Apply filters using boolean indexing for robustness (handles empty selections correctly)
 # For filters with defaults (all selected), only filter if selection is reduced.
 # If selection is empty, it will result in no data (correct behavior for unselecting everything).
-if len(sel_b) < len(choices_bt) and 'Buyer.Type' in fil.columns:
+if len(sel_b) < len(choices_bt):
     fil = fil[fil['Buyer.Type'].isin(sel_b)]
 if len(sel_e) < len(entity_choices) and 'entity' in fil.columns:
     fil = fil[fil['entity'].isin(sel_e)]
