@@ -599,7 +599,7 @@ if update_parquet_if_needed:
     parquet_path = DATA_DIR / "p2p_data.parquet"
     if not parquet_path.exists():
         try:
-            update_parquet_if_needed(force=True)
+            update_parquet_if_needed(force=False)
         except Exception as e:
             st.warning(f"Failed to generate parquet file: {e}")
 
@@ -657,13 +657,14 @@ last_3 = (today - pd.DateOffset(months=3), today + pd.DateOffset(days=1))
 last_6 = (today - pd.DateOffset(months=6), today + pd.DateOffset(days=1))
 
 FY = {
-    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2027-04-01')),
+    'All Years': (pd.Timestamp('2023-04-01'), pd.Timestamp('2028-04-01')),
     'Last 3 Months': last_3,
     'Last 6 Months': last_6,
     '2023': (pd.Timestamp('2023-04-01'), pd.Timestamp('2024-04-01')),
     '2024': (pd.Timestamp('2024-04-01'), pd.Timestamp('2025-04-01')),
     '2025': (pd.Timestamp('2025-04-01'), pd.Timestamp('2026-04-01')),
-    '2026': (pd.Timestamp('2026-04-01'), pd.Timestamp('2027-04-01'))
+    '2026': (pd.Timestamp('2026-04-01'), pd.Timestamp('2027-04-01')),
+    '2027': (pd.Timestamp('2027-04-01'), pd.Timestamp('2028-04-01'))
 }
 fy_key = st.sidebar.selectbox('Financial Year / Period', list(FY))
 pr_start, pr_end = FY[fy_key]
