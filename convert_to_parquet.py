@@ -6,9 +6,13 @@ import os
 DATA_DIR = Path(__file__).resolve().parent
 # File mapping: (filename, entity_name)
 RAW_FILES = [
+    ("MEPL1.xlsx", "MEPL"),
     ("MEPL.xlsx", "MEPL"),
+    ("MLPL1.xlsx", "MLPL"),
     ("MLPL.xlsx", "MLPL"),
+    ("mmpl1.xlsx", "MMPL"),
     ("MMPL.xlsx", "MMPL"),
+    ("mmw1.xlsx", "MMW"),
     ("MMW.xlsx", "MMW")
 ]
 
