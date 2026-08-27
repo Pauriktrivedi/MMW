@@ -1006,7 +1006,7 @@ with T[0]:
                             # pivot by month faster than groupby in long loops
                             g_b['month'] = g_b['month'].dt.to_period('M').dt.to_timestamp()
                             full_range = pd.period_range(g_b['month'].min().to_period('M'), g_b['month'].max().to_period('M'), freq='M').to_timestamp()
-                            pivot = (g_b.pivot_table(index='month', columns='buyer_display', values=net_amount_col, aggfunc='sum')
+                            pivot = (g_b.groupby(['month', 'buyer_display'])[[net_amount_col]].sum().reset_index().pivot_table(index='month', columns='buyer_display', values=net_amount_col, aggfunc='sum')
                                 .reindex(full_range, fill_value=0)
                                 .rename_axis('month')
                                 .reset_index())
