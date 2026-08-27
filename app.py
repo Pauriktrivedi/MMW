@@ -65,7 +65,7 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
-@st.cache_data(max_entries=50, show_spinner=False)
+@st.cache_data(max_entries=5, show_spinner=False)
 def _run_compute(namespace: str, signature: tuple, _compute_fn):
     return _compute_fn()
 
