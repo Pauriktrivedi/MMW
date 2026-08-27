@@ -11,9 +11,9 @@ RAW_FILES = [
     ("MLPL1.xlsx", "MLPL"),
     ("MLPL.xlsx", "MLPL"),
     ("mmpl1.xlsx", "MMPL"),
-    ("MMPL.xlsx", "MMPL"),
+    ("mmpl.xlsx", "MMPL"),
     ("mmw1.xlsx", "MMW"),
-    ("MMW.xlsx", "MMW")
+    ("mmw.xlsx", "MMW")
 ]
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
