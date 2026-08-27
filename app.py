@@ -890,7 +890,7 @@ with T[0]:
         if me.empty:
             st.info('No monthly/entity data to plot.')
         else:
-            pivot = me.pivot(index='month', columns='entity', values=net_amount_col).fillna(0).sort_index()
+            pivot = me.groupby(['month', 'entity'])[[net_amount_col]].sum().reset_index().pivot(index='month', columns='entity', values=net_amount_col).fillna(0).sort_index()
             # ensure fixed entities first
             fixed_entities = ['MEPL','MLPL','MMW','MMPL']
             for ent in fixed_entities:
@@ -1901,7 +1901,7 @@ with T[5]:
                         title_suffix = '(Monthly)'
 
                     # Pivot to ensure 0s for missing periods
-                    pivot_data = g_cat_filtered.pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0)
+                    pivot_data = g_cat_filtered.groupby([x_axis, "MainCategory"])[[net_amount_col]].sum().reset_index().pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0)
 
                     # Sort index (time)
                     pivot_data = pivot_data.sort_index()
