@@ -1900,6 +1900,9 @@ with T[5]:
                         x_axis = 'month'
                         title_suffix = '(Monthly)'
 
+                    # Remove duplicate entries for pivoting if any exist due to imperfect data grouping
+                    g_cat_filtered = g_cat_filtered.groupby([x_axis, 'MainCategory'])[net_amount_col].sum().reset_index()
+
                     # Pivot to ensure 0s for missing periods
                     pivot_data = g_cat_filtered.pivot(index=x_axis, columns='MainCategory', values=net_amount_col).fillna(0)
 
