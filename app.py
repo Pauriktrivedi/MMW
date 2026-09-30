@@ -10,6 +10,7 @@ import logging
 import traceback
 import re
 import hashlib
+import gc
 
 try:
     from convert_to_parquet import update_parquet_if_needed
@@ -65,7 +66,7 @@ def safe_col(df, candidates, default=None):
             return c
     return default
 
-@st.cache_data(max_entries=5, show_spinner=False)
+@st.cache_data(max_entries=50, show_spinner=False)
 def _run_compute(namespace: str, signature: tuple, _compute_fn):
     return _compute_fn()
 
@@ -75,7 +76,11 @@ def memoized_compute(namespace: str, signature: tuple, compute_fn):
     To avoid memory bloat in st.session_state (which causes "Oh no" crashes),
     we use Streamlit's robust disk/memory cache instead of st.session_state.
     """
-    return _run_compute(namespace, signature, compute_fn)
+    res = _run_compute(namespace, signature, compute_fn)
+    # Perform a full garbage collection cycle to ensure temporary dataframes
+    # created during compute_fn are immediately reclaimed to prevent memory bloat.
+    gc.collect()
+    return res
 
 def convert_df_to_csv(df):
     """Cache only a few CSV exports to avoid memory bloat."""
@@ -105,7 +110,7 @@ def _finalize_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
             x[c] = pd.to_datetime(x[c], errors='coerce')
     return x
 
-@st.cache_data(show_spinner=False, max_entries=1)
+@st.cache_data(show_spinner=False, max_entries=20)
 def load_all():
     """Loads and finalizes the dataset from the Parquet file."""
     parquet_path = DATA_DIR / "p2p_data.parquet"
@@ -125,7 +130,7 @@ def load_all():
         return pd.DataFrame()
 
 # ---------- Vendor Master Parsing (New) ----------
-@st.cache_data(show_spinner=False, max_entries=1)
+@st.cache_data(show_spinner=False, max_entries=20)
 def load_vendor_master(_transaction_df: pd.DataFrame = None):
     """
     Parses 'meplvendor.xlsx', 'mlplvendor.xlsx', 'mmwvendor.xlsx', 'mmplvendor.xlsx' 
@@ -483,7 +488,7 @@ def compute_main_category(df: pd.DataFrame) -> pd.Series:
     return main_cat
 
 
-@st.cache_data(show_spinner=False, max_entries=1)
+@st.cache_data(show_spinner=False, max_entries=20)
 def preprocess_data(_df: pd.DataFrame) -> pd.DataFrame:
     """Applies all expensive preprocessing steps to the raw dataframe."""
     if _df.empty:
